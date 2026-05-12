@@ -12,7 +12,7 @@ Use in all primary source files (e.g., main modules, core libraries, dataset pro
 
 Every `.js` and `.py` source file (excluding `__init__.py`) must begin with the appropriate header block below. The CI `license-headers` job enforces this on every PR.
 
-```
+```text
 /************************************************************************
  * STARISIAN TECHNOLOGIES PROPRIETARY AND CONFIDENTIAL
  * __________________
@@ -30,7 +30,7 @@ Every `.js` and `.py` source file (excluding `__init__.py`) must begin with the 
  * engineering of this material is strictly forbidden unless prior
  * written permission is obtained from Starisian Technologies.
  ************************************************************************/
-```
+```text
 
 ---
 

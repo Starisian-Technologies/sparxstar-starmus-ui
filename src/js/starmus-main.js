@@ -33,7 +33,7 @@ import { initRecorder } from "./starmus-recorder.js";
 import { initOffline, queueSubmission, getOfflineQueue } from "./starmus-offline.js";
 import { initAutoMetadata } from "./starmus-metadata-auto.js";
 import sparxstarIntegration from "./starmus-sparxstar-integration.js";
-import { initIntegrator } from "./starmus-integrator.js";
+import "./starmus-integrator.js";
 
 /* --- Global error capture (Africa first: surface runtime errors clearly) --- */
 (function () {
@@ -56,9 +56,6 @@ import { initIntegrator } from "./starmus-integrator.js";
 /* --- Store --- */
 const store = createStore();
 window.StarmusStore = store;
-
-/* --- Integrator: UEC bridge + SpeechRecognition + AudioContext watchdog --- */
-initIntegrator();
 
 /**
  * Initialises a recorder instance from a form element.

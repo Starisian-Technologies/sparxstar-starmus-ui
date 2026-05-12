@@ -1,140 +1,213 @@
 /**
- * Copyright (c) Starisian Technologies. All rights reserved.
- *
- * This file is part of the SPARXSTAR platform and is proprietary and confidential.
- * Unauthorized copying, modification, distribution, or use of this file, via any medium,
- * is strictly prohibited except as expressly permitted in writing by Starisian Technologies.
- *
- * License: Business Source License 1.1
- * Change Date: January 1, 2036
- * Change License: Starisian Community License
- *
- * See the LICENSE file in the repository root for full license terms.
- */
-
-/**
  * @file starmus-integrator.js
- * @version 7.0.0
- * @description Bridges Sparxstar UEC environment events into the Starmus store.
- * Normalises the raw UEC payload to the strict schema expected by the backend.
- * Also sets up the SpeechRecognition compatibility shim and an AudioContext
- * watchdog that resumes a suspended context on first user gesture.
- *
- * No Peaks.js dependency. Pure store integration.
+ * @version 6.5.0-SCHEMA-NORMALIZER
+ * @description Bridges and NORMALIZES SparxstarUEC data to match Starmus Backend Schema.
  */
 
 "use strict";
 
 /**
- * Normalise a raw Sparxstar UEC payload into the schema expected by the
- * Starmus backend (`_starmus_env` field).
- *
- * @param {Object} raw  - Raw event detail from `sparxstar:environment-ready`
- * @returns {Object}    - Normalised environment object
+ * Global Starmus namespace object.
+ * @global
+ * @namespace
  */
-export function normaliseEnv(raw) {
-    const tech = raw.technical || {};
-    const rawTech = tech.raw || {};
-    const profile = tech.profile || {};
-    const idents = raw.identifiers || {};
+window.Starmus =
+    window.Starmus ||
+    {
+        /* intentionally empty */
+    };
 
-    return {
+/**
+ * Current version of the Starmus integration layer.
+ * @global
+ * @type {string}
+ */
+window.Starmus.version = "6.5.0";
+
+/**
+ * Exposes Peaks.js waveform library through the Starmus namespace.
+ * Creates a bridge between the global Peaks library and Starmus.Peaks.
+ * Provides a fallback implementation if Peaks.js is not available.
+ *
+ * @function
+ * @exports exposePeaksBridge
+ * @returns {void}
+ */
+// 1. PEAKS BRIDGE
+export function exposePeaksBridge() {
+    if (window.Peaks && !window.Starmus.Peaks) {
+        window.Starmus.Peaks = window.Peaks;
+    } else if (!window.Peaks) {
+        window.Peaks = { init: () => null };
+        window.Starmus.Peaks = window.Peaks;
+    }
+}
+exposePeaksBridge();
+
+/**
+ * Speech Recognition API compatibility check and polyfill setup.
+ * Detects browser support for speech recognition and logs availability.
+ * Sets up webkit prefixed fallback for cross-browser compatibility.
+ */
+// 2. SPEECH API CHECK
+if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) {
+    console.log("[StarmusIntegrator] Speech API missing (Tier B/C)");
+} else {
+    window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+}
+
+/**
+ * Handles SparxstarUEC environment data and normalizes it for Starmus backend.
+ * Listens for 'sparxstar:environment-ready' events and transforms the payload
+ * to match the strict schema expected by the Starmus backend.
+ *
+ * @listens window~sparxstar:environment-ready
+ * @param {CustomEvent} e - The environment ready event
+ * @param {Object} e.detail - Raw UEC environment data
+ * @param {Object} e.detail.technical - Technical device information
+ * @param {Object} e.detail.identifiers - Session and visitor identifiers
+ */
+// 3. UEC DATA INGESTION (CRITICAL FIX)
+window.addEventListener("sparxstar:environment-ready", (e) => {
+    console.log("[StarmusIntegrator] 📡 Parsing UEC Payload...");
+
+    if (!window.StarmusStore) {
+        return;
+    }
+
+    const raw =
+        e.detail ||
+        {
+            /* intentionally empty */
+        };
+    const tech =
+        raw.technical ||
+        {
+            /* intentionally empty */
+        };
+    const rawTech =
+        tech.raw ||
+        {
+            /* intentionally empty */
+        };
+    const profile =
+        tech.profile ||
+        {
+            /* intentionally empty */
+        };
+    const idents =
+        raw.identifiers ||
+        {
+            /* intentionally empty */
+        }; // Sometimes at root
+    // Handle case where identifiers might be inside technical or separate (based on logs)
+
+    /**
+     * Normalized environment data object matching Starmus backend schema.
+     * @type {Object}
+     * @property {Object} device - Device information including class, OS, and user agent
+     * @property {Object} browser - Browser capabilities and client details
+     * @property {Object} network - Network information and connection profile
+     * @property {Object} identifiers - Session, visitor, and IP identifiers
+     * @property {Object} features - Battery and performance feature detection
+     * @property {Array} errors - Array of initialization errors
+     */
+    // --- NORMALIZE TO STRICT SCHEMA ---
+    // The server expects keys: 'device', 'browser', 'network', 'errors' at ROOT of _starmus_env
+
+    const normalizedEnv = {
+        // 1. Device Info (Merge Detector + Profile)
         device: {
-            ...(rawTech.device || {}),
+            ...(rawTech.device ||
+                {
+                    /* intentionally empty */
+                }),
             class: profile.deviceClass || "unknown",
-            os: idents.deviceDetails?.os || {},
+            os:
+                raw.identifiers?.deviceDetails?.os ||
+                {
+                    /* intentionally empty */
+                },
             userAgent: navigator.userAgent,
         },
+
+        // 2. Browser Info
         browser: {
-            ...(rawTech.browser || {}),
-            ...(idents.deviceDetails?.client || {}),
+            ...(rawTech.browser ||
+                {
+                    /* intentionally empty */
+                }),
+            ...(raw.identifiers?.deviceDetails?.client ||
+                {
+                    /* intentionally empty */
+                }),
         },
+
+        // 3. Network Info
         network: {
-            ...(rawTech.network || {}),
+            ...(rawTech.network ||
+                {
+                    /* intentionally empty */
+                }),
             profile: profile.networkProfile || "unknown",
         },
+
+        // 4. Identifiers (Session/Visitor)
         identifiers: {
             sessionId: idents.sessionId || raw.sessionId || "unknown",
             visitorId: idents.visitorId || raw.visitorId || "unknown",
             ip: idents.ipAddress || "0.0.0.0",
         },
+
+        // 5. Features / Battery / Perf
         features: {
-            battery: rawTech.battery || {},
-            performance: rawTech.performance || {},
+            battery:
+                rawTech.battery ||
+                {
+                    /* intentionally empty */
+                },
+            performance:
+                rawTech.performance ||
+                {
+                    /* intentionally empty */
+                },
         },
+
+        // 6. Init Error Array (Required by Schema)
         errors: [],
-        fingerprint:
-            raw.fingerprint || idents.fingerprint || idents.visitorId || "unknown",
+
+        // 7. Fingerprint (Explicitly required for Schema)
+        fingerprint: raw.fingerprint || idents.fingerprint || idents.visitorId || "unknown",
     };
-}
 
-/**
- * Set up the SpeechRecognition cross-browser shim.
- * Logs availability so callers can gate speech-to-text UI.
- *
- * @returns {void}
- */
-function setupSpeechRecognition() {
-    if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) {
-        console.log("[StarmusIntegrator] Speech API missing (Tier B/C)");
-        return;
-    }
-    window.SpeechRecognition =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
-}
+    console.log("[StarmusIntegrator] ✅ Normalized Env:", normalizedEnv);
 
-/**
- * Resume a suspended AudioContext on the first user gesture.
- * Complies with browser autoplay policies. Runs at most once.
- *
- * @returns {void}
- */
-function setupAudioContextWatchdog() {
-    document.addEventListener(
-        "click",
-        () => {
-            try {
-                const ctx = window.StarmusAudioContext;
-                if (ctx && ctx.state === "suspended") {
-                    ctx.resume();
-                }
-            } catch {
-                /* intentionally empty */
-            }
-        },
-        { once: true },
-    );
-}
-
-/**
- * Listen for the Sparxstar UEC environment-ready event, normalise the
- * payload, and dispatch it into the Starmus store.
- *
- * @returns {void}
- */
-function listenForEnvironmentReady() {
-    window.addEventListener("sparxstar:environment-ready", (e) => {
-        if (!window.StarmusStore) {
-            return;
-        }
-
-        const normalised = normaliseEnv(e.detail || {});
-
-        window.StarmusStore.dispatch({
-            type: "starmus/env-update",
-            payload: normalised,
-        });
+    // Dispatch merged environment
+    window.StarmusStore.dispatch({
+        type: "starmus/env-update",
+        payload: normalizedEnv,
     });
-}
+});
 
 /**
- * Initialise the Starmus integrator.
- * Must be called once at page load, after the Starmus store is ready.
+ * Audio Context watchdog for user activation compliance.
+ * Resumes suspended AudioContext on first user interaction to comply
+ * with browser autoplay policies. Uses {once: true} to run only once.
  *
- * @returns {void}
+ * @listens document~click
  */
-export function initIntegrator() {
-    setupSpeechRecognition();
-    setupAudioContextWatchdog();
-    listenForEnvironmentReady();
-}
+// 4. AUDIO CONTEXT WATCHDOG
+document.addEventListener(
+    "click",
+    () => {
+        try {
+            const ctx = window.StarmusAudioContext;
+            if (ctx && ctx.state === "suspended") {
+                ctx.resume();
+            }
+        } catch {
+            /* intentionally empty */
+        }
+    },
+    { once: true },
+);

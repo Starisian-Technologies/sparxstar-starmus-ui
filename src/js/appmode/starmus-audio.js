@@ -1,269 +1,275 @@
 /**
- * Copyright (c) Starisian Technologies. All rights reserved.
- *
- * This file is part of the SPARXSTAR platform and is proprietary and confidential.
- * Unauthorized copying, modification, distribution, or use of this file, via any medium,
- * is strictly prohibited except as expressly permitted in writing by Starisian Technologies.
- *
- * License: Business Source License 1.1
- * Change Date: January 1, 2036
- * Change License: Starisian Community License
- *
- * See the LICENSE file in the repository root for full license terms.
- */
-
-/**
- * @file appmode/starmus-audio.js
- * @version 3.0.0
- * @description SmartAudioPlayer — optimised audio playback for recordings-list
- * views on low-end devices and unstable networks (Africa-first).
+ * SmartAudioPlayer (2025 Edition)
+ * Optimized for Low-End Devices & Unstable Networks (Africa/Emerging Markets)
  *
  * Features:
- * - Network-aware source selection: Opus 24 kbps on slow networks, MP3 fallback
- * - Hardware-aware tier detection: skips Web Audio API on devices < 4 GB RAM
- * - Lazy AudioContext initialisation (autoplay policy compliance)
- * - Broadcast-safe gentle levelling via DynamicsCompressor
- * - Memory-safe destroy() for SPA contexts
- *
- * Usage:
- *   const player = new SmartAudioPlayer({ debug: false });
- *   await player.play({ opus: 'url.webm', low: 'url_32k.mp3', high: 'url_128k.mp3' });
- *   player.pause();
- *   player.destroy(); // cleanup before unmount
+ * - Network Awareness: Auto-switches between Opus/MP3 and Low/High bitrates.
+ * - Hardware Awareness: Disables Web Audio API on devices with < 4GB RAM to save battery.
+ * - Lazy Initialization: Prevents Autoplay Policy errors and "Zombie" AudioContexts.
+ * - Broadcast Leveling: Normalizes volume without destroying dynamic range.
+ * - Memory Safety: Full cleanup via destroy() to prevent leaks in SPAs.
  */
 
-"use strict";
-
-/**
- * @typedef {Object} AudioSources
- * @property {string} [opus] - Opus / WebM URL (most efficient on 2G/3G)
- * @property {string} [low]  - Low-quality MP3 (32 kbps)
- * @property {string} [high] - High-quality MP3 (128 kbps)
- */
-
-/**
- * @typedef {Object} PlayerConfig
- * @property {number}  [lowMemoryLimit=4] - GB of RAM to treat as low-end
- * @property {number}  [lowCoreLimit=4]   - CPU cores to treat as low-end
- * @property {boolean} [debug=false]      - Enable console logging
- */
-
-export class SmartAudioPlayer {
+class _SmartAudioPlayer {
     /**
-     * @param {PlayerConfig} [config]
+     * @param {Object} config
+     * @param {number} config.lowMemoryLimit - GB of RAM to treat as low-end (Default: 4)
+     * @param {number} config.lowCoreLimit - CPU cores to treat as low-end (Default: 4)
+     * @param {boolean} config.debug - Enable console logs for debugging
      */
     constructor(config = {}) {
-        this._cfg = {
+        this.config = {
             lowMemoryLimit: 4,
             lowCoreLimit: 4,
             debug: false,
             ...config,
         };
 
-        this._audioContext = null;
-        this._sourceNode = null;
-        this._compressor = null;
-        this._destroyed = false;
+        // State trackers
+        this.audioContext = null;
+        this.sourceNode = null;
+        this.compressor = null;
+        this.isDestroyed = false;
 
-        this._el = new Audio();
-        this._el.crossOrigin = "anonymous";
-        this._el.loop = false;
+        // Instantiate Audio Element
+        this.audioElement = new Audio();
+        this.audioElement.crossOrigin = "anonymous"; // Essential for CDN usage
 
-        this._isLowEnd = this._detectLowEnd();
-        this._canOpus =
-            this._el
-                .canPlayType('audio/webm; codecs="opus"')
-                .replace(/^no$/, "") !== "";
+        // Enhancement B: Explicitly disable looping to prevent run-away buffering on retry
+        this.audioElement.loop = false;
 
-        /* Reduce data usage on low-end / data-saver devices */
-        this._el.preload = this._isLowEnd ? "none" : "metadata";
+        // Feature Detection
+        this.isLowEndDevice = this.evaluateDeviceTier();
+
+        // Detect Opus support (critical for 2G/3G efficiency)
+        this.canPlayOpus =
+            this.audioElement.canPlayType('audio/webm; codecs="opus"').replace(/^no$/, "") !== "";
+
+        // Optimization: Don't buffer on low-end/data-saver devices until clicked.
+        // 'metadata' allows UI to show duration, 'none' saves maximum data.
+        this.audioElement.preload = this.isLowEndDevice ? "none" : "metadata";
     }
 
-    /* ------------------------------------------------------------------
-       Device tier detection
-       ------------------------------------------------------------------ */
+    /**
+     * Safe logger that respects debug config
+     */
+    log(...args) {
+        if (this.config.debug) {
+            console.log("[SmartAudio]", ...args);
+        }
+    }
 
-    _detectLowEnd() {
-        if (
-            navigator.deviceMemory &&
-            navigator.deviceMemory < this._cfg.lowMemoryLimit
-        ) {
+    /**
+     * Determines if device is "Low Tier" based on RAM, Cores, and Data Saver.
+     * Conservative default: < 4GB RAM or < 4 Cores.
+     * Why? Mid-range MediaTek chips overheat with WebAudio, draining battery.
+     */
+    evaluateDeviceTier() {
+        // 1. Check Hardware
+        if (navigator.deviceMemory && navigator.deviceMemory < this.config.lowMemoryLimit) {
             return true;
         }
         if (
             navigator.hardwareConcurrency &&
-            navigator.hardwareConcurrency < this._cfg.lowCoreLimit
+            navigator.hardwareConcurrency < this.config.lowCoreLimit
         ) {
             return true;
         }
-        const conn =
-            navigator.connection ||
-            navigator.mozConnection ||
-            navigator.webkitConnection;
-        if (conn?.saveData) return true;
+
+        // 2. Check "Save Data" header
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (conn && conn.saveData) {
+            return true;
+        }
+
         return false;
     }
 
-    /* ------------------------------------------------------------------
-       Source selection
-       ------------------------------------------------------------------ */
-
     /**
-     * Choose the best URL given current network conditions.
-     * @param {AudioSources} sources
-     * @returns {string}
+     * Returns the best URL based on Network Conditions & Codec Support
      */
-    _getOptimalSource(sources) {
-        const conn =
-            navigator.connection ||
-            navigator.mozConnection ||
-            navigator.webkitConnection;
+    getOptimalSource(sources) {
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        let isSlow = false;
 
-        const isSlow =
-            conn &&
-            (conn.saveData || (conn.effectiveType && /2g/.test(conn.effectiveType)));
+        // Don't trust effectiveType blindly (it freezes), but check it if available.
+        if (conn) {
+            isSlow = conn.saveData || (conn.effectiveType && /2g/.test(conn.effectiveType));
+        }
 
-        if (isSlow && this._canOpus && sources.opus) return sources.opus;
-        if (isSlow && sources.low) return sources.low;
-        return sources.high || sources.low || sources.opus || "";
+        // Priority 1: Opus on Slow Networks (24-32kbps Opus > 32kbps MP3)
+        if (isSlow && this.canPlayOpus && sources.opus) {
+            return sources.opus;
+        }
+
+        // Priority 2: Fallback Low Quality
+        if (isSlow) {
+            return sources.low;
+        }
+
+        // Priority 3: High Quality (WiFi/4G)
+        return sources.high || sources.low;
     }
 
-    /* ------------------------------------------------------------------
-       Web Audio enhancement (lazy init, capable devices only)
-       ------------------------------------------------------------------ */
-
-    _initEnhancedAudio() {
-        if (this._audioContext || this._destroyed) return;
+    /**
+     * Lazy Initialization of Web Audio API
+     * Only called AFTER playback starts successfully to respect Autoplay Policies.
+     */
+    initEnhancedAudio() {
+        if (this.audioContext || this.isDestroyed) {
+            return;
+        }
 
         try {
-            const AudioCtx =
-                window.AudioContext || window.webkitAudioContext;
-            if (!AudioCtx) return;
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            this.audioContext = new AudioContext();
 
-            this._audioContext = new AudioCtx();
-            if (!this._sourceNode) {
-                this._sourceNode =
-                    this._audioContext.createMediaElementSource(this._el);
+            // Singleton Source Node Pattern
+            if (!this.sourceNode) {
+                this.sourceNode = this.audioContext.createMediaElementSource(this.audioElement);
             }
 
-            /* Gentle broadcast levelling — preserves dynamic range */
-            this._compressor = this._audioContext.createDynamicsCompressor();
-            const t = this._audioContext.currentTime;
-            // Gentle broadcast levelling — preserves dynamic range while boosting clarity.
-            // Threshold: engage compression only when signal exceeds -24 dBFS.
-            this._compressor.threshold.setValueAtTime(-24, t);
-            // Soft knee: gradual onset over 30 dB range avoids pumping artefacts.
-            this._compressor.knee.setValueAtTime(30, t);
-            // 4:1 ratio: mild compression suitable for speech, not radio limiting.
-            this._compressor.ratio.setValueAtTime(4, t);
-            // Fast 3 ms attack: catches transients before they clip.
-            this._compressor.attack.setValueAtTime(0.003, t);
-            // 250 ms release: natural decay avoids audible "breathing" on quiet passages.
-            this._compressor.release.setValueAtTime(0.25, t);
+            // Enhancement C: Broadcast-safe Gentle Leveling
+            // Unlike radio compression (harsh), this preserves dynamic range while boosting clarity.
+            this.compressor = this.audioContext.createDynamicsCompressor();
+            this.compressor.threshold.setValueAtTime(-24, this.audioContext.currentTime); // Engage at -24dB
+            this.compressor.knee.setValueAtTime(30, this.audioContext.currentTime); // Soft knee
+            this.compressor.ratio.setValueAtTime(4, this.audioContext.currentTime); // 4:1 compression
+            this.compressor.attack.setValueAtTime(0.003, this.audioContext.currentTime); // Fast attack
+            this.compressor.release.setValueAtTime(0.25, this.audioContext.currentTime); // Natural release
 
-            this._sourceNode.connect(this._compressor);
-            this._compressor.connect(this._audioContext.destination);
+            // Connect the Graph: Source -> Compressor -> Speakers
+            this.sourceNode.connect(this.compressor);
+            this.compressor.connect(this.audioContext.destination);
 
-            this._log("Enhanced audio pipeline active.");
+            this.log("Audio pipeline upgraded: Enhanced Broadcast Leveling active.");
         } catch (e) {
-            this._log("Web Audio init failed; using standard playback.", e);
+            this.log("Web Audio API not supported. Continuing with standard playback.");
+            if (window.SparxstarIntegration && window.SparxstarIntegration.isAvailable) {
+                window.SparxstarIntegration.reportError("web_audio_init_failed", { error: e });
+            }
         }
     }
 
-    /* ------------------------------------------------------------------
-       Public API
-       ------------------------------------------------------------------ */
-
     /**
-     * Start playback. Selects the best source automatically.
-     * @param {AudioSources} sources
-     * @returns {Promise<void>}
+     * Main Play Method
      */
     async play(sources) {
-        if (this._destroyed) {
-            console.warn("[SmartAudioPlayer] Cannot play: player has been destroyed.");
+        if (this.isDestroyed) {
+            console.warn("[SmartAudio] Cannot play: Player has been destroyed.");
             return;
         }
 
-        const url = this._getOptimalSource(sources);
-        if (!url) {
-            console.warn("[SmartAudioPlayer] No valid source URL.");
-            return;
-        }
+        const url = this.getOptimalSource(sources);
 
-        if (this._el.src !== url) this._el.src = url;
+        // Only reset src if it changed (prevents skipping/re-buffering)
+        if (this.audioElement.src !== url) {
+            this.audioElement.src = url;
+        }
 
         try {
-            await this._el.play();
+            // 1. Attempt Standard Playback first
+            await this.audioElement.play();
 
-            if (!this._isLowEnd) {
-                this._initEnhancedAudio();
-                if (this._audioContext?.state === "suspended") {
-                    await this._audioContext.resume();
+            // 2. Progressive Enhancement (Lazy Load)
+            // Only enhance if device is capable and battery/data isn't critical
+            if (!this.isLowEndDevice) {
+                this.initEnhancedAudio();
+
+                // Fix: Explicitly resume if Chrome suspended the context (Autoplay Policy)
+                if (this.audioContext && this.audioContext.state === "suspended") {
+                    await this.audioContext.resume();
                 }
             }
-        } catch (err) {
-            this._log("Primary source failed; attempting fallback…", err);
+        } catch (error) {
+            this.log("Playback failed. Attempting auto-fallback...", error);
 
-            const fallback = sources.low || sources.opus;
-            if (fallback && this._el.src !== fallback) {
-                this._el.src = fallback;
-                this._el.load();
+            // Silent Failover: High quality failed? Try Low quality immediately.
+            if (url !== sources.low && sources.low) {
+                this.log("Downgrading to low quality source.");
+                this.audioElement.src = sources.low;
+                this.audioElement.load(); // Force reset buffer
+
                 try {
-                    await this._el.play();
-                } catch (fallbackErr) {
-                    console.error("[SmartAudioPlayer] Critical failure:", fallbackErr);
+                    await this.audioElement.play();
+                } catch (fallbackError) {
+                    console.error("[SmartAudio] Critical Failure:", fallbackError);
                 }
             }
-        }
-    }
-
-    /** Pause playback and suspend AudioContext to save battery. */
-    pause() {
-        if (this._destroyed) return;
-        this._el.pause();
-        if (this._audioContext?.state === "running") {
-            this._audioContext.suspend();
         }
     }
 
     /**
-     * Release all resources. Must be called before unmounting in SPA contexts.
+     * Pause playback and suspend context to save battery
+     */
+    pause() {
+        if (this.isDestroyed) {
+            return;
+        }
+
+        this.audioElement.pause();
+
+        if (this.audioContext && this.audioContext.state === "running") {
+            this.audioContext.suspend();
+        }
+    }
+
+    /**
+     * Enhancement A: Cleanup Method
+     * Essential for SPAs (React/Vue) to prevent memory leaks.
      */
     destroy() {
-        this._destroyed = true;
+        this.isDestroyed = true;
         this.pause();
 
-        if (this._audioContext && this._audioContext.state !== "closed") {
-            this._audioContext.close();
+        // 1. Close AudioContext to release hardware
+        if (this.audioContext && this.audioContext.state !== "closed") {
+            this.audioContext.close();
         }
 
-        this._el.src = "";
-        this._el.load();
+        // 2. Detach Audio Element Source to stop buffering
+        this.audioElement.src = "";
+        this.audioElement.load();
 
-        try {
-            this._sourceNode?.disconnect();
-        } catch {
-            /* intentionally empty */
+        // 3. Nullify references for Garbage Collection
+        if (this.sourceNode) {
+            try {
+                this.sourceNode.disconnect();
+            } catch (e) {
+                /* Ignore disconnect errors */
+                if (window.SparxstarIntegration && window.SparxstarIntegration.isAvailable) {
+                    window.SparxstarIntegration.reportError("audio_node_disconnect_failed", {
+                        error: e,
+                    });
+                }
+            }
         }
 
-        this._audioContext = null;
-        this._sourceNode = null;
-        this._compressor = null;
+        this.audioContext = null;
+        this.sourceNode = null;
+        this.compressor = null;
+        this.audioElement = null;
 
-        this._log("Player destroyed.");
-    }
-
-    /* ------------------------------------------------------------------
-       Internal
-       ------------------------------------------------------------------ */
-
-    _log(...args) {
-        if (this._cfg.debug) console.log("[SmartAudioPlayer]", ...args);
+        this.log("Player destroyed and memory released.");
     }
 }
 
-/* Global exposure for consuming WordPress themes */
-if (typeof window !== "undefined") {
-    window.SmartAudioPlayer = SmartAudioPlayer;
-}
+// --- USAGE EXAMPLE ---
+
+/*
+const player = new SmartAudioPlayer({ debug: true });
+
+const tracks = {
+	opus: 'https://cdn.example.com/song_24k.webm', // Efficient
+	low:	'https://cdn.example.com/song_32k.mp3',	// Reliable Fallback
+	high: 'https://cdn.example.com/song_128k.mp3'	// Quality
+};
+
+// Play
+document.getElementById('playBtn').addEventListener('click', () => {
+	player.play(tracks);
+});
+
+// Cleanup (e.g., in React useEffect return or Vue unmounted)
+// player.destroy();
+*/

@@ -1,52 +1,15 @@
-/**
- * Copyright (c) Starisian Technologies. All rights reserved.
- *
- * This file is part of the SPARXSTAR platform and is proprietary and confidential.
- * Unauthorized copying, modification, distribution, or use of this file, via any medium,
- * is strictly prohibited except as expressly permitted in writing by Starisian Technologies.
- *
- * License: Business Source License 1.1
- * Change Date: January 1, 2036
- * Change License: Starisian Community License
- *
- * See the LICENSE file in the repository root for full license terms.
- */
-
-/**
- * @file prosody/starmus-prosody-engine.js
- * @version 4.0.0
- * @description RhythmEngine — prosody mode for the Starmus audio recorder.
- * Displays a script text in rhythm-paced chunks, auto-synchronised with
- * the recorder state store. Calibration is tap-based (BPM detection).
- *
- * Connects to `window.StarmusStore` when the recorder is active.
- * Persists pace preference to the backend via AJAX with offline guard.
- *
- * Performance budget:
- * - Scroll: requestAnimationFrame, math-only (no scrollIntoView thrash)
- * - DOM updates: O(1) — only mutates previous + current unit nodes
- * - Interval is bounded by stop() when recording ends or component destroys
- */
-
-"use strict";
-
-/** Maximum allowed retry count for AJAX pace save. */
-const MAX_RETRIES = 3;
-
-/**
- * RhythmEngine — prosody text display mode.
- * Mount via `new RhythmEngine()` after DOM is ready.
- */
-export class RhythmEngine {
+class RhythmEngine {
     constructor() {
-        const data = window.StarmusProsodyData;
-        if (typeof data === "undefined") {
-            console.error("[RhythmEngine] StarmusProsodyData payload missing.");
+        const StarmusProsodyData = window.StarmusProsodyData;
+
+        // DEFENSIVE: 1. Check for data payload
+        if (typeof StarmusProsodyData === "undefined") {
+            console.error("Starmus Prosody: Data payload missing.");
             return;
         }
-        this.config = data;
+        this.config = StarmusProsodyData; // Correct: Data is already the flat object
 
-        /* Required DOM elements */
+        // DEFENSIVE: 2. Check for required DOM elements
         this.els = {
             stage: document.getElementById("scaffold-stage"),
             container: document.getElementById("text-flow"),
@@ -62,52 +25,53 @@ export class RhythmEngine {
 
         for (const [key, el] of Object.entries(this.els)) {
             if (!el && key !== "recalBtn") {
-                console.error(`[RhythmEngine] Critical DOM element missing: ${key}`);
+                console.error(`Starmus Prosody: Critical DOM element missing: ${key}`);
                 return;
             }
         }
 
-        /* Engine state */
+        // Engine State
         this.units = [];
         this.currentIndex = -1;
         this.isPlaying = false;
         this.timer = null;
         this.paceDebounce = null;
-        this._destroyed = false;
 
-        /* Settings */
-        this.chunkSize = parseInt(this.config.density, 10) || 28;
-        this.paceMs = parseInt(this.config.startPace, 10) || 3000;
+        // Settings
+        this.chunkSize = parseInt(this.config.density) || 28;
+        this.paceMs = parseInt(this.config.startPace) || 3000;
 
-        /* Calibration state */
+        // Calibration State
         this.tapTimes = [];
         this.requiredTaps = 4;
         this.calibrationLocked = false;
 
-        this._init();
+        this.init();
     }
 
-    _init() {
-        this._renderChunks(this.config.source);
-        this._bindEvents();
-        this._bindRecorderIntegration();
+    init() {
+        this.renderChunks(this.config.source);
+        this.bindEvents();
+        this.bindRecorderIntegration();
 
-        this.els.slider.value = String(this.paceMs);
+        this.els.slider.value = this.paceMs;
 
-        if (this.paceMs > 0 && this.config.startPace > 0) {
+        // If a saved pace exists, show feedback but stay in calibration mode
+        if (this.paceMs && this.config.startPace > 0) {
             this.els.tapFeedback.innerText = `Saved Rhythm: ${this.paceMs}ms`;
-            this.els.tapFeedback.style.opacity = "0.6";
+            this.els.tapFeedback.style.opacity = 0.6;
         }
     }
 
-    /* ------------------------------------------------------------------
-       Segmentation
-       ------------------------------------------------------------------ */
-
-    _renderChunks(rawText) {
+    /**
+     * SEGMENTATION
+     * Breaks text into units and handles Silence Beats (|)
+     */
+    renderChunks(rawText) {
         try {
-            if (!rawText || typeof rawText !== "string") throw new Error("Invalid source");
-
+            if (!rawText || typeof rawText !== "string") {
+                throw new Error("Invalid Source");
+            }
             const safeText = rawText.replace(/\|/g, " | ");
             const words = safeText.split(/\s+/);
 
@@ -120,14 +84,14 @@ export class RhythmEngine {
             words.forEach((word) => {
                 if (word === "|") {
                     if (buffer.length > 0) {
-                        this._createUnit(buffer.join(" "), false);
+                        this.createUnit(buffer.join(" "), false);
                         buffer = [];
                         len = 0;
                     }
-                    this._createUnit("", true);
+                    this.createUnit("", true); // Silence Unit
                 } else {
                     if (len + word.length > this.chunkSize && buffer.length > 0) {
-                        this._createUnit(buffer.join(" "), false);
+                        this.createUnit(buffer.join(" "), false);
                         buffer = [];
                         len = 0;
                     }
@@ -136,27 +100,33 @@ export class RhythmEngine {
                 }
             });
 
-            if (buffer.length > 0) this._createUnit(buffer.join(" "), false);
+            if (buffer.length > 0) {
+                this.createUnit(buffer.join(" "), false);
+            }
 
+            // Initial Visual State (All Future)
             this.units.forEach((u) => u.classList.add("future"));
 
+            // Ready at start (but don't scroll yet)
             if (this.units.length > 0) {
                 this.currentIndex = -1;
                 this.units[0].classList.remove("future");
                 this.units[0].classList.add("current");
 
-                const spacer = document.createElement("div");
-                spacer.className = "spacer";
-                this.els.container.appendChild(spacer);
+                // Add this to the end of your renderChunks() method in JS
+                const endSpacer = document.createElement("div");
+                endSpacer.className = "spacer";
+                this.els.container.appendChild(endSpacer);
             }
         } catch (e) {
             this.els.container.innerText = "Error loading prosody text.";
-            console.error("[RhythmEngine]", e);
+            console.error(e);
         }
     }
 
-    _createUnit(text, isSilence) {
+    createUnit(text, isSilence) {
         const span = document.createElement("span");
+        // Base state is handled in batch later for performance
         span.className = "prosodic-unit";
 
         if (isSilence) {
@@ -166,32 +136,40 @@ export class RhythmEngine {
             span.innerText = text;
         }
 
+        // Emergency Jump (Manual Intervention)
         span.addEventListener("click", (e) => {
             e.stopPropagation();
             this.stop();
-            this._jumpTo(this.units.indexOf(span));
+            this.jumpTo(this.units.indexOf(span));
         });
 
         this.els.container.appendChild(span);
         this.units.push(span);
     }
 
-    /* ------------------------------------------------------------------
-       O(1) visual engine
-       ------------------------------------------------------------------ */
-
-    _jumpTo(index) {
+    /**
+     * OPTIMIZED VISUAL ENGINE (O(1))
+     * Only updates the specific nodes changing state.
+     */
+    jumpTo(index) {
+        // Full Reset (Expensive, but rarely used)
         this.units.forEach((u, i) => {
             u.classList.remove("past", "current", "future");
-            if (i < index) u.classList.add("past");
-            else if (i === index) u.classList.add("current");
-            else u.classList.add("future");
+            if (i < index) {
+                u.classList.add("past");
+            } else if (i === index) {
+                u.classList.add("current");
+            } else {
+                u.classList.add("future");
+            }
         });
+
         this.currentIndex = index;
-        this._performScroll(index);
+        this.performScroll(index);
     }
 
-    _tick() {
+    tick() {
+        // Calculate Next
         const nextIndex = this.currentIndex + 1;
 
         if (nextIndex >= this.units.length) {
@@ -199,99 +177,125 @@ export class RhythmEngine {
             return;
         }
 
+        // 1. Update Old Current -> Past
         if (this.units[this.currentIndex]) {
-            this.units[this.currentIndex].classList.remove("current");
-            this.units[this.currentIndex].classList.add("past");
+            const oldEl = this.units[this.currentIndex];
+            oldEl.classList.remove("current");
+            oldEl.classList.add("past");
         }
+
+        // 2. Update New Current -> Current
         if (this.units[nextIndex]) {
-            this.units[nextIndex].classList.remove("future");
-            this.units[nextIndex].classList.add("current");
+            const newEl = this.units[nextIndex];
+            newEl.classList.remove("future");
+            newEl.classList.add("current");
         }
 
         this.currentIndex = nextIndex;
-        this._performScroll(nextIndex);
+        this.performScroll(nextIndex);
     }
 
-    _performScroll(index) {
+    /**
+     * OPTIMIZED SCROLL (Jank-Free)
+     * Uses math instead of scrollIntoView to avoid layout thrashing.
+     */
+    performScroll(index) {
         const el = this.units[index];
-        if (!el) return;
+        if (!el) {
+            return;
+        }
 
+        // Perform calculation in the animation frame to sync with refresh rate
         requestAnimationFrame(() => {
-            if (this._destroyed) return;
             const stageHeight = this.els.stage.clientHeight;
+            // Calculate position relative to container
             const elTop = el.offsetTop;
             const elHeight = el.offsetHeight;
+
+            // Math: Center the element
+            const targetScroll = elTop - stageHeight / 2 + elHeight / 2;
+
             this.els.stage.scrollTo({
-                top: elTop - stageHeight / 2 + elHeight / 2,
+                top: targetScroll,
                 behavior: "smooth",
             });
         });
     }
 
-    /* ------------------------------------------------------------------
-       Engine controls
-       ------------------------------------------------------------------ */
-
+    /**
+     * ENGINE CONTROLS
+     */
     play() {
-        if (this.isPlaying || this._destroyed) return;
+        if (this.isPlaying) {
+            return;
+        }
         this.isPlaying = true;
-        this._tick();
-        this.timer = setInterval(() => this._tick(), this.paceMs);
-        this._updatePlayBtn();
+
+        // Immediate tick to start moving
+        this.tick();
+
+        this.timer = setInterval(() => this.tick(), this.paceMs);
+        this.updatePlayBtn();
     }
 
     stop() {
         this.isPlaying = false;
         clearInterval(this.timer);
-        this.timer = null;
-        this._updatePlayBtn();
+        this.updatePlayBtn();
     }
 
     toggle() {
         this.isPlaying ? this.stop() : this.play();
     }
 
-    _updatePace(ms) {
+    updatePace(ms) {
         this.paceMs = ms;
-        this.els.slider.value = String(ms);
+        this.els.slider.value = ms;
+
         if (this.isPlaying) {
             clearInterval(this.timer);
-            this.timer = setInterval(() => this._tick(), this.paceMs);
+            this.timer = setInterval(() => this.tick(), this.paceMs);
         }
     }
 
-    _updatePlayBtn() {
+    updatePlayBtn() {
         const icon = this.els.playBtn.querySelector(".icon");
         const label = this.els.playBtn.querySelector(".label");
+
         if (this.isPlaying) {
-            if (icon) icon.innerText = "II";
-            if (label) label.innerText = "PAUSE FLOW";
+            icon.innerText = "II";
+            if (label) {
+                label.innerText = "PAUSE FLOW";
+            }
+            this.els.playBtn.title = "Pause Flow";
             this.els.playBtn.classList.add("active");
         } else {
-            if (icon) icon.innerText = "▶";
-            if (label) label.innerText = "ENGAGE FLOW";
+            icon.innerText = "▶";
+            if (label) {
+                label.innerText = "ENGAGE FLOW";
+            }
+            this.els.playBtn.title = "Test Flow";
             this.els.playBtn.classList.remove("active");
         }
     }
 
-    /* ------------------------------------------------------------------
-       Calibration
-       ------------------------------------------------------------------ */
-
-    _recordTap() {
-        if (this.calibrationLocked) return;
+    /**
+     * CALIBRATION LOGIC
+     */
+    recordTap() {
+        if (this.calibrationLocked) {
+            return;
+        }
 
         const now = Date.now();
         this.els.tapZone.classList.add("flash");
         setTimeout(() => this.els.tapZone.classList.remove("flash"), 100);
 
-        if (
-            this.tapTimes.length > 0 &&
-            now - this.tapTimes[this.tapTimes.length - 1] > 2000
-        ) {
+        // Reset logic
+        if (this.tapTimes.length > 0 && now - this.tapTimes[this.tapTimes.length - 1] > 2000) {
             this.tapTimes = [];
             this.els.tapFeedback.innerText = "Rhythm lost. Start again.";
-            this.els.tapFeedback.style.opacity = "1";
+            this.els.tapFeedback.style.opacity = 1;
         }
 
         this.tapTimes.push(now);
@@ -301,27 +305,33 @@ export class RhythmEngine {
             for (let i = 1; i < this.tapTimes.length; i++) {
                 intervals.push(this.tapTimes[i] - this.tapTimes[i - 1]);
             }
-            const avg = Math.round(
-                intervals.reduce((a, b) => a + b, 0) / intervals.length,
-            );
+            const avg = Math.round(intervals.reduce((a, b) => a + b) / intervals.length);
 
-            this.els.tapFeedback.innerText = `Detecting… ${avg}ms`;
-            this.els.tapFeedback.style.opacity = "1";
+            this.els.tapFeedback.innerText = `Detecting... ${avg}ms`;
+            this.els.tapFeedback.style.opacity = 1;
 
             if (this.tapTimes.length >= this.requiredTaps) {
-                this._transitionToStage(avg);
+                this.transitionToStage(avg);
             }
         }
     }
 
-    _transitionToStage(ms) {
+    transitionToStage(ms) {
         this.calibrationLocked = true;
-        let safeMs = parseInt(ms, 10);
-        if (isNaN(safeMs)) safeMs = 3000;
-        safeMs = Math.max(1000, Math.min(6000, safeMs));
+        let safeMs = parseInt(ms);
+        if (isNaN(safeMs)) {
+            safeMs = 3000;
+        }
 
-        this._updatePace(safeMs);
-        this._savePace(safeMs);
+        if (safeMs < 1000) {
+            safeMs = 1000;
+        }
+        if (safeMs > 6000) {
+            safeMs = 6000;
+        }
+
+        this.updatePace(safeMs);
+        this.savePaceToDatabase(safeMs);
 
         this.els.tapFeedback.innerText = "RHYTHM LOCKED";
         this.els.tapFeedback.style.color = "#fff";
@@ -332,12 +342,13 @@ export class RhythmEngine {
                 this.els.calibration.style.display = "none";
                 this.els.stage.classList.remove("hidden");
                 this.els.controls.classList.remove("hidden");
-                this.els.slider.value = String(safeMs);
+                // Force slider update after visibility change to ensure UI sync
+                this.els.slider.value = safeMs;
             }, 500);
         }, 600);
     }
 
-    _resetCalibration() {
+    resetCalibration() {
         this.calibrationLocked = false;
         this.stop();
         this.tapTimes = [];
@@ -346,170 +357,144 @@ export class RhythmEngine {
         this.els.stage.classList.add("hidden");
         this.els.controls.classList.add("hidden");
         this.els.tapFeedback.innerText = "Tap to set new pace";
-        this.els.tapFeedback.style.color = "var(--prosody-accent)";
+        this.els.tapFeedback.style.color = "var(--accent)";
     }
 
-    /* ------------------------------------------------------------------
-       AJAX pace persistence (with offline guard and timeout)
-       ------------------------------------------------------------------ */
+    /**
+     * NETWORK / SAVE
+     * Added AbortController for network timeouts and offline check.
+     */
+    savePaceToDatabase(ms) {
+        if (!this.config.nonce) {
+            return;
+        }
 
-    _savePace(ms, attempt = 0) {
-        if (!this.config.nonce) return;
-        if (!navigator.onLine) {
-            console.warn("[RhythmEngine] Offline — pace change cached locally only.");
+        // Offline check
+        if (navigator.onLine === false) {
+            console.warn("Offline: Pace change cached locally only.");
             return;
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), AbortSignal.timeout ? 0 : 3000);
+        const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s Timeout
 
         const data = new FormData();
         data.append("action", "starmus_save_pace");
-        data.append("post_id", String(this.config.postID));
-        data.append("pace_ms", String(ms));
+        data.append("post_id", this.config.postID);
+        data.append("pace_ms", ms);
         data.append("nonce", this.config.nonce);
 
         fetch(window.ajaxurl || "/wp-admin/admin-ajax.php", {
             method: "POST",
             body: data,
-            signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : controller.signal,
+            signal: controller.signal,
         })
             .then((res) => res.json())
             .then((res) => {
                 clearTimeout(timeoutId);
-                if (!res.success) console.warn("[RhythmEngine] Save warning:", res);
-            })
-            .catch((err) => {
-                clearTimeout(timeoutId);
-                if (attempt < MAX_RETRIES) {
-                    const delay = 500 * 2 ** attempt + Math.random() * 200;
-                    setTimeout(() => this._savePace(ms, attempt + 1), delay);
-                } else {
-                    console.error("[RhythmEngine] Save failed after retries:", err);
+                if (!res.success) {
+                    console.warn("Save warning:", res);
                 }
-            });
+            })
+            .catch((err) => console.error("Save failed or timed out:", err));
     }
 
-    /* ------------------------------------------------------------------
-       Event binding
-       ------------------------------------------------------------------ */
-
-    _bindEvents() {
-        this.els.tapZone.addEventListener("click", () => this._recordTap());
+    bindEvents() {
+        this.els.tapZone.addEventListener("click", () => this.recordTap());
         this.els.playBtn.addEventListener("click", () => this.toggle());
-
         if (this.els.topBtn) {
-            this.els.topBtn.addEventListener("click", (e) => {
-                e.preventDefault();
+            this.els.topBtn.addEventListener("click", (event) => {
+                event.preventDefault();
                 this.stop();
-                this._jumpTo(0);
+                this.jumpTo(0);
             });
         }
-
         if (this.els.recalBtn) {
-            this.els.recalBtn.addEventListener("click", () => this._resetCalibration());
+            this.els.recalBtn.addEventListener("click", () => this.resetCalibration());
         }
 
-        /* Debounced slider input (80 ms) */
+        // PERFORMANCE: Debounced Slider Input
         this.els.slider.addEventListener("input", (e) => {
             clearTimeout(this.paceDebounce);
-            const val = parseInt(e.target.value, 10);
-            this.paceDebounce = setTimeout(() => this._updatePace(val), 80);
+            const val = parseInt(e.target.value);
+            // Wait 80ms before updating engine to save CPU
+            this.paceDebounce = setTimeout(() => this.updatePace(val), 80);
         });
 
+        // Save only on release
         this.els.slider.addEventListener("change", (e) => {
-            this._savePace(parseInt(e.target.value, 10));
+            this.savePaceToDatabase(parseInt(e.target.value));
         });
 
         document.addEventListener("keydown", (e) => {
             if (e.code === "Space") {
                 e.preventDefault();
-                const inCalibration =
-                    this.els.calibration.style.display !== "none";
-                if (inCalibration) this._recordTap();
-                else this.toggle();
+                if (this.els.calibration.style.display !== "none") {
+                    this.recordTap();
+                } else {
+                    this.toggle();
+                }
             }
-            if (
-                e.code === "ArrowRight" &&
-                this.els.calibration.style.display === "none"
-            ) {
+            // Emergency Forward Nudge
+            if (e.code === "ArrowRight" && this.els.calibration.style.display === "none") {
                 this.stop();
-                this._tick();
+                this.tick();
             }
         });
 
+        // Click saved rhythm text to skip calibration
         this.els.tapFeedback.addEventListener("click", () => {
-            if (this.paceMs > 0) this._transitionToStage(this.paceMs);
+            if (this.paceMs > 0) {
+                this.transitionToStage(this.paceMs);
+            }
         });
         this.els.tapFeedback.style.cursor = "pointer";
     }
 
-    /* ------------------------------------------------------------------
-       Store integration — auto-play/stop with recorder state
-       ------------------------------------------------------------------ */
-
-    _bindRecorderIntegration() {
-        let retries = 0;
-        const maxRetries = 20; /* 10 seconds at 500 ms intervals */
-
+    bindRecorderIntegration() {
+        // Poll for the store in case of load order race conditions
         const checkStore = setInterval(() => {
-            try {
-                retries++;
-
-                if (window.StarmusStore?.subscribe) {
-                    clearInterval(checkStore);
-
-                    let lastStatus = window.StarmusStore.getState().status;
-
-                    window.StarmusStore.subscribe((state) => {
-                        const status = state.status;
-
-                        if (status === "recording" && lastStatus !== "recording") {
-                            if (
-                                this.els.calibration &&
-                                this.els.calibration.style.display !== "none"
-                            ) {
-                                this._transitionToStage(this.paceMs || 3000);
-                            }
-                            setTimeout(() => this.play(), 200);
-                        }
-
-                        if (
-                            lastStatus === "recording" &&
-                            status !== "recording" &&
-                            status !== "paused"
-                        ) {
-                            this.stop();
-                        }
-
-                        lastStatus = status;
-                    });
-                }
-
-                if (retries >= maxRetries) {
-                    clearInterval(checkStore);
-                }
-            } catch (err) {
+            if (window.StarmusStore && window.StarmusStore.subscribe) {
                 clearInterval(checkStore);
-                console.error("[RhythmEngine] Store integration failed:", err);
+                console.log("Starmus Prosody: Connected to Recorder Store");
+
+                let lastStatus = window.StarmusStore.getState().status;
+
+                window.StarmusStore.subscribe((state) => {
+                    const status = state.status;
+
+                    // RECORDER STARTED -> PLAY
+                    if (status === "recording" && lastStatus !== "recording") {
+                        console.log("Starmus Prosody: Recorder Start detected -> Playing");
+
+                        // If in calibration mode, force transition to main stage
+                        if (this.els.calibration && this.els.calibration.style.display !== "none") {
+                            this.transitionToStage(this.paceMs || 3000);
+                        }
+
+                        // Small delay to ensure UI transition and sync
+                        setTimeout(() => this.play(), 200);
+                    }
+
+                    // RECORDER STOPPED -> STOP
+                    if (
+                        lastStatus === "recording" &&
+                        status !== "recording" &&
+                        status !== "paused"
+                    ) {
+                        this.stop();
+                    }
+
+                    lastStatus = status;
+                });
             }
         }, 500);
-    }
 
-    /* ------------------------------------------------------------------
-       Teardown
-       ------------------------------------------------------------------ */
-
-    destroy() {
-        this._destroyed = true;
-        this.stop();
-        if (this.paceDebounce) clearTimeout(this.paceDebounce);
+        // Stop checking after 10 seconds
+        setTimeout(() => clearInterval(checkStore), 10000);
     }
 }
 
-/* Auto-mount on DOMContentLoaded for non-module WordPress context */
 document.addEventListener("DOMContentLoaded", () => {
-    if (typeof window.StarmusProsodyData !== "undefined") {
-        window.StarmusRhythmEngine = new RhythmEngine();
-    }
+    new RhythmEngine();
 });

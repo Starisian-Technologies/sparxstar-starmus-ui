@@ -149,10 +149,16 @@ export class SmartAudioPlayer {
             /* Gentle broadcast levelling — preserves dynamic range */
             this._compressor = this._audioContext.createDynamicsCompressor();
             const t = this._audioContext.currentTime;
+            // Gentle broadcast levelling — preserves dynamic range while boosting clarity.
+            // Threshold: engage compression only when signal exceeds -24 dBFS.
             this._compressor.threshold.setValueAtTime(-24, t);
+            // Soft knee: gradual onset over 30 dB range avoids pumping artefacts.
             this._compressor.knee.setValueAtTime(30, t);
+            // 4:1 ratio: mild compression suitable for speech, not radio limiting.
             this._compressor.ratio.setValueAtTime(4, t);
+            // Fast 3 ms attack: catches transients before they clip.
             this._compressor.attack.setValueAtTime(0.003, t);
+            // 250 ms release: natural decay avoids audible "breathing" on quiet passages.
             this._compressor.release.setValueAtTime(0.25, t);
 
             this._sourceNode.connect(this._compressor);

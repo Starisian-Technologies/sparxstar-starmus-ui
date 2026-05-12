@@ -453,40 +453,45 @@ export class RhythmEngine {
         const maxRetries = 20; /* 10 seconds at 500 ms intervals */
 
         const checkStore = setInterval(() => {
-            retries++;
+            try {
+                retries++;
 
-            if (window.StarmusStore?.subscribe) {
-                clearInterval(checkStore);
+                if (window.StarmusStore?.subscribe) {
+                    clearInterval(checkStore);
 
-                let lastStatus = window.StarmusStore.getState().status;
+                    let lastStatus = window.StarmusStore.getState().status;
 
-                window.StarmusStore.subscribe((state) => {
-                    const status = state.status;
+                    window.StarmusStore.subscribe((state) => {
+                        const status = state.status;
 
-                    if (status === "recording" && lastStatus !== "recording") {
-                        if (
-                            this.els.calibration &&
-                            this.els.calibration.style.display !== "none"
-                        ) {
-                            this._transitionToStage(this.paceMs || 3000);
+                        if (status === "recording" && lastStatus !== "recording") {
+                            if (
+                                this.els.calibration &&
+                                this.els.calibration.style.display !== "none"
+                            ) {
+                                this._transitionToStage(this.paceMs || 3000);
+                            }
+                            setTimeout(() => this.play(), 200);
                         }
-                        setTimeout(() => this.play(), 200);
-                    }
 
-                    if (
-                        lastStatus === "recording" &&
-                        status !== "recording" &&
-                        status !== "paused"
-                    ) {
-                        this.stop();
-                    }
+                        if (
+                            lastStatus === "recording" &&
+                            status !== "recording" &&
+                            status !== "paused"
+                        ) {
+                            this.stop();
+                        }
 
-                    lastStatus = status;
-                });
-            }
+                        lastStatus = status;
+                    });
+                }
 
-            if (retries >= maxRetries) {
+                if (retries >= maxRetries) {
+                    clearInterval(checkStore);
+                }
+            } catch (err) {
                 clearInterval(checkStore);
+                console.error("[RhythmEngine] Store integration failed:", err);
             }
         }, 500);
     }

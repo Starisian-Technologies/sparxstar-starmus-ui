@@ -1,0 +1,261 @@
+:root{
+    --prosody-bg:var(--sparxstar-bg, #f2f2f2);
+    --prosody-surface:var(--sparxstar-inner-bg, #fff);
+    --prosody-text:var(--sparxstar-text, #1a1a2e);
+    --prosody-text-dim:color-mix(in srgb, var(--sparxstar-text, #1a1a2e) 55%, transparent);
+    --prosody-text-lit:var(--sparxstar-text, #1a1a2e);
+    --prosody-accent:var(--sparxstar-accent-hex, #246bf8);
+    --prosody-border:var(--sparxstar-border-color, rgba(0,0,0,.12));
+    --prosody-shadow-sm:var(--sparxstar-shd, 0 1px 3px rgba(0,0,0,.12));
+    --prosody-shadow-md:var(--sparxstar-shadow, 0 4px 12px rgba(0,0,0,.15));
+    --prosody-font-stack:"Noto Sans", system-ui, sans-serif;
+    --prosody-font-mono:"Noto Sans Mono", "Courier New", monospace;
+    --prosody-unit-spacing:2.2;
+    --prosody-tap-zone-size:clamp(160px, 55vw, 220px);
+    --prosody-glow-gradient:radial-gradient(
+        circle at center,
+        rgba(39,244,3,.28) 0%,
+        rgba(39,244,3,.12) 45%,
+        transparent 70%
+    );
+    --prosody-glow-warm:radial-gradient(
+        circle at center,
+        rgba(255,215,0,.22) 0%,
+        rgb(255 215 0 / 8%) 48%,
+        transparent 70%
+    );
+}
+@media (prefers-color-scheme:dark){
+    :root{
+        --prosody-bg:var(--sparxstar-bg, #12121f);
+        --prosody-surface:var(--sparxstar-inner-bg, #1e1e30);
+        --prosody-text:var(--sparxstar-text, #e8e8f0);
+        --prosody-text-dim:color-mix(in srgb, var(--sparxstar-text, #e8e8f0) 45%, transparent);
+        --prosody-text-lit:#fff;
+    }
+}
+
+#cognitive-regulator{
+    background:var(--prosody-bg);
+    color:var(--prosody-text-dim);
+    font-family:var(--prosody-font-stack);
+    height:50dvh;
+    min-height:280px;
+    width:100%;
+    position:relative;
+    overflow:hidden;
+    user-select:none;
+}
+
+#calibration-layer,#cognitive-regulator{
+    display:flex;
+    flex-direction:column;
+}
+
+#calibration-layer{
+    position:absolute;
+    inset:0;
+    background:var(--prosody-surface);
+    z-index:200;
+    align-items:center;
+    justify-content:center;
+    transition:opacity .4s ease;
+}
+
+#calibration-layer.fade-out{
+    opacity:0;
+    pointer-events:none;
+}
+
+.tap-zone{
+    width:var(--prosody-tap-zone-size);
+    height:var(--prosody-tap-zone-size);
+    min-height:48px;
+    border:1px solid var(--prosody-border);
+    border-radius:50%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    cursor:pointer;
+    background-image:var(--prosody-glow-gradient);
+    background-repeat:no-repeat;
+    background-size:100% 100%;
+}
+
+@media (prefers-reduced-motion:no-preference){
+    .tap-zone{
+        transition:transform .1s ease;
+    }
+
+    .tap-zone.flash,.tap-zone:active{
+        transform:scale(.96);
+    }
+}
+
+#scaffold-stage{
+    flex-grow:1;
+    overflow-y:auto;
+    padding:0 clamp(10px, 5vw, 120px);
+    display:flex;
+    flex-direction:column;
+    position:relative;
+    scrollbar-width:none;
+    -ms-overflow-style:none;
+}
+
+#scaffold-stage::-webkit-scrollbar{
+    display:none;
+}
+
+#text-flow{
+    position:relative;
+    padding-top:35vh;
+    padding-bottom:40vh;
+    font-size:clamp(18px, 4.5vw, 26px);
+    line-height:var(--prosody-unit-spacing);
+    text-align:center;
+}
+
+#text-flow,.prosodic-unit{
+    font-family:var(--prosody-font-mono);
+}
+
+.prosodic-unit{
+    display:inline-block;
+    padding:2px 8px;
+    margin:4px 2px;
+    border-radius:4px;
+    cursor:crosshair;
+    transform-origin:center;
+}
+
+@media (prefers-reduced-motion:no-preference){
+    .prosodic-unit{
+        transition:color .25s,opacity .25s,transform .25s;
+    }
+}
+
+.prosodic-unit.future,.prosodic-unit.past{
+    color:var(--prosody-text-dim);
+    opacity:.35;
+}
+
+.prosodic-unit.current{
+    color:var(--prosody-text-lit);
+    opacity:1;
+    font-weight:600;
+    background:hsla(0,0%,100%,.08);
+}
+
+@media (prefers-reduced-motion:no-preference){
+    .prosodic-unit.current{
+        transform:scale(1.15);
+        will-change:transform;
+    }
+}
+
+.prosodic-unit.silence-beat.current{
+    background-image:var(--prosody-glow-warm);
+}
+.prosodic-unit+.spacer{
+    display:block;
+    height:20vh;
+}
+
+.control-deck{
+    border-top:1px solid var(--prosody-border);
+    padding:12px 20px;
+    display:flex;
+    align-items:center;
+    gap:15px;
+}
+
+@media (prefers-reduced-motion:no-preference){
+    .control-deck{
+        transition:opacity .6s ease,transform .6s ease;
+    }
+}
+
+.neutral-btn,.secondary-text-btn,.starmus-script-card{
+    min-height:48px;
+    padding:10px 16px;
+    border:1px solid var(--prosody-border);
+    border-radius:8px;
+    background:var(--prosody-surface);
+    color:var(--prosody-text);
+    font-family:var(--prosody-font-stack);
+    cursor:pointer;
+}
+
+.neutral-btn.icon-only{
+    width:48px;
+    padding:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+
+.neutral-btn.active{
+    background:var(--prosody-accent);
+    color:#fff;
+    border-color:var(--prosody-accent);
+}
+#pace-regulator{
+    flex:1;
+    min-width:80px;
+    accent-color:var(--prosody-accent);
+}
+#tap-feedback{
+    font-size:.875rem;
+    color:var(--prosody-text-dim);
+    cursor:pointer;
+    min-height:24px;
+}
+
+.starmus-script-card{
+    display:block;
+    width:100%;
+    text-align:left;
+    margin-bottom:8px;
+}
+
+.starmus-script-card__title{
+    font-weight:600;
+    color:var(--prosody-accent);
+}
+
+.starmus-script-card__meta{
+    font-size:.8rem;
+    color:var(--prosody-text-dim);
+    margin-top:2px;
+}
+
+@media (width <= 600px){
+    #scaffold-stage{
+        scroll-behavior:auto;
+    }
+
+    #text-flow{
+        font-size:18px;
+        padding-top:10vh;
+        padding-bottom:15vh;
+    }
+
+    .control-deck{
+        flex-wrap:wrap;
+        gap:8px;
+    }
+}
+
+@media (resolution <= 1.5dppx){
+    .control-deck,.neutral-btn,.secondary-text-btn,.tap-zone{
+        background-image:none;
+        box-shadow:none;
+    }
+
+    .prosodic-unit.current{
+        transform:none;
+        will-change:auto;
+    }
+}

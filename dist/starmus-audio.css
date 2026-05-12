@@ -1,657 +1,527 @@
-/**
- * Copyright (c) Starisian Technologies. All rights reserved.
- * Proprietary and confidential. See LICENSE.md.
- *
- * @file    starmus-audio.css
- * @package SPARXSTAR Starmus Audio UI
- * @version 1.0.0
- * Africa-first, single-column audio recorder UI (360px min, 48px touch targets).
- * Noto Sans loaded by consuming theme. Dark mode via prefers-color-scheme.
- */
-
-/* DESIGN TOKENS (canonical — do not rename or remove) */
-
-:root {
-    /* Brand / primary */
-    --sparxstar-primary: var(--wp--preset--color--primary, #1a1a2e);
-    --sparxstar-accent-hex: #246bf8;
-
-    /* Semantic colour */
-    --sparxstar-text: var(--wp--preset--color--foreground, #1a1a1a);
-    --sparxstar-theme-base: var(--wp--preset--color--background, #ffffff);
-    --sparxstar-danger: #d63638;
-    --sparxstar-success: #00a32a;
-    --sparxstar-warning: #dba617;
-
-    /* Surface */
-    --sparxstar-bg: var(--wp--preset--color--background, #f9f9f9);
-    --sparxstar-inner-bg: var(--wp--preset--color--secondary, #f0f0f0);
-    --sparxstar-border-color: #c3c4c7;
-
-    /* Shadows (consolidated tokens) */
-    --sparxstar-shadow: 0 1px 3px rgb(0 0 0 / 15%);
-    --sparxstar-shd: 0 2px 6px rgb(0 0 0 / 20%);
-    --sparxstar-shd-onhover: 0 4px 12px rgb(0 0 0 / 25%);
-    --sparxstar-shd-onclick: 0 1px 2px rgb(0 0 0 / 15%);
-
-    /* Typography */
-    --starmus-font: 'Noto Sans', system-ui, sans-serif;
-    --starmus-font-mono: 'Noto Sans Mono', 'Courier New', monospace;
-    --starmus-radius: 8px;
-    --starmus-spacing: 16px;
-    --starmus-transition: 0.18s ease;
-
-    /* Recording-specific */
-    --starmus-audio-level: 0%;
-    --starmus-recording-progress: 0%;
-    --starmus-mic-size: 80px;
+:root{
+    --sparxstar-primary:var(--wp--preset--color--primary, #1a1a2e);
+    --sparxstar-accent-hex:#246bf8;
+    --sparxstar-text:var(--wp--preset--color--foreground, #1a1a1a);
+    --sparxstar-theme-base:var(--wp--preset--color--background, #fff);
+    --sparxstar-danger:#d63638;
+    --sparxstar-success:#00a32a;
+    --sparxstar-warning:#dba617;
+    --sparxstar-bg:var(--wp--preset--color--background, #f9f9f9);
+    --sparxstar-inner-bg:var(--wp--preset--color--secondary, #f0f0f0);
+    --sparxstar-border-color:#c3c4c7;
+    --sparxstar-shadow:0 1px 3px rgba(0,0,0,.15);
+    --sparxstar-shd:0 2px 6px rgba(0,0,0,.2);
+    --sparxstar-shd-onhover:0 4px 12px rgba(0,0,0,.25);
+    --sparxstar-shd-onclick:0 1px 2px rgba(0,0,0,.15);
+    --starmus-font:"Noto Sans", system-ui, sans-serif;
+    --starmus-font-mono:"Noto Sans Mono", "Courier New", monospace;
+    --starmus-radius:8px;
+    --starmus-spacing:16px;
+    --starmus-transition:0.18s ease;
+    --starmus-audio-level:0%;
+    --starmus-recording-progress:0%;
+    --starmus-mic-size:80px;
 }
 
-/* DARK MODE — property overrides only */
-
-@media (prefers-color-scheme: dark) {
-    :root {
-        --sparxstar-text: #e8e8e8;
-        --sparxstar-theme-base: #1a1a2e;
-        --sparxstar-bg: #12121f;
-        --sparxstar-inner-bg: #1e1e33;
-        --sparxstar-border-color: #3a3a52;
-        --sparxstar-shadow: 0 1px 3px rgb(0 0 0 / 40%);
-        --sparxstar-shd: 0 2px 6px rgb(0 0 0 / 50%);
-        --sparxstar-shd-onhover: 0 4px 12px rgb(0 0 0 / 60%);
+@media (prefers-color-scheme:dark){
+    :root{
+        --sparxstar-text:#e8e8e8;
+        --sparxstar-theme-base:#1a1a2e;
+        --sparxstar-bg:#12121f;
+        --sparxstar-inner-bg:#1e1e33;
+        --sparxstar-border-color:#3a3a52;
+        --sparxstar-shadow:0 1px 3px rgba(0,0,0,.4);
+        --sparxstar-shd:0 2px 6px rgba(0,0,0,.5);
+        --sparxstar-shd-onhover:0 4px 12px rgba(0,0,0,.6);
     }
 }
 
-/* BASE SCOPE — all styles scoped to recorder form */
-
-.starmus-recorder-form {
-    font-family: var(--starmus-font);
-    color: var(--sparxstar-text);
-    background-color: var(--sparxstar-bg);
-    width: 100%;
-    max-width: 100%;
-    padding: var(--starmus-spacing);
-    box-sizing: border-box;
-    /* Single column always */
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: var(--starmus-spacing);
+.starmus-recorder-form{
+    font-family:var(--starmus-font);
+    color:var(--sparxstar-text);
+    background-color:var(--sparxstar-bg);
+    width:100%;
+    max-width:100%;
+    padding:var(--starmus-spacing);
+    display:grid;
+    grid-template-columns:1fr;
+    gap:var(--starmus-spacing);
+}
+.starmus-recorder-form,.starmus-recorder-form *,.starmus-recorder-form :after,.starmus-recorder-form :before{
+    box-sizing:border-box;
 }
 
-/* Reset box model inside scope */
-.starmus-recorder-form *,
-.starmus-recorder-form *::before,
-.starmus-recorder-form *::after {
-    box-sizing: border-box;
+.starmus-recorder-form .starmus-audio-form,.starmus-recorder-form .starmus-card{
+    background-color:var(--sparxstar-inner-bg);
+    border:1px solid var(--sparxstar-border-color);
+    border-radius:var(--starmus-radius);
+    padding:var(--starmus-spacing);
+    width:100%;
 }
 
-/* COMPONENT 1 — Recording container visual wrapper */
-
-.starmus-recorder-form .starmus-card,
-.starmus-recorder-form .starmus-audio-form {
-    background-color: var(--sparxstar-inner-bg);
-    border: 1px solid var(--sparxstar-border-color);
-    border-radius: var(--starmus-radius);
-    padding: var(--starmus-spacing);
-    width: 100%;
+.starmus-recorder-form [data-starmus-mode]{
+    display:block;
+    font-size:.875rem;
+    font-weight:600;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    color:var(--sparxstar-text);
+    padding:6px 0;
+    min-height:1.5em;
+    line-height:1.5;
 }
 
-/* COMPONENT 2 — Mode indicator */
-
-.starmus-recorder-form [data-starmus-mode] {
-    display: block;
-    font-size: 0.875rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--sparxstar-text);
-    padding: 6px 0;
-    min-height: 1.5em;
-    line-height: 1.5;
+.starmus-recorder-form [data-starmus-mode][data-starmus-status=recording]{
+    color:var(--sparxstar-danger);
 }
 
-.starmus-recorder-form [data-starmus-mode][data-starmus-status="recording"] {
-    color: var(--sparxstar-danger);
+.starmus-recorder-form [data-starmus-mode][data-starmus-status=paused]{
+    color:var(--sparxstar-warning);
 }
 
-.starmus-recorder-form [data-starmus-mode][data-starmus-status="paused"] {
-    color: var(--sparxstar-warning);
+.starmus-recorder-form [data-starmus-mode][data-starmus-status=complete]{
+    color:var(--sparxstar-success);
 }
-
-.starmus-recorder-form [data-starmus-mode][data-starmus-status="complete"] {
-    color: var(--sparxstar-success);
-}
-
-/* Tier A/B: animated pulse for recording state */
-@media (prefers-reduced-motion: no-preference) {
-    .starmus-recorder-form [data-starmus-mode][data-starmus-status="recording"] {
-        animation: starmus-blink 1.2s ease-in-out infinite;
+@media (prefers-reduced-motion:no-preference){
+    .starmus-recorder-form [data-starmus-mode][data-starmus-status=recording]{
+        animation:starmus-blink 1.2s ease-in-out infinite;
     }
 
-    @keyframes starmus-blink {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
+    @keyframes starmus-blink{
+        0%,to{ opacity:1; }
+        50%{ opacity:.5; }
     }
 }
 
-/* COMPONENT 3 — Microphone button */
-
-.starmus-recorder-form .starmus-mic-btn,
-.starmus-recorder-form [data-starmus-action="record"],
-.starmus-recorder-form [data-starmus-action="setup-mic"] {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: var(--starmus-mic-size);
-    height: var(--starmus-mic-size);
-    min-width: var(--starmus-mic-size);
-    min-height: var(--starmus-mic-size);
-    border-radius: 50%;
-    border: none;
-    background-color: var(--sparxstar-accent-hex);
-    color: #fff;
-    font-family: var(--starmus-font);
-    font-size: 1rem;
-    font-weight: 700;
-    cursor: pointer;
-    margin: 12px auto;
-    box-shadow: var(--sparxstar-shd);
-    /* transform only — no width/height animation */
-    transition: transform var(--starmus-transition), box-shadow var(--starmus-transition);
-    /* Prevent tap highlight on Android */
-    -webkit-tap-highlight-color: transparent;
+.starmus-recorder-form .starmus-mic-btn,.starmus-recorder-form [data-starmus-action=record],.starmus-recorder-form [data-starmus-action=setup-mic]{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:var(--starmus-mic-size);
+    height:var(--starmus-mic-size);
+    min-width:var(--starmus-mic-size);
+    min-height:var(--starmus-mic-size);
+    border-radius:50%;
+    border:none;
+    background-color:var(--sparxstar-accent-hex);
+    color:#fff;
+    font-family:var(--starmus-font);
+    font-size:1rem;
+    font-weight:700;
+    cursor:pointer;
+    margin:12px auto;
+    box-shadow:var(--sparxstar-shd);
+    transition:transform var(--starmus-transition), box-shadow var(--starmus-transition);
+    -webkit-tap-highlight-color:transparent;
 }
 
-.starmus-recorder-form [data-starmus-action="record"]:active,
-.starmus-recorder-form [data-starmus-action="setup-mic"]:active {
-    transform: scale(0.94);
-    box-shadow: var(--sparxstar-shd-onclick);
+.starmus-recorder-form [data-starmus-action=record]:active,.starmus-recorder-form [data-starmus-action=setup-mic]:active{
+    transform:scale(.94);
+    box-shadow:var(--sparxstar-shd-onclick);
 }
-
-/* Recording state */
-.starmus-recorder-form [data-starmus-action="record"].is-recording {
-    background-color: var(--sparxstar-danger);
+.starmus-recorder-form [data-starmus-action=record].is-recording{
+    background-color:var(--sparxstar-danger);
 }
-
-/* Paused state */
-.starmus-recorder-form [data-starmus-action="record"].is-paused {
-    background-color: var(--sparxstar-warning);
+.starmus-recorder-form [data-starmus-action=record].is-paused{
+    background-color:var(--sparxstar-warning);
 }
-
-/* Pulsing ring during recording — transform+opacity only, no layout triggers */
-@media (prefers-reduced-motion: no-preference) {
-    .starmus-recorder-form [data-starmus-action="record"].is-recording::after {
-        content: '';
-        position: absolute;
-        inset: -6px;
-        border-radius: 50%;
-        border: 3px solid var(--sparxstar-danger);
-        animation: starmus-ring-pulse 1.5s ease-out infinite;
-        pointer-events: none;
+@media (prefers-reduced-motion:no-preference){
+    .starmus-recorder-form [data-starmus-action=record].is-recording:after{
+        content:"";
+        position:absolute;
+        inset:-6px;
+        border-radius:50%;
+        border:3px solid var(--sparxstar-danger);
+        animation:starmus-ring-pulse 1.5s ease-out infinite;
+        pointer-events:none;
     }
 
-    @keyframes starmus-ring-pulse {
-        0% { transform: scale(1); opacity: 0.7; }
-        100% { transform: scale(1.5); opacity: 0; }
+    @keyframes starmus-ring-pulse{
+        0%{ transform:scale(1); opacity:.7; }
+        to{ transform:scale(1.5); opacity:0; }
     }
 }
 
-/* COMPONENT 4 — Recording controls (pause / stop / mark) */
-
-.starmus-recorder-form .starmus-controls {
-    display: flex;
-    flex-direction: row;
-    gap: 8px;
-    width: 100%;
+.starmus-recorder-form .starmus-controls{
+    display:flex;
+    flex-direction:row;
+    gap:8px;
+    width:100%;
 }
 
-.starmus-recorder-form .starmus-controls .starmus-btn,
-.starmus-recorder-form [data-starmus-action="pause"],
-.starmus-recorder-form [data-starmus-action="resume"],
-.starmus-recorder-form [data-starmus-action="stop"] {
-    flex: 1 1 0;
-    min-height: 48px;
-    padding: 10px 8px;
-    border: 1px solid var(--sparxstar-border-color);
-    border-radius: var(--starmus-radius);
-    background-color: var(--sparxstar-inner-bg);
-    color: var(--sparxstar-text);
-    font-family: var(--starmus-font);
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    -webkit-tap-highlight-color: transparent;
-    transition: transform var(--starmus-transition);
+.starmus-recorder-form .starmus-controls .starmus-btn,.starmus-recorder-form [data-starmus-action=pause],.starmus-recorder-form [data-starmus-action=resume],.starmus-recorder-form [data-starmus-action=stop]{
+    flex:1 1 0;
+    min-height:48px;
+    padding:10px 8px;
+    border:1px solid var(--sparxstar-border-color);
+    border-radius:var(--starmus-radius);
+    background-color:var(--sparxstar-inner-bg);
+    color:var(--sparxstar-text);
+    font-family:var(--starmus-font);
+    font-size:.9rem;
+    font-weight:600;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    -webkit-tap-highlight-color:transparent;
+    transition:transform var(--starmus-transition);
 }
 
-.starmus-recorder-form [data-starmus-action="pause"]:active,
-.starmus-recorder-form [data-starmus-action="resume"]:active,
-.starmus-recorder-form [data-starmus-action="stop"]:active {
-    transform: scale(0.96);
+.starmus-recorder-form [data-starmus-action=pause]:active,.starmus-recorder-form [data-starmus-action=resume]:active,.starmus-recorder-form [data-starmus-action=stop]:active{
+    transform:scale(.96);
 }
 
-.starmus-recorder-form [data-starmus-action="stop"] {
-    background-color: var(--sparxstar-danger);
-    color: #fff;
-    border-color: var(--sparxstar-danger);
+.starmus-recorder-form [data-starmus-action=stop]{
+    background-color:var(--sparxstar-danger);
+    color:#fff;
+    border-color:var(--sparxstar-danger);
 }
 
-/* COMPONENT 5 — Timer display */
-
-.starmus-recorder-form [data-starmus-timer],
-.starmus-recorder-form .starmus-timer {
-    font-family: var(--starmus-font-mono);
-    font-size: 1.5rem;
-    font-weight: 700;
-    text-align: center;
-    padding: 8px;
-    letter-spacing: 0.06em;
-    color: var(--sparxstar-text);
-    background-color: var(--sparxstar-inner-bg);
-    border-radius: var(--starmus-radius);
-    border: 1px solid var(--sparxstar-border-color);
-    min-height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+.starmus-recorder-form .starmus-timer,.starmus-recorder-form [data-starmus-timer]{
+    font-family:var(--starmus-font-mono);
+    font-size:1.5rem;
+    font-weight:700;
+    text-align:center;
+    padding:8px;
+    letter-spacing:.06em;
+    color:var(--sparxstar-text);
+    background-color:var(--sparxstar-inner-bg);
+    border-radius:var(--starmus-radius);
+    border:1px solid var(--sparxstar-border-color);
+    min-height:48px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
 }
 
-.starmus-recorder-form .starmus-timer-elapsed {
-    display: inline;
+.starmus-recorder-form .starmus-timer-elapsed{
+    display:inline;
 }
 
-/* COMPONENT 6 — Amplitude indicator (CSS-only level meter) */
-
-.starmus-recorder-form [data-starmus-volume-meter],
-.starmus-recorder-form .starmus-meter {
-    width: 100%;
-    height: 12px;
-    background-color: var(--sparxstar-border-color);
-    border-radius: 6px;
-    overflow: hidden;
-    position: relative;
+.starmus-recorder-form .starmus-meter,.starmus-recorder-form [data-starmus-volume-meter]{
+    width:100%;
+    height:12px;
+    background-color:var(--sparxstar-border-color);
+    border-radius:6px;
+    overflow:hidden;
+    position:relative;
 }
 
-.starmus-recorder-form [data-starmus-volume-meter]::after,
-.starmus-recorder-form .starmus-meter::after {
-    content: '';
-    display: block;
-    height: 100%;
-    width: var(--starmus-audio-level);
-    background: linear-gradient(
+.starmus-recorder-form .starmus-meter:after,.starmus-recorder-form [data-starmus-volume-meter]:after{
+    content:"";
+    display:block;
+    height:100%;
+    width:var(--starmus-audio-level);
+    background:linear-gradient(
         90deg,
-        var(--sparxstar-success) 0%,
+        var(--sparxstar-success) 0,
         var(--sparxstar-success) 60%,
         var(--sparxstar-warning) 80%,
         var(--sparxstar-danger) 100%
     );
-    border-radius: 6px;
-    transition: width 0.08s linear;
+    border-radius:6px;
+    transition:width .08s linear;
+}
+.starmus-recorder-form .starmus-meter--good:after{
+    background:var(--sparxstar-success);
 }
 
-/* Audio quality states — driven by JS class toggle */
-.starmus-recorder-form .starmus-meter--good::after {
-    background: var(--sparxstar-success);
+.starmus-recorder-form .starmus-meter--warning:after{
+    background:var(--sparxstar-warning);
 }
 
-.starmus-recorder-form .starmus-meter--warning::after {
-    background: var(--sparxstar-warning);
+.starmus-recorder-form .starmus-meter--clipping:after{
+    background:var(--sparxstar-danger);
+}
+.starmus-recorder-form [data-starmus-duration-progress]{
+    width:100%;
+    height:4px;
+    background-color:var(--sparxstar-border-color);
+    border-radius:2px;
+    overflow:hidden;
 }
 
-.starmus-recorder-form .starmus-meter--clipping::after {
-    background: var(--sparxstar-danger);
+.starmus-recorder-form [data-starmus-duration-progress]:after{
+    content:"";
+    display:block;
+    height:100%;
+    width:var(--starmus-recording-progress);
+    background-color:var(--sparxstar-accent-hex);
+    border-radius:2px;
+    transition:width .5s linear;
 }
 
-/* Duration progress */
-.starmus-recorder-form [data-starmus-duration-progress] {
-    width: 100%;
-    height: 4px;
-    background-color: var(--sparxstar-border-color);
-    border-radius: 2px;
-    overflow: hidden;
+.starmus-recorder-form .starmus-transcript,.starmus-recorder-form [data-starmus-transcript]{
+    display:none;
+    flex-direction:column;
+    gap:4px;
+    max-height:40vh;
+    overflow-y:auto;
+    background-color:var(--sparxstar-inner-bg);
+    border:1px solid var(--sparxstar-border-color);
+    border-radius:var(--starmus-radius);
+    padding:12px;
+    font-size:.875rem;
+    line-height:1.6;
+    color:var(--sparxstar-text);
+    scroll-behavior:smooth;
 }
 
-.starmus-recorder-form [data-starmus-duration-progress]::after {
-    content: '';
-    display: block;
-    height: 100%;
-    width: var(--starmus-recording-progress);
-    background-color: var(--sparxstar-accent-hex);
-    border-radius: 2px;
-    transition: width 0.5s linear;
+.starmus-recorder-form .starmus-transcript.is-active{
+    display:flex;
 }
 
-/* ============================================================
-   10. COMPONENT 7 — Live transcript panel
-    Hidden when SpeechRecognition unavailable (JS sets display:none).
-    Graceful degradation — element stays in DOM.
-   ============================================================ */
-
-.starmus-recorder-form [data-starmus-transcript],
-.starmus-recorder-form .starmus-transcript {
-    display: none; /* Default: hidden until JS confirms availability */
-    flex-direction: column;
-    gap: 4px;
-    max-height: 40vh;
-    overflow-y: auto;
-    background-color: var(--sparxstar-inner-bg);
-    border: 1px solid var(--sparxstar-border-color);
-    border-radius: var(--starmus-radius);
-    padding: 12px;
-    font-size: 0.875rem;
-    line-height: 1.6;
-    color: var(--sparxstar-text);
-    /* Smooth scroll on supported devices */
-    scroll-behavior: smooth;
+.starmus-recorder-form .starmus-transcript__line{
+    display:flex;
+    gap:8px;
+    align-items:baseline;
 }
 
-.starmus-recorder-form .starmus-transcript.is-active {
-    display: flex;
+.starmus-recorder-form .starmus-transcript__timestamp{
+    font-family:var(--starmus-font-mono);
+    font-size:.75rem;
+    color:var(--sparxstar-border-color);
+    flex-shrink:0;
+    min-width:48px;
 }
 
-.starmus-recorder-form .starmus-transcript__line {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
+.starmus-recorder-form .starmus-quality{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:.875rem;
+    font-weight:600;
+    padding:6px 0;
 }
 
-.starmus-recorder-form .starmus-transcript__timestamp {
-    font-family: var(--starmus-font-mono);
-    font-size: 0.75rem;
-    color: var(--sparxstar-border-color);
-    flex-shrink: 0;
-    min-width: 48px;
+.starmus-recorder-form .starmus-quality__dot{
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    flex-shrink:0;
+    background-color:var(--sparxstar-border-color);
 }
 
-/* COMPONENT 8 — Audio quality indicator (text + coloured dot) */
-
-.starmus-recorder-form .starmus-quality {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.875rem;
-    font-weight: 600;
-    padding: 6px 0;
+.starmus-recorder-form .starmus-quality--good .starmus-quality__dot{
+    background-color:var(--sparxstar-success);
 }
 
-.starmus-recorder-form .starmus-quality__dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    /* Colour set by modifier */
-    background-color: var(--sparxstar-border-color);
+.starmus-recorder-form .starmus-quality--warning .starmus-quality__dot{
+    background-color:var(--sparxstar-warning);
 }
 
-.starmus-recorder-form .starmus-quality--good .starmus-quality__dot {
-    background-color: var(--sparxstar-success);
+.starmus-recorder-form .starmus-quality--poor .starmus-quality__dot{
+    background-color:var(--sparxstar-danger);
 }
 
-.starmus-recorder-form .starmus-quality--warning .starmus-quality__dot {
-    background-color: var(--sparxstar-warning);
+.starmus-recorder-form .starmus-progress{
+    display:none;
+    flex-direction:column;
+    gap:6px;
 }
 
-.starmus-recorder-form .starmus-quality--poor .starmus-quality__dot {
-    background-color: var(--sparxstar-danger);
+.starmus-recorder-form .starmus-progress.is-active{
+    display:flex;
 }
 
-/* COMPONENT 9 — Submission progress */
-
-.starmus-recorder-form .starmus-progress {
-    display: none;
-    flex-direction: column;
-    gap: 6px;
+.starmus-recorder-form .starmus-progress__bar{
+    width:100%;
+    height:8px;
+    background-color:var(--sparxstar-border-color);
+    border-radius:4px;
+    overflow:hidden;
 }
 
-.starmus-recorder-form .starmus-progress.is-active {
-    display: flex;
+.starmus-recorder-form .starmus-progress__fill{
+    height:100%;
+    width:0;
+    background-color:var(--sparxstar-accent-hex);
+    border-radius:4px;
+    transition:width .3s ease;
 }
 
-.starmus-recorder-form .starmus-progress__bar {
-    width: 100%;
-    height: 8px;
-    background-color: var(--sparxstar-border-color);
-    border-radius: 4px;
-    overflow: hidden;
+.starmus-recorder-form .starmus-progress__label{
+    font-size:.8125rem;
+    color:var(--sparxstar-text);
+    text-align:center;
 }
 
-.starmus-recorder-form .starmus-progress__fill {
-    height: 100%;
-    width: 0%;
-    background-color: var(--sparxstar-accent-hex);
-    border-radius: 4px;
-    transition: width 0.3s ease;
+.starmus-recorder-form .starmus-offline-banner,.starmus-recorder-form [data-starmus-offline-banner]{
+    display:none;
+    background-color:var(--sparxstar-warning);
+    color:#1a1a1a;
+    border-radius:var(--starmus-radius);
+    padding:12px var(--starmus-spacing);
+    font-size:.875rem;
+    font-weight:600;
+    line-height:1.5;
+    position:relative;
+    order:-1;
 }
 
-.starmus-recorder-form .starmus-progress__label {
-    font-size: 0.8125rem;
-    color: var(--sparxstar-text);
-    text-align: center;
+.starmus-recorder-form .starmus-offline-banner.is-visible,.starmus-recorder-form [data-starmus-offline-banner].is-visible{
+    display:block;
 }
 
-/* COMPONENT 10 — Offline indicator banner */
-
-.starmus-recorder-form [data-starmus-offline-banner],
-.starmus-recorder-form .starmus-offline-banner {
-    display: none;
-    background-color: var(--sparxstar-warning);
-    color: #1a1a1a;
-    border-radius: var(--starmus-radius);
-    padding: 12px var(--starmus-spacing);
-    font-size: 0.875rem;
-    font-weight: 600;
-    line-height: 1.5;
-    position: relative;
-    /* Banner is always above recorder content */
-    order: -1;
+.starmus-recorder-form .starmus-offline-banner__dismiss{
+    background:none;
+    border:none;
+    font-size:1.25rem;
+    line-height:1;
+    padding:4px;
+    min-width:32px;
+    min-height:32px;
+    position:absolute;
+    inset-block-start:8px;
+    inset-inline-end:8px;
+    color:#1a1a1a;
 }
 
-.starmus-recorder-form [data-starmus-offline-banner].is-visible,
-.starmus-recorder-form .starmus-offline-banner.is-visible {
-    display: block;
+.starmus-recorder-form .starmus-btn,.starmus-recorder-form .starmus-offline-banner__dismiss{
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    -webkit-tap-highlight-color:transparent;
 }
 
-.starmus-recorder-form .starmus-offline-banner__dismiss {
-    background: none;
-    border: none;
-    font-size: 1.25rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px;
-    min-width: 32px;
-    min-height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    position: absolute;
-    inset-block-start: 8px;
-    inset-inline-end: 8px;
-    color: #1a1a1a;
-    -webkit-tap-highlight-color: transparent;
+.starmus-recorder-form .starmus-btn{
+    gap:6px;
+    min-height:48px;
+    padding:10px 20px;
+    border-radius:var(--starmus-radius);
+    border:1px solid transparent;
+    font-family:var(--starmus-font);
+    font-size:.9375rem;
+    font-weight:600;
+    text-align:center;
+    transition:transform var(--starmus-transition);
+    width:100%;
 }
 
-/* GENERAL BUTTON SYSTEM */
-
-.starmus-recorder-form .starmus-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 48px;
-    padding: 10px 20px;
-    border-radius: var(--starmus-radius);
-    border: 1px solid transparent;
-    font-family: var(--starmus-font);
-    font-size: 0.9375rem;
-    font-weight: 600;
-    cursor: pointer;
-    text-align: center;
-    -webkit-tap-highlight-color: transparent;
-    transition: transform var(--starmus-transition);
-    width: 100%;
+.starmus-recorder-form .starmus-btn:active{
+    transform:scale(.96);
 }
 
-.starmus-recorder-form .starmus-btn:active {
-    transform: scale(0.96);
+.starmus-recorder-form .starmus-btn:disabled,.starmus-recorder-form .starmus-btn[disabled]{
+    opacity:.5;
+    cursor:not-allowed;
+    pointer-events:none;
+}
+.starmus-recorder-form .starmus-btn--primary,.starmus-recorder-form [data-starmus-action=submit]{
+    background-color:var(--sparxstar-accent-hex);
+    color:#fff;
+    border-color:var(--sparxstar-accent-hex);
+    min-height:48px;
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:var(--starmus-font);
+    font-size:.9375rem;
+    font-weight:700;
+    cursor:pointer;
+    border-radius:var(--starmus-radius);
+    padding:12px 20px;
+    -webkit-tap-highlight-color:transparent;
+    transition:transform var(--starmus-transition);
 }
 
-.starmus-recorder-form .starmus-btn:disabled,
-.starmus-recorder-form .starmus-btn[disabled] {
-    opacity: 0.5;
-    cursor: not-allowed;
-    pointer-events: none;
+.starmus-recorder-form [data-starmus-action=submit]:active{
+    transform:scale(.97);
+}
+.starmus-recorder-form [data-starmus-action=play],.starmus-recorder-form [data-starmus-action=reset]{
+    flex:1 1 0;
+    min-height:48px;
+    background-color:var(--sparxstar-inner-bg);
+    color:var(--sparxstar-text);
+    border:1px solid var(--sparxstar-border-color);
+    border-radius:var(--starmus-radius);
+    font-family:var(--starmus-font);
+    font-weight:600;
+    font-size:.9rem;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:6px;
+    padding:10px 8px;
+    -webkit-tap-highlight-color:transparent;
+    transition:transform var(--starmus-transition);
 }
 
-/* Primary */
-.starmus-recorder-form .starmus-btn--primary,
-.starmus-recorder-form [data-starmus-action="submit"] {
-    background-color: var(--sparxstar-accent-hex);
-    color: #fff;
-    border-color: var(--sparxstar-accent-hex);
-    min-height: 48px;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--starmus-font);
-    font-size: 0.9375rem;
-    font-weight: 700;
-    cursor: pointer;
-    border-radius: var(--starmus-radius);
-    padding: 12px 20px;
-    -webkit-tap-highlight-color: transparent;
-    transition: transform var(--starmus-transition);
+.starmus-recorder-form [data-starmus-action=play]:active,.starmus-recorder-form [data-starmus-action=reset]:active{
+    transform:scale(.96);
+}
+.starmus-recorder-form .starmus-review-controls{
+    display:flex;
+    gap:8px;
+    width:100%;
 }
 
-.starmus-recorder-form [data-starmus-action="submit"]:active {
-    transform: scale(0.97);
+.starmus-recorder-form input[type=email],.starmus-recorder-form input[type=text],.starmus-recorder-form select,.starmus-recorder-form textarea{
+    width:100%;
+    min-height:48px;
+    padding:10px 12px;
+    border:1px solid var(--sparxstar-border-color);
+    border-radius:var(--starmus-radius);
+    background-color:var(--sparxstar-theme-base);
+    color:var(--sparxstar-text);
+    font-family:var(--starmus-font);
+    font-size:1rem;
+    line-height:1.5;
 }
 
-/* Secondary / review buttons */
-.starmus-recorder-form [data-starmus-action="play"],
-.starmus-recorder-form [data-starmus-action="reset"] {
-    flex: 1 1 0;
-    min-height: 48px;
-    background-color: var(--sparxstar-inner-bg);
-    color: var(--sparxstar-text);
-    border: 1px solid var(--sparxstar-border-color);
-    border-radius: var(--starmus-radius);
-    font-family: var(--starmus-font);
-    font-weight: 600;
-    font-size: 0.9rem;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 10px 8px;
-    -webkit-tap-highlight-color: transparent;
-    transition: transform var(--starmus-transition);
+.starmus-recorder-form input[type=checkbox],.starmus-recorder-form input[type=radio]{
+    width:20px;
+    height:20px;
+    cursor:pointer;
 }
 
-.starmus-recorder-form [data-starmus-action="play"]:active,
-.starmus-recorder-form [data-starmus-action="reset"]:active {
-    transform: scale(0.96);
+.starmus-recorder-form label{
+    display:block;
+    font-size:.9rem;
+    font-weight:600;
+    margin-block-end:4px;
+    color:var(--sparxstar-text);
 }
 
-/* Review controls row */
-.starmus-recorder-form .starmus-review-controls {
-    display: flex;
-    gap: 8px;
-    width: 100%;
+.starmus-recorder-form [data-starmus-message-box]{
+    display:none;
+    padding:10px var(--starmus-spacing);
+    border-radius:var(--starmus-radius);
+    background-color:rgba(214,54,56,.1);
+    color:var(--sparxstar-danger);
+    border:1px solid var(--sparxstar-danger);
+    font-size:.875rem;
+    line-height:1.5;
 }
 
-/* FORM INPUTS */
-
-.starmus-recorder-form input[type="text"],
-.starmus-recorder-form input[type="email"],
-.starmus-recorder-form select,
-.starmus-recorder-form textarea {
-    width: 100%;
-    min-height: 48px;
-    padding: 10px 12px;
-    border: 1px solid var(--sparxstar-border-color);
-    border-radius: var(--starmus-radius);
-    background-color: var(--sparxstar-theme-base);
-    color: var(--sparxstar-text);
-    font-family: var(--starmus-font);
-    font-size: 1rem;
-    line-height: 1.5;
-}
-
-.starmus-recorder-form input[type="checkbox"],
-.starmus-recorder-form input[type="radio"] {
-    width: 20px;
-    height: 20px;
-    cursor: pointer;
-}
-
-.starmus-recorder-form label {
-    display: block;
-    font-size: 0.9rem;
-    font-weight: 600;
-    margin-block-end: 4px;
-    color: var(--sparxstar-text);
-}
-
-/* MESSAGE / ERROR BOX */
-
-.starmus-recorder-form [data-starmus-message-box] {
-    display: none;
-    padding: 10px var(--starmus-spacing);
-    border-radius: var(--starmus-radius);
-    background-color: rgb(214 54 56 / 10%);
-    color: var(--sparxstar-danger);
-    border: 1px solid var(--sparxstar-danger);
-    font-size: 0.875rem;
-    line-height: 1.5;
-}
-
-/* BACKDROP-FILTER — gated for Tier C */
-
-@supports (backdrop-filter: blur(1px)) {
-    .starmus-recorder-form .starmus-card--frosted {
-        backdrop-filter: blur(8px);
-        background-color: rgb(255 255 255 / 70%);
+@supports (backdrop-filter:blur(1px)){
+    .starmus-recorder-form .starmus-card--frosted{
+        backdrop-filter:blur(8px);
+        background-color:hsla(0,0%,100%,.7);
     }
 }
 
-/* PERFORMANCE — reduced motion */
-
-@media (prefers-reduced-motion: reduce) {
-    .starmus-recorder-form *,
-    .starmus-recorder-form *::before,
-    .starmus-recorder-form *::after {
-        animation: none !important;
-        transition: none !important;
+@media (prefers-reduced-motion:reduce){
+    .starmus-recorder-form *,.starmus-recorder-form :after,.starmus-recorder-form :before{
+        animation:none !important;
+        transition:none !important;
     }
 }
 
-/* ============================================================
-   19. LOW-POWER DEVICE — strip shadows & gradients
-       Targets screens ≤ 1.5 dppx (non-Retina low-end Android)
-   ============================================================ */
-
-@media (resolution <= 1.5dppx) {
-    .starmus-recorder-form .starmus-mic-btn,
-    .starmus-recorder-form [data-starmus-action="record"],
-    .starmus-recorder-form [data-starmus-action="setup-mic"],
-    .starmus-recorder-form [data-starmus-action="submit"],
-    .starmus-recorder-form .starmus-card,
-    .starmus-recorder-form .starmus-audio-form {
-        box-shadow: none;
+@media (resolution <= 1.5dppx){
+    .starmus-recorder-form .starmus-audio-form,.starmus-recorder-form .starmus-card,.starmus-recorder-form .starmus-mic-btn,.starmus-recorder-form [data-starmus-action=record],.starmus-recorder-form [data-starmus-action=setup-mic],.starmus-recorder-form [data-starmus-action=submit]{
+        box-shadow:none;
     }
 }
 
-/* BREAKPOINT — allow wider layout only above 768px */
-
-@media (width >= 768px) {
-    .starmus-recorder-form {
-        max-width: 640px;
-        margin-inline: auto;
+@media (width >= 768px){
+    .starmus-recorder-form{
+        max-width:640px;
+        margin-inline:auto;
     }
 }

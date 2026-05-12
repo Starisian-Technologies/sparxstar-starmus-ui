@@ -1,0 +1,13 @@
+# Include everything except for node_modules and build artifacts
+dist/
+node_modules/
+
+# Exclude documentation, tools, and test artifacts
+playwright-report/
+test-results/
+tests/
+
+# Do NOT exclude src/
+
+# Prevent recursive packaging
+*.tgz

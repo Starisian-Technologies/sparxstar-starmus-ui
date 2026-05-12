@@ -1,0 +1,96 @@
+{
+    "name": "sparxstar-starmus-ui",
+    "version": "1.0.0",
+    "description": "Standalone vanilla JavaScript and CSS audio capture engine: record, TUS upload, and offline queue for the SPARXSTAR platform.",
+    "type": "module",
+    "main": "dist/starmus-audio.js",
+    "style": "dist/starmus-audio.css",
+    "exports": {
+        ".": {
+            "import": "./dist/starmus-audio.js"
+        },
+        "./css": "./dist/starmus-audio.css"
+    },
+    "scripts": {
+        "lint": "pnpm run lint:js && pnpm run lint:css && pnpm run lint:md",
+        "lint:js": "eslint \"src/js/**/*.js\"",
+        "lint:js:fix": "eslint \"src/js/**/*.js\" --fix",
+        "lint:css": "stylelint \"src/**/*.css\"",
+        "lint:css:fix": "stylelint \"src/**/*.css\" --fix",
+        "lint:md": "markdownlint \"*.md\" --ignore node_modules",
+        "lint:md:fix": "markdownlint \"*.md\" --fix --ignore node_modules",
+        "security:audit": "pnpm audit --audit-level=moderate",
+        "format": "prettier --write \"src/**/*.{js,css,json}\"",
+        "fix": "pnpm run lint:js:fix && pnpm run lint:css:fix && pnpm run format",
+        "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true });\"",
+        "build:css": "postcss src/starmus-audio.css -o dist/starmus-audio.css --no-map",
+        "build:js": "rollup -c roll-up.config.mjs",
+        "build:hash": "node scripts/build-starmus.cjs dist/starmus-audio.css dist/starmus-audio.js",
+        "build": "pnpm run clean && mkdir -p dist && pnpm run build:css && pnpm run build:js && pnpm run build:hash",
+        "prebuild": "node scripts/validate-build.cjs",
+        "test:e2e": "playwright test",
+        "test:a11y": "playwright test --grep='WCAG'",
+        "test": "pnpm run test:e2e",
+        "size-check": "size-limit",
+        "validate": "node scripts/validate-build.cjs"
+    },
+    "size-limit": [
+        {
+            "path": "dist/starmus-audio.js",
+            "limit": "130 KB"
+        },
+        {
+            "path": "dist/starmus-audio.css",
+            "limit": "20 KB"
+        }
+    ],
+    "author": "Starisian Technologies (Max Barrett)",
+    "homepage": "https://starisian.com",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Starisian-Technologies/sparxstar-starmus-ui.git"
+    },
+    "keywords": [
+        "audio",
+        "recorder",
+        "starmus",
+        "MediaRecorder",
+        "tus",
+        "offline",
+        "africa",
+        "webm",
+        "opus"
+    ],
+    "license": "SEE LICENSE IN LICENSE.md",
+    "engines": {
+        "node": ">=20"
+    },
+    "packageManager": "pnpm@10.29.2",
+    "devDependencies": {
+        "@babel/core": "^7.29.0",
+        "@babel/preset-env": "^7.29.5",
+        "@eslint/js": "latest",
+        "@playwright/test": "latest",
+        "@rollup/plugin-babel": "^7.0.0",
+        "@rollup/plugin-commonjs": "^29.0.2",
+        "@rollup/plugin-node-resolve": "^16.0.3",
+        "@rollup/plugin-terser": "^1.0.0",
+        "@size-limit/file": "latest",
+        "axe-playwright": "latest",
+        "cssnano": "latest",
+        "eslint": "latest",
+        "globals": "latest",
+        "markdownlint-cli": "latest",
+        "postcss": "latest",
+        "postcss-cli": "latest",
+        "prettier": "latest",
+        "rollup": "^4.60.3",
+        "size-limit": "latest",
+        "stylelint": "latest",
+        "stylelint-config-standard": "latest"
+    },
+    "dependencies": {
+        "core-js": "^3.49.0",
+        "tus-js-client": "latest"
+    }
+}

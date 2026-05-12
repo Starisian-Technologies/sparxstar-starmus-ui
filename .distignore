@@ -1,0 +1,38 @@
+# Development and testing files
+tests/
+test-results/
+playwright-report/
+
+# Build artifacts and dev dependencies
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+
+# Development configs
+postcss.config.cjs
+eslint.config.js
+stylelint.config.js
+playwright.config.js
+roll-up.config.mjs
+scripts/
+.devcontainer/
+.editorconfig
+.eslintrc.json
+.prettierignore
+prettierrc.json
+.markdownlint.json
+.commitlintrc.js
+.gitignore
+.gitattributes
+.distignore
+.npmignore
+
+# Source control
+.git/
+
+# Documentation extras
+AGENTS.md
+CODE-OWNERSHIP.md
+SECURITY.md
+AUDIO-TIER-STANDARDS.md
+LICENSE-HEADER.md

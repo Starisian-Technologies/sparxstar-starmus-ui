@@ -7,9 +7,12 @@ console.log("🔍 Validating build configuration...\n");
 
 const requiredFiles = [
     "src/starmus-audio.css",
+    "src/starmus-prosody-engine.css",
+    "src/css/consent/starmus-consent.css",
     "src/js/starmus-hooks.js",
     "src/js/starmus-state-store.js",
     "src/js/starmus-sparxstar-integration.js",
+    "src/js/starmus-integrator.js",
     "src/js/starmus-enhanced-calibration.js",
     "src/js/starmus-metadata-auto.js",
     "src/js/starmus-tus.js",
@@ -18,6 +21,9 @@ const requiredFiles = [
     "src/js/starmus-ui.js",
     "src/js/starmus-core.js",
     "src/js/starmus-main.js",
+    "src/js/starmus-transcript-controller.js",
+    "src/js/prosody/starmus-prosody-engine.js",
+    "src/js/appmode/starmus-audio.js",
 ];
 
 let ok = true;
@@ -77,8 +83,6 @@ if (fs.existsSync(mainFile)) {
         "peaks.js",
         "starmus-audio-editor",
         "starmus-cue-events",
-        "starmus-prosody",
-        "starmus-transcript-controller",
     ];
     for (const exc of excluded) {
         if (mainContent.includes(exc)) {

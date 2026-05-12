@@ -9,7 +9,9 @@
         ".": {
             "import": "./dist/starmus-audio.js"
         },
-        "./css": "./dist/starmus-audio.css"
+        "./css": "./dist/starmus-audio.css",
+        "./css/prosody": "./dist/starmus-prosody-engine.css",
+        "./css/consent": "./dist/starmus-consent.css"
     },
     "scripts": {
         "lint": "pnpm run lint:js && pnpm run lint:css && pnpm run lint:md",
@@ -23,7 +25,7 @@
         "format": "prettier --write \"src/**/*.{js,css,json}\"",
         "fix": "pnpm run lint:js:fix && pnpm run lint:css:fix && pnpm run format",
         "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true });\"",
-        "build:css": "postcss src/starmus-audio.css -o dist/starmus-audio.css --no-map",
+        "build:css": "postcss src/starmus-audio.css -o dist/starmus-audio.css --no-map && postcss src/starmus-prosody-engine.css -o dist/starmus-prosody-engine.css --no-map && postcss src/css/consent/starmus-consent.css -o dist/starmus-consent.css --no-map",
         "build:js": "rollup -c roll-up.config.mjs",
         "build:hash": "node scripts/build-starmus.cjs dist/starmus-audio.css dist/starmus-audio.js",
         "build": "pnpm run clean && mkdir -p dist && pnpm run build:css && pnpm run build:js && pnpm run build:hash",

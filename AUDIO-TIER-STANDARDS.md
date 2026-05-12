@@ -19,8 +19,16 @@ The tiers define which recorder components and enhancements are available. A sum
 
 ### Dynamic Behavior Rules
 
-- **No mid‑session tier change**: Once the tier is assigned at session start, it remains constant throughout the session.
-- **No computation in Starmus**: Starmus uses the provided `env.tier` from Sparxstar; fallback detection is used only when environment data is missing.
+- **No mid‑session tier change**: Once the tier is assigned at session start, it remains constant
+  throughout the session; the system warns rather than changing tier when network quality degrades.
+  Battery-saver mode or iOS audio freeze also do not demote the tier.
+- **No computation in Starmus**: Starmus uses the provided `env.tier` from Sparxstar; fallback
+  detection is used only when environment data is missing. The `detectTier` fallback returns **'C'**
+  when MediaRecorder or `getUserMedia` is unsupported, returns **'B'** if no `AudioContext` is
+  available, and defaults to **'A'** otherwise.
+- **Fallback default**: `starmus-sparxstar-integration.js` returns `tier: 'C'` and an upload chunk
+  size of 524 288 bytes when no Sparxstar optimizer is present. This forces all devices into Tier C
+  unless capability detection is implemented.
 
 Audio Settings per Tier
 -----------------------

@@ -30,8 +30,6 @@ sparxstar-starmus-ui/
 ├─ dist/            ← compiled output only
 ├─ tests/
 │   └─ e2e/
-├─ docs/
-│   └─ reference/   ← PHP reference files (data contracts, template specs)
 ├─ scripts/
 └─ *.md, *.json, *.mjs, *.cjs, *.js  ← config at root
 ```
@@ -76,7 +74,7 @@ sparxstar-starmus-ui/
 
 - WCAG 2.1 AA conformance; live regions for status updates.
 - No colour-only meaning; maintain keyboard tab order.
-- All user-visible strings localised via the consuming theme/plugin (`__()` in PHP).
+- All user-visible strings localised via the consuming host application.
 - JS never hard-codes UI strings — they come from `window.STARMUS_BOOTSTRAP.i18n` if provided.
 
 ---
@@ -132,7 +130,7 @@ UI never uploads; Kernel never touches DOM.
   - JS bundle ≤ 150 KB gzipped (130 KB enforced by size-limit)
   - `starmus-audio.css` ≤ 20 KB unminified
 - System fonts only (`Noto Sans`, `system-ui`); no font imports in the package.
-- PHPStan ≥ level 5 (consuming plugin); ESLint + Stylelint for this package.
+- ESLint + Stylelint are required for this package.
 
 ---
 
@@ -149,8 +147,6 @@ UI never uploads; Kernel never touches DOM.
 
 - `ARCHITECTURE.md` — module map and bootstrap contract.
 - `AUDIO-TIER-STANDARDS.md` — tier definitions, audio settings per tier.
-- `docs/reference/` — PHP templates and frontend files from `sparxstar-starmus-audio`
-  (data contract reference, not executed in this package).
 - `CHANGELOG.md` — Keep-a-Changelog format.
 
 ---

@@ -11628,7 +11628,7 @@
 	  var defaults = {
 	    chunkSize: settings.uploadChunkSize || 512 * 1024,
 	    // max 512 KB per AGENTS.md
-	    retryDelays: [0, 5000, 10000],
+	    retryDelays: [0, 2000, 4000],
 	    removeFingerprintOnSuccess: true,
 	    maxChunkRetries: 3,
 	    requestTimeoutMs: 5000,
@@ -11717,6 +11717,7 @@
 	      onProgress,
 	      cfg,
 	      nonce,
+	      requestTimeoutMs,
 	      endpoint,
 	      fields,
 	      fd,
@@ -11736,6 +11737,7 @@
 	          onProgress = _args2.length > 5 ? _args2[5] : undefined;
 	          cfg = getConfig();
 	          nonce = cfg.nonce || "";
+	          requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
 	          endpoint = ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload) || "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
 	          fields = normalizeFormFields(formFields);
 	          if (blob instanceof Blob) {
@@ -11771,8 +11773,8 @@
 	            var xhr = new XMLHttpRequest();
 	            var timeout = setTimeout(function () {
 	              xhr.abort();
-	              reject(new Error("Direct upload timed out after ".concat(cfg.requestTimeoutMs, "ms")));
-	            }, cfg.requestTimeoutMs);
+	              reject(new Error("Direct upload timed out after ".concat(requestTimeoutMs, "ms")));
+	            }, requestTimeoutMs);
 	            xhr.upload.addEventListener("progress", function (e) {
 	              if (onProgress && e.lengthComputable) {
 	                onProgress(e.loaded, e.total);
@@ -16059,6 +16061,7 @@
 	    noiseThreshold: 5,
 	    speechThreshold: 20,
 	    sampleRate: 16000,
+	    // Runtime policy: cap all tiers to 16kHz for upload compatibility
 	    fftSize: 2048,
 	    smoothing: 0.8,
 	    gainRange: [0.5, 2.0],
@@ -16070,6 +16073,7 @@
 	    noiseThreshold: 8,
 	    speechThreshold: 15,
 	    sampleRate: 16000,
+	    // Runtime policy: cap all tiers to 16kHz for upload compatibility
 	    fftSize: 1024,
 	    smoothing: 0.6,
 	    gainRange: [0.7, 1.5],

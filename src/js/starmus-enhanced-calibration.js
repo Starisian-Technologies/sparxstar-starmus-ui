@@ -33,7 +33,7 @@ const TIER_SETTINGS = {
         phases: 3,
         noiseThreshold: 5,
         speechThreshold: 20,
-        sampleRate: 16000,
+        sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz for upload compatibility
         fftSize: 2048,
         smoothing: 0.8,
         gainRange: [0.5, 2.0],
@@ -44,7 +44,7 @@ const TIER_SETTINGS = {
         phases: 2,
         noiseThreshold: 8,
         speechThreshold: 15,
-        sampleRate: 16000,
+        sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz for upload compatibility
         fftSize: 1024,
         smoothing: 0.6,
         gainRange: [0.7, 1.5],

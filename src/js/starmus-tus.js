@@ -83,7 +83,7 @@ function getConfig() {
 
     const defaults = {
         chunkSize: settings.uploadChunkSize || 512 * 1024, // max 512 KB per AGENTS.md
-        retryDelays: [0, 5000, 10000],
+        retryDelays: [0, 2000, 4000],
         removeFingerprintOnSuccess: true,
         maxChunkRetries: 3,
         requestTimeoutMs: 5000,
@@ -159,6 +159,9 @@ export async function uploadDirect(
 ) {
     const cfg = getConfig();
     const nonce = cfg.nonce || "";
+    const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
+        ? cfg.requestTimeoutMs
+        : 5000;
     const endpoint =
         cfg.endpoints?.directUpload ||
         "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
@@ -197,8 +200,8 @@ export async function uploadDirect(
         const xhr = new XMLHttpRequest();
         const timeout = setTimeout(() => {
             xhr.abort();
-            reject(new Error(`Direct upload timed out after ${cfg.requestTimeoutMs}ms`));
-        }, cfg.requestTimeoutMs);
+            reject(new Error(`Direct upload timed out after ${requestTimeoutMs}ms`));
+        }, requestTimeoutMs);
 
         xhr.upload.addEventListener("progress", (e) => {
             if (onProgress && e.lengthComputable) {

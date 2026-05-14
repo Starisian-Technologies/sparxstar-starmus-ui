@@ -3207,7 +3207,269 @@
 
 	requireEs_array_concat();
 
-	var es_object_assign = {};
+	var es_array_from = {};
+
+	var iteratorClose;
+	var hasRequiredIteratorClose;
+
+	function requireIteratorClose () {
+		if (hasRequiredIteratorClose) return iteratorClose;
+		hasRequiredIteratorClose = 1;
+		var call = requireFunctionCall();
+		var anObject = requireAnObject();
+		var getMethod = requireGetMethod();
+
+		iteratorClose = function (iterator, kind, value) {
+		  var innerResult, innerError;
+		  anObject(iterator);
+		  try {
+		    innerResult = getMethod(iterator, 'return');
+		    if (!innerResult) {
+		      if (kind === 'throw') throw value;
+		      return value;
+		    }
+		    innerResult = call(innerResult, iterator);
+		  } catch (error) {
+		    innerError = true;
+		    innerResult = error;
+		  }
+		  if (kind === 'throw') throw value;
+		  if (innerError) throw innerResult;
+		  anObject(innerResult);
+		  return value;
+		};
+		return iteratorClose;
+	}
+
+	var callWithSafeIterationClosing;
+	var hasRequiredCallWithSafeIterationClosing;
+
+	function requireCallWithSafeIterationClosing () {
+		if (hasRequiredCallWithSafeIterationClosing) return callWithSafeIterationClosing;
+		hasRequiredCallWithSafeIterationClosing = 1;
+		var anObject = requireAnObject();
+		var iteratorClose = requireIteratorClose();
+
+		// call something on iterator step with safe closing on error
+		callWithSafeIterationClosing = function (iterator, fn, value, ENTRIES) {
+		  try {
+		    return ENTRIES ? fn(anObject(value)[0], value[1]) : fn(value);
+		  } catch (error) {
+		    iteratorClose(iterator, 'throw', error);
+		  }
+		};
+		return callWithSafeIterationClosing;
+	}
+
+	var iterators;
+	var hasRequiredIterators;
+
+	function requireIterators () {
+		if (hasRequiredIterators) return iterators;
+		hasRequiredIterators = 1;
+		iterators = {};
+		return iterators;
+	}
+
+	var isArrayIteratorMethod;
+	var hasRequiredIsArrayIteratorMethod;
+
+	function requireIsArrayIteratorMethod () {
+		if (hasRequiredIsArrayIteratorMethod) return isArrayIteratorMethod;
+		hasRequiredIsArrayIteratorMethod = 1;
+		var wellKnownSymbol = requireWellKnownSymbol();
+		var Iterators = requireIterators();
+
+		var ITERATOR = wellKnownSymbol('iterator');
+		var ArrayPrototype = Array.prototype;
+
+		// check on default Array iterator
+		isArrayIteratorMethod = function (it) {
+		  return it !== undefined && (Iterators.Array === it || ArrayPrototype[ITERATOR] === it);
+		};
+		return isArrayIteratorMethod;
+	}
+
+	var getIteratorMethod;
+	var hasRequiredGetIteratorMethod;
+
+	function requireGetIteratorMethod () {
+		if (hasRequiredGetIteratorMethod) return getIteratorMethod;
+		hasRequiredGetIteratorMethod = 1;
+		var classof = requireClassof();
+		var getMethod = requireGetMethod();
+		var isNullOrUndefined = requireIsNullOrUndefined();
+		var Iterators = requireIterators();
+		var wellKnownSymbol = requireWellKnownSymbol();
+
+		var ITERATOR = wellKnownSymbol('iterator');
+
+		getIteratorMethod = function (it) {
+		  if (!isNullOrUndefined(it)) return getMethod(it, ITERATOR)
+		    || getMethod(it, '@@iterator')
+		    || Iterators[classof(it)];
+		};
+		return getIteratorMethod;
+	}
+
+	var getIterator;
+	var hasRequiredGetIterator;
+
+	function requireGetIterator () {
+		if (hasRequiredGetIterator) return getIterator;
+		hasRequiredGetIterator = 1;
+		var call = requireFunctionCall();
+		var aCallable = requireACallable();
+		var anObject = requireAnObject();
+		var tryToString = requireTryToString();
+		var getIteratorMethod = requireGetIteratorMethod();
+
+		var $TypeError = TypeError;
+
+		getIterator = function (argument, usingIterator) {
+		  var iteratorMethod = arguments.length < 2 ? getIteratorMethod(argument) : usingIterator;
+		  if (aCallable(iteratorMethod)) return anObject(call(iteratorMethod, argument));
+		  throw new $TypeError(tryToString(argument) + ' is not iterable');
+		};
+		return getIterator;
+	}
+
+	var arrayFrom;
+	var hasRequiredArrayFrom;
+
+	function requireArrayFrom () {
+		if (hasRequiredArrayFrom) return arrayFrom;
+		hasRequiredArrayFrom = 1;
+		var bind = requireFunctionBindContext();
+		var call = requireFunctionCall();
+		var toObject = requireToObject();
+		var callWithSafeIterationClosing = requireCallWithSafeIterationClosing();
+		var isArrayIteratorMethod = requireIsArrayIteratorMethod();
+		var isConstructor = requireIsConstructor();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+		var createProperty = requireCreateProperty();
+		var setArrayLength = requireArraySetLength();
+		var getIterator = requireGetIterator();
+		var getIteratorMethod = requireGetIteratorMethod();
+		var iteratorClose = requireIteratorClose();
+
+		var $Array = Array;
+
+		// `Array.from` method implementation
+		// https://tc39.es/ecma262/#sec-array.from
+		arrayFrom = function from(arrayLike /* , mapfn = undefined, thisArg = undefined */) {
+		  var IS_CONSTRUCTOR = isConstructor(this);
+		  var argumentsLength = arguments.length;
+		  var mapfn = argumentsLength > 1 ? arguments[1] : undefined;
+		  var mapping = mapfn !== undefined;
+		  if (mapping) mapfn = bind(mapfn, argumentsLength > 2 ? arguments[2] : undefined);
+		  var O = toObject(arrayLike);
+		  var iteratorMethod = getIteratorMethod(O);
+		  var index = 0;
+		  var length, result, step, iterator, next, value;
+		  // if the target is not iterable or it's an array with the default iterator - use a simple case
+		  if (iteratorMethod && !(this === $Array && isArrayIteratorMethod(iteratorMethod))) {
+		    result = IS_CONSTRUCTOR ? new this() : [];
+		    iterator = getIterator(O, iteratorMethod);
+		    next = iterator.next;
+		    for (;!(step = call(next, iterator)).done; index++) {
+		      value = mapping ? callWithSafeIterationClosing(iterator, mapfn, [step.value, index], true) : step.value;
+		      try {
+		        createProperty(result, index, value);
+		      } catch (error) {
+		        iteratorClose(iterator, 'throw', error);
+		      }
+		    }
+		  } else {
+		    length = lengthOfArrayLike(O);
+		    result = IS_CONSTRUCTOR ? new this(length) : $Array(length);
+		    for (;length > index; index++) {
+		      value = mapping ? mapfn(O[index], index) : O[index];
+		      createProperty(result, index, value);
+		    }
+		  }
+		  setArrayLength(result, index);
+		  return result;
+		};
+		return arrayFrom;
+	}
+
+	var checkCorrectnessOfIteration;
+	var hasRequiredCheckCorrectnessOfIteration;
+
+	function requireCheckCorrectnessOfIteration () {
+		if (hasRequiredCheckCorrectnessOfIteration) return checkCorrectnessOfIteration;
+		hasRequiredCheckCorrectnessOfIteration = 1;
+		var wellKnownSymbol = requireWellKnownSymbol();
+
+		var ITERATOR = wellKnownSymbol('iterator');
+		var SAFE_CLOSING = false;
+
+		try {
+		  var called = 0;
+		  var iteratorWithReturn = {
+		    next: function () {
+		      return { done: !!called++ };
+		    },
+		    'return': function () {
+		      SAFE_CLOSING = true;
+		    }
+		  };
+		  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+		  iteratorWithReturn[ITERATOR] = function () {
+		    return this;
+		  };
+		  // eslint-disable-next-line es/no-array-from, no-throw-literal -- required for testing
+		  Array.from(iteratorWithReturn, function () { throw 2; });
+		} catch (error) { /* empty */ }
+
+		checkCorrectnessOfIteration = function (exec, SKIP_CLOSING) {
+		  try {
+		    if (!SKIP_CLOSING && !SAFE_CLOSING) return false;
+		  } catch (error) { return false; } // workaround of old WebKit + `eval` bug
+		  var ITERATION_SUPPORT = false;
+		  try {
+		    var object = {};
+		    // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+		    object[ITERATOR] = function () {
+		      return {
+		        next: function () {
+		          return { done: ITERATION_SUPPORT = true };
+		        }
+		      };
+		    };
+		    exec(object);
+		  } catch (error) { /* empty */ }
+		  return ITERATION_SUPPORT;
+		};
+		return checkCorrectnessOfIteration;
+	}
+
+	var hasRequiredEs_array_from;
+
+	function requireEs_array_from () {
+		if (hasRequiredEs_array_from) return es_array_from;
+		hasRequiredEs_array_from = 1;
+		var $ = require_export();
+		var from = requireArrayFrom();
+		var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+
+		var INCORRECT_ITERATION = !checkCorrectnessOfIteration(function (iterable) {
+		  // eslint-disable-next-line es/no-array-from -- required for testing
+		  Array.from(iterable);
+		});
+
+		// `Array.from` method
+		// https://tc39.es/ecma262/#sec-array.from
+		$({ target: 'Array', stat: true, forced: INCORRECT_ITERATION }, {
+		  from: from
+		});
+		return es_array_from;
+	}
+
+	requireEs_array_from();
+
+	var objectDefineProperties = {};
 
 	var objectKeys;
 	var hasRequiredObjectKeys;
@@ -3226,6 +3488,1245 @@
 		};
 		return objectKeys;
 	}
+
+	var hasRequiredObjectDefineProperties;
+
+	function requireObjectDefineProperties () {
+		if (hasRequiredObjectDefineProperties) return objectDefineProperties;
+		hasRequiredObjectDefineProperties = 1;
+		var DESCRIPTORS = requireDescriptors();
+		var V8_PROTOTYPE_DEFINE_BUG = requireV8PrototypeDefineBug();
+		var definePropertyModule = requireObjectDefineProperty();
+		var anObject = requireAnObject();
+		var toIndexedObject = requireToIndexedObject();
+		var objectKeys = requireObjectKeys();
+
+		// `Object.defineProperties` method
+		// https://tc39.es/ecma262/#sec-object.defineproperties
+		// eslint-disable-next-line es/no-object-defineproperties -- safe
+		objectDefineProperties.f = DESCRIPTORS && !V8_PROTOTYPE_DEFINE_BUG ? Object.defineProperties : function defineProperties(O, Properties) {
+		  anObject(O);
+		  var props = toIndexedObject(Properties);
+		  var keys = objectKeys(Properties);
+		  var length = keys.length;
+		  var index = 0;
+		  var key;
+		  while (length > index) definePropertyModule.f(O, key = keys[index++], props[key]);
+		  return O;
+		};
+		return objectDefineProperties;
+	}
+
+	var html;
+	var hasRequiredHtml;
+
+	function requireHtml () {
+		if (hasRequiredHtml) return html;
+		hasRequiredHtml = 1;
+		var getBuiltIn = requireGetBuiltIn();
+
+		html = getBuiltIn('document', 'documentElement');
+		return html;
+	}
+
+	var objectCreate;
+	var hasRequiredObjectCreate;
+
+	function requireObjectCreate () {
+		if (hasRequiredObjectCreate) return objectCreate;
+		hasRequiredObjectCreate = 1;
+		/* global ActiveXObject -- old IE, WSH */
+		var anObject = requireAnObject();
+		var definePropertiesModule = requireObjectDefineProperties();
+		var enumBugKeys = requireEnumBugKeys();
+		var hiddenKeys = requireHiddenKeys();
+		var html = requireHtml();
+		var documentCreateElement = requireDocumentCreateElement();
+		var sharedKey = requireSharedKey();
+
+		var GT = '>';
+		var LT = '<';
+		var PROTOTYPE = 'prototype';
+		var SCRIPT = 'script';
+		var IE_PROTO = sharedKey('IE_PROTO');
+
+		var EmptyConstructor = function () { /* empty */ };
+
+		var scriptTag = function (content) {
+		  return LT + SCRIPT + GT + content + LT + '/' + SCRIPT + GT;
+		};
+
+		// Create object with fake `null` prototype: use ActiveX Object with cleared prototype
+		var NullProtoObjectViaActiveX = function (activeXDocument) {
+		  activeXDocument.write(scriptTag(''));
+		  activeXDocument.close();
+		  var temp = activeXDocument.parentWindow.Object;
+		  // eslint-disable-next-line no-useless-assignment -- avoid memory leak
+		  activeXDocument = null;
+		  return temp;
+		};
+
+		// Create object with fake `null` prototype: use iframe Object with cleared prototype
+		var NullProtoObjectViaIFrame = function () {
+		  // Thrash, waste and sodomy: IE GC bug
+		  var iframe = documentCreateElement('iframe');
+		  var JS = 'java' + SCRIPT + ':';
+		  var iframeDocument;
+		  iframe.style.display = 'none';
+		  html.appendChild(iframe);
+		  // https://github.com/zloirock/core-js/issues/475
+		  iframe.src = String(JS);
+		  iframeDocument = iframe.contentWindow.document;
+		  iframeDocument.open();
+		  iframeDocument.write(scriptTag('document.F=Object'));
+		  iframeDocument.close();
+		  return iframeDocument.F;
+		};
+
+		// Check for document.domain and active x support
+		// No need to use active x approach when document.domain is not set
+		// see https://github.com/es-shims/es5-shim/issues/150
+		// variation of https://github.com/kitcambridge/es5-shim/commit/4f738ac066346
+		// avoid IE GC bug
+		var activeXDocument;
+		var NullProtoObject = function () {
+		  try {
+		    activeXDocument = new ActiveXObject('htmlfile');
+		  } catch (error) { /* ignore */ }
+		  NullProtoObject = typeof document != 'undefined'
+		    ? document.domain && activeXDocument
+		      ? NullProtoObjectViaActiveX(activeXDocument) // old IE
+		      : NullProtoObjectViaIFrame()
+		    : NullProtoObjectViaActiveX(activeXDocument); // WSH
+		  var length = enumBugKeys.length;
+		  while (length--) delete NullProtoObject[PROTOTYPE][enumBugKeys[length]];
+		  return NullProtoObject();
+		};
+
+		hiddenKeys[IE_PROTO] = true;
+
+		// `Object.create` method
+		// https://tc39.es/ecma262/#sec-object.create
+		// eslint-disable-next-line es/no-object-create -- safe
+		objectCreate = Object.create || function create(O, Properties) {
+		  var result;
+		  if (O !== null) {
+		    EmptyConstructor[PROTOTYPE] = anObject(O);
+		    result = new EmptyConstructor();
+		    EmptyConstructor[PROTOTYPE] = null;
+		    // add "__proto__" for Object.getPrototypeOf polyfill
+		    result[IE_PROTO] = O;
+		  } else result = NullProtoObject();
+		  return Properties === undefined ? result : definePropertiesModule.f(result, Properties);
+		};
+		return objectCreate;
+	}
+
+	var addToUnscopables;
+	var hasRequiredAddToUnscopables;
+
+	function requireAddToUnscopables () {
+		if (hasRequiredAddToUnscopables) return addToUnscopables;
+		hasRequiredAddToUnscopables = 1;
+		var wellKnownSymbol = requireWellKnownSymbol();
+		var create = requireObjectCreate();
+		var defineProperty = requireObjectDefineProperty().f;
+
+		var UNSCOPABLES = wellKnownSymbol('unscopables');
+		var ArrayPrototype = Array.prototype;
+
+		// Array.prototype[@@unscopables]
+		// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+		if (ArrayPrototype[UNSCOPABLES] === undefined) {
+		  defineProperty(ArrayPrototype, UNSCOPABLES, {
+		    configurable: true,
+		    value: create(null)
+		  });
+		}
+
+		// add a key to Array.prototype[@@unscopables]
+		addToUnscopables = function (key) {
+		  ArrayPrototype[UNSCOPABLES][key] = true;
+		};
+		return addToUnscopables;
+	}
+
+	var correctPrototypeGetter;
+	var hasRequiredCorrectPrototypeGetter;
+
+	function requireCorrectPrototypeGetter () {
+		if (hasRequiredCorrectPrototypeGetter) return correctPrototypeGetter;
+		hasRequiredCorrectPrototypeGetter = 1;
+		var fails = requireFails();
+
+		correctPrototypeGetter = !fails(function () {
+		  function F() { /* empty */ }
+		  F.prototype.constructor = null;
+		  // eslint-disable-next-line es/no-object-getprototypeof -- required for testing
+		  return Object.getPrototypeOf(new F()) !== F.prototype;
+		});
+		return correctPrototypeGetter;
+	}
+
+	var objectGetPrototypeOf;
+	var hasRequiredObjectGetPrototypeOf;
+
+	function requireObjectGetPrototypeOf () {
+		if (hasRequiredObjectGetPrototypeOf) return objectGetPrototypeOf;
+		hasRequiredObjectGetPrototypeOf = 1;
+		var hasOwn = requireHasOwnProperty();
+		var isCallable = requireIsCallable();
+		var toObject = requireToObject();
+		var sharedKey = requireSharedKey();
+		var CORRECT_PROTOTYPE_GETTER = requireCorrectPrototypeGetter();
+
+		var IE_PROTO = sharedKey('IE_PROTO');
+		var $Object = Object;
+		var ObjectPrototype = $Object.prototype;
+
+		// `Object.getPrototypeOf` method
+		// https://tc39.es/ecma262/#sec-object.getprototypeof
+		// eslint-disable-next-line es/no-object-getprototypeof -- safe
+		objectGetPrototypeOf = CORRECT_PROTOTYPE_GETTER ? $Object.getPrototypeOf : function (O) {
+		  var object = toObject(O);
+		  if (hasOwn(object, IE_PROTO)) return object[IE_PROTO];
+		  var constructor = object.constructor;
+		  if (isCallable(constructor) && object instanceof constructor) {
+		    return constructor.prototype;
+		  } return object instanceof $Object ? ObjectPrototype : null;
+		};
+		return objectGetPrototypeOf;
+	}
+
+	var iteratorsCore;
+	var hasRequiredIteratorsCore;
+
+	function requireIteratorsCore () {
+		if (hasRequiredIteratorsCore) return iteratorsCore;
+		hasRequiredIteratorsCore = 1;
+		var fails = requireFails();
+		var isCallable = requireIsCallable();
+		var isObject = requireIsObject();
+		var create = requireObjectCreate();
+		var getPrototypeOf = requireObjectGetPrototypeOf();
+		var defineBuiltIn = requireDefineBuiltIn();
+		var wellKnownSymbol = requireWellKnownSymbol();
+		var IS_PURE = requireIsPure();
+
+		var ITERATOR = wellKnownSymbol('iterator');
+		var BUGGY_SAFARI_ITERATORS = false;
+
+		// `%IteratorPrototype%` object
+		// https://tc39.es/ecma262/#sec-%iteratorprototype%-object
+		var IteratorPrototype, PrototypeOfArrayIteratorPrototype, arrayIterator;
+
+		/* eslint-disable es/no-array-prototype-keys -- safe */
+		if ([].keys) {
+		  arrayIterator = [].keys();
+		  // Safari 8 has buggy iterators w/o `next`
+		  if (!('next' in arrayIterator)) BUGGY_SAFARI_ITERATORS = true;
+		  else {
+		    PrototypeOfArrayIteratorPrototype = getPrototypeOf(getPrototypeOf(arrayIterator));
+		    if (PrototypeOfArrayIteratorPrototype !== Object.prototype) IteratorPrototype = PrototypeOfArrayIteratorPrototype;
+		  }
+		}
+
+		var NEW_ITERATOR_PROTOTYPE = !isObject(IteratorPrototype) || fails(function () {
+		  var test = {};
+		  // FF44- legacy iterators case
+		  return IteratorPrototype[ITERATOR].call(test) !== test;
+		});
+
+		if (NEW_ITERATOR_PROTOTYPE) IteratorPrototype = {};
+		else if (IS_PURE) IteratorPrototype = create(IteratorPrototype);
+
+		// `%IteratorPrototype%[@@iterator]()` method
+		// https://tc39.es/ecma262/#sec-%iteratorprototype%-@@iterator
+		if (!isCallable(IteratorPrototype[ITERATOR])) {
+		  defineBuiltIn(IteratorPrototype, ITERATOR, function () {
+		    return this;
+		  });
+		}
+
+		iteratorsCore = {
+		  IteratorPrototype: IteratorPrototype,
+		  BUGGY_SAFARI_ITERATORS: BUGGY_SAFARI_ITERATORS
+		};
+		return iteratorsCore;
+	}
+
+	var setToStringTag;
+	var hasRequiredSetToStringTag;
+
+	function requireSetToStringTag () {
+		if (hasRequiredSetToStringTag) return setToStringTag;
+		hasRequiredSetToStringTag = 1;
+		var defineProperty = requireObjectDefineProperty().f;
+		var hasOwn = requireHasOwnProperty();
+		var wellKnownSymbol = requireWellKnownSymbol();
+
+		var TO_STRING_TAG = wellKnownSymbol('toStringTag');
+
+		setToStringTag = function (target, TAG, STATIC) {
+		  if (target && !STATIC) target = target.prototype;
+		  if (target && !hasOwn(target, TO_STRING_TAG)) {
+		    defineProperty(target, TO_STRING_TAG, { configurable: true, value: TAG });
+		  }
+		};
+		return setToStringTag;
+	}
+
+	var iteratorCreateConstructor;
+	var hasRequiredIteratorCreateConstructor;
+
+	function requireIteratorCreateConstructor () {
+		if (hasRequiredIteratorCreateConstructor) return iteratorCreateConstructor;
+		hasRequiredIteratorCreateConstructor = 1;
+		var IteratorPrototype = requireIteratorsCore().IteratorPrototype;
+		var create = requireObjectCreate();
+		var createPropertyDescriptor = requireCreatePropertyDescriptor();
+		var setToStringTag = requireSetToStringTag();
+		var Iterators = requireIterators();
+
+		var returnThis = function () { return this; };
+
+		iteratorCreateConstructor = function (IteratorConstructor, NAME, next, ENUMERABLE_NEXT) {
+		  var TO_STRING_TAG = NAME + ' Iterator';
+		  IteratorConstructor.prototype = create(IteratorPrototype, { next: createPropertyDescriptor(+!ENUMERABLE_NEXT, next) });
+		  setToStringTag(IteratorConstructor, TO_STRING_TAG, false, true);
+		  Iterators[TO_STRING_TAG] = returnThis;
+		  return IteratorConstructor;
+		};
+		return iteratorCreateConstructor;
+	}
+
+	var functionUncurryThisAccessor;
+	var hasRequiredFunctionUncurryThisAccessor;
+
+	function requireFunctionUncurryThisAccessor () {
+		if (hasRequiredFunctionUncurryThisAccessor) return functionUncurryThisAccessor;
+		hasRequiredFunctionUncurryThisAccessor = 1;
+		var uncurryThis = requireFunctionUncurryThis();
+		var aCallable = requireACallable();
+
+		functionUncurryThisAccessor = function (object, key, method) {
+		  try {
+		    // eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
+		    return uncurryThis(aCallable(Object.getOwnPropertyDescriptor(object, key)[method]));
+		  } catch (error) { /* empty */ }
+		};
+		return functionUncurryThisAccessor;
+	}
+
+	var isPossiblePrototype;
+	var hasRequiredIsPossiblePrototype;
+
+	function requireIsPossiblePrototype () {
+		if (hasRequiredIsPossiblePrototype) return isPossiblePrototype;
+		hasRequiredIsPossiblePrototype = 1;
+		var isObject = requireIsObject();
+
+		isPossiblePrototype = function (argument) {
+		  return isObject(argument) || argument === null;
+		};
+		return isPossiblePrototype;
+	}
+
+	var aPossiblePrototype;
+	var hasRequiredAPossiblePrototype;
+
+	function requireAPossiblePrototype () {
+		if (hasRequiredAPossiblePrototype) return aPossiblePrototype;
+		hasRequiredAPossiblePrototype = 1;
+		var isPossiblePrototype = requireIsPossiblePrototype();
+
+		var $String = String;
+		var $TypeError = TypeError;
+
+		aPossiblePrototype = function (argument) {
+		  if (isPossiblePrototype(argument)) return argument;
+		  throw new $TypeError("Can't set " + $String(argument) + ' as a prototype');
+		};
+		return aPossiblePrototype;
+	}
+
+	var objectSetPrototypeOf;
+	var hasRequiredObjectSetPrototypeOf;
+
+	function requireObjectSetPrototypeOf () {
+		if (hasRequiredObjectSetPrototypeOf) return objectSetPrototypeOf;
+		hasRequiredObjectSetPrototypeOf = 1;
+		/* eslint-disable no-proto -- safe */
+		var uncurryThisAccessor = requireFunctionUncurryThisAccessor();
+		var isObject = requireIsObject();
+		var requireObjectCoercible = requireRequireObjectCoercible();
+		var aPossiblePrototype = requireAPossiblePrototype();
+
+		// `Object.setPrototypeOf` method
+		// https://tc39.es/ecma262/#sec-object.setprototypeof
+		// Works with __proto__ only. Old v8 can't work with null proto objects.
+		// eslint-disable-next-line es/no-object-setprototypeof -- safe
+		objectSetPrototypeOf = Object.setPrototypeOf || ('__proto__' in {} ? function () {
+		  var CORRECT_SETTER = false;
+		  var test = {};
+		  var setter;
+		  try {
+		    setter = uncurryThisAccessor(Object.prototype, '__proto__', 'set');
+		    setter(test, []);
+		    CORRECT_SETTER = test instanceof Array;
+		  } catch (error) { /* empty */ }
+		  return function setPrototypeOf(O, proto) {
+		    requireObjectCoercible(O);
+		    aPossiblePrototype(proto);
+		    if (!isObject(O)) return O;
+		    if (CORRECT_SETTER) setter(O, proto);
+		    else O.__proto__ = proto;
+		    return O;
+		  };
+		}() : undefined);
+		return objectSetPrototypeOf;
+	}
+
+	var iteratorDefine;
+	var hasRequiredIteratorDefine;
+
+	function requireIteratorDefine () {
+		if (hasRequiredIteratorDefine) return iteratorDefine;
+		hasRequiredIteratorDefine = 1;
+		var $ = require_export();
+		var call = requireFunctionCall();
+		var IS_PURE = requireIsPure();
+		var FunctionName = requireFunctionName();
+		var isCallable = requireIsCallable();
+		var createIteratorConstructor = requireIteratorCreateConstructor();
+		var getPrototypeOf = requireObjectGetPrototypeOf();
+		var setPrototypeOf = requireObjectSetPrototypeOf();
+		var setToStringTag = requireSetToStringTag();
+		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
+		var defineBuiltIn = requireDefineBuiltIn();
+		var wellKnownSymbol = requireWellKnownSymbol();
+		var Iterators = requireIterators();
+		var IteratorsCore = requireIteratorsCore();
+
+		var PROPER_FUNCTION_NAME = FunctionName.PROPER;
+		var CONFIGURABLE_FUNCTION_NAME = FunctionName.CONFIGURABLE;
+		var IteratorPrototype = IteratorsCore.IteratorPrototype;
+		var BUGGY_SAFARI_ITERATORS = IteratorsCore.BUGGY_SAFARI_ITERATORS;
+		var ITERATOR = wellKnownSymbol('iterator');
+		var KEYS = 'keys';
+		var VALUES = 'values';
+		var ENTRIES = 'entries';
+
+		var returnThis = function () { return this; };
+
+		iteratorDefine = function (Iterable, NAME, IteratorConstructor, next, DEFAULT, IS_SET, FORCED) {
+		  createIteratorConstructor(IteratorConstructor, NAME, next);
+
+		  var getIterationMethod = function (KIND) {
+		    if (KIND === DEFAULT && defaultIterator) return defaultIterator;
+		    if (!BUGGY_SAFARI_ITERATORS && KIND && KIND in IterablePrototype) return IterablePrototype[KIND];
+
+		    switch (KIND) {
+		      case KEYS: return function keys() { return new IteratorConstructor(this, KIND); };
+		      case VALUES: return function values() { return new IteratorConstructor(this, KIND); };
+		      case ENTRIES: return function entries() { return new IteratorConstructor(this, KIND); };
+		    }
+
+		    return function () { return new IteratorConstructor(this); };
+		  };
+
+		  var TO_STRING_TAG = NAME + ' Iterator';
+		  var INCORRECT_VALUES_NAME = false;
+		  var IterablePrototype = Iterable.prototype;
+		  var nativeIterator = IterablePrototype[ITERATOR]
+		    || IterablePrototype['@@iterator']
+		    || DEFAULT && IterablePrototype[DEFAULT];
+		  var defaultIterator = !BUGGY_SAFARI_ITERATORS && nativeIterator || getIterationMethod(DEFAULT);
+		  var anyNativeIterator = NAME === 'Array' ? IterablePrototype.entries || nativeIterator : nativeIterator;
+		  var CurrentIteratorPrototype, methods, KEY;
+
+		  // fix native
+		  if (anyNativeIterator) {
+		    CurrentIteratorPrototype = getPrototypeOf(anyNativeIterator.call(new Iterable()));
+		    if (CurrentIteratorPrototype !== Object.prototype && CurrentIteratorPrototype.next) {
+		      if (!IS_PURE && getPrototypeOf(CurrentIteratorPrototype) !== IteratorPrototype) {
+		        if (setPrototypeOf) {
+		          setPrototypeOf(CurrentIteratorPrototype, IteratorPrototype);
+		        } else if (!isCallable(CurrentIteratorPrototype[ITERATOR])) {
+		          defineBuiltIn(CurrentIteratorPrototype, ITERATOR, returnThis);
+		        }
+		      }
+		      // Set @@toStringTag to native iterators
+		      setToStringTag(CurrentIteratorPrototype, TO_STRING_TAG, true, true);
+		      if (IS_PURE) Iterators[TO_STRING_TAG] = returnThis;
+		    }
+		  }
+
+		  // fix Array.prototype.{ values, @@iterator }.name in V8 / FF
+		  if (PROPER_FUNCTION_NAME && DEFAULT === VALUES && nativeIterator && nativeIterator.name !== VALUES) {
+		    if (!IS_PURE && CONFIGURABLE_FUNCTION_NAME) {
+		      createNonEnumerableProperty(IterablePrototype, 'name', VALUES);
+		    } else {
+		      INCORRECT_VALUES_NAME = true;
+		      defaultIterator = function values() { return call(nativeIterator, this); };
+		    }
+		  }
+
+		  // export additional methods
+		  if (DEFAULT) {
+		    methods = {
+		      values: getIterationMethod(VALUES),
+		      keys: IS_SET ? defaultIterator : getIterationMethod(KEYS),
+		      entries: getIterationMethod(ENTRIES)
+		    };
+		    if (FORCED) for (KEY in methods) {
+		      if (BUGGY_SAFARI_ITERATORS || INCORRECT_VALUES_NAME || !(KEY in IterablePrototype)) {
+		        defineBuiltIn(IterablePrototype, KEY, methods[KEY]);
+		      }
+		    } else $({ target: NAME, proto: true, forced: BUGGY_SAFARI_ITERATORS || INCORRECT_VALUES_NAME }, methods);
+		  }
+
+		  // define iterator
+		  if ((!IS_PURE || FORCED) && IterablePrototype[ITERATOR] !== defaultIterator) {
+		    defineBuiltIn(IterablePrototype, ITERATOR, defaultIterator, { name: DEFAULT });
+		  }
+		  Iterators[NAME] = defaultIterator;
+
+		  return methods;
+		};
+		return iteratorDefine;
+	}
+
+	var createIterResultObject;
+	var hasRequiredCreateIterResultObject;
+
+	function requireCreateIterResultObject () {
+		if (hasRequiredCreateIterResultObject) return createIterResultObject;
+		hasRequiredCreateIterResultObject = 1;
+		// `CreateIterResultObject` abstract operation
+		// https://tc39.es/ecma262/#sec-createiterresultobject
+		createIterResultObject = function (value, done) {
+		  return { value: value, done: done };
+		};
+		return createIterResultObject;
+	}
+
+	var es_array_iterator;
+	var hasRequiredEs_array_iterator;
+
+	function requireEs_array_iterator () {
+		if (hasRequiredEs_array_iterator) return es_array_iterator;
+		hasRequiredEs_array_iterator = 1;
+		var toIndexedObject = requireToIndexedObject();
+		var addToUnscopables = requireAddToUnscopables();
+		var Iterators = requireIterators();
+		var InternalStateModule = requireInternalState();
+		var defineProperty = requireObjectDefineProperty().f;
+		var defineIterator = requireIteratorDefine();
+		var createIterResultObject = requireCreateIterResultObject();
+		var IS_PURE = requireIsPure();
+		var DESCRIPTORS = requireDescriptors();
+
+		var ARRAY_ITERATOR = 'Array Iterator';
+		var setInternalState = InternalStateModule.set;
+		var getInternalState = InternalStateModule.getterFor(ARRAY_ITERATOR);
+
+		// `Array.prototype.entries` method
+		// https://tc39.es/ecma262/#sec-array.prototype.entries
+		// `Array.prototype.keys` method
+		// https://tc39.es/ecma262/#sec-array.prototype.keys
+		// `Array.prototype.values` method
+		// https://tc39.es/ecma262/#sec-array.prototype.values
+		// `Array.prototype[@@iterator]` method
+		// https://tc39.es/ecma262/#sec-array.prototype-@@iterator
+		// `CreateArrayIterator` internal method
+		// https://tc39.es/ecma262/#sec-createarrayiterator
+		es_array_iterator = defineIterator(Array, 'Array', function (iterated, kind) {
+		  setInternalState(this, {
+		    type: ARRAY_ITERATOR,
+		    target: toIndexedObject(iterated), // target
+		    index: 0,                          // next index
+		    kind: kind                         // kind
+		  });
+		// `%ArrayIteratorPrototype%.next` method
+		// https://tc39.es/ecma262/#sec-%arrayiteratorprototype%.next
+		}, function () {
+		  var state = getInternalState(this);
+		  var target = state.target;
+		  var index = state.index++;
+		  if (!target || index >= target.length) {
+		    state.target = null;
+		    return createIterResultObject(undefined, true);
+		  }
+		  switch (state.kind) {
+		    case 'keys': return createIterResultObject(index, false);
+		    case 'values': return createIterResultObject(target[index], false);
+		  } return createIterResultObject([index, target[index]], false);
+		}, 'values');
+
+		// argumentsList[@@iterator] is %ArrayProto_values%
+		// https://tc39.es/ecma262/#sec-createunmappedargumentsobject
+		// https://tc39.es/ecma262/#sec-createmappedargumentsobject
+		var values = Iterators.Arguments = Iterators.Array;
+
+		// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+		addToUnscopables('keys');
+		addToUnscopables('values');
+		addToUnscopables('entries');
+
+		// V8 ~ Chrome 45- bug
+		if (!IS_PURE && DESCRIPTORS && values.name !== 'values') try {
+		  defineProperty(values, 'name', { value: 'values' });
+		} catch (error) { /* empty */ }
+		return es_array_iterator;
+	}
+
+	requireEs_array_iterator();
+
+	var es_arrayBuffer_slice = {};
+
+	var arrayBufferBasicDetection;
+	var hasRequiredArrayBufferBasicDetection;
+
+	function requireArrayBufferBasicDetection () {
+		if (hasRequiredArrayBufferBasicDetection) return arrayBufferBasicDetection;
+		hasRequiredArrayBufferBasicDetection = 1;
+		// eslint-disable-next-line es/no-typed-arrays -- safe
+		arrayBufferBasicDetection = typeof ArrayBuffer != 'undefined' && typeof DataView != 'undefined';
+		return arrayBufferBasicDetection;
+	}
+
+	var defineBuiltInAccessor;
+	var hasRequiredDefineBuiltInAccessor;
+
+	function requireDefineBuiltInAccessor () {
+		if (hasRequiredDefineBuiltInAccessor) return defineBuiltInAccessor;
+		hasRequiredDefineBuiltInAccessor = 1;
+		var makeBuiltIn = requireMakeBuiltIn();
+		var defineProperty = requireObjectDefineProperty();
+
+		defineBuiltInAccessor = function (target, name, descriptor) {
+		  if (descriptor.get) makeBuiltIn(descriptor.get, name, { getter: true });
+		  if (descriptor.set) makeBuiltIn(descriptor.set, name, { setter: true });
+		  return defineProperty.f(target, name, descriptor);
+		};
+		return defineBuiltInAccessor;
+	}
+
+	var defineBuiltIns;
+	var hasRequiredDefineBuiltIns;
+
+	function requireDefineBuiltIns () {
+		if (hasRequiredDefineBuiltIns) return defineBuiltIns;
+		hasRequiredDefineBuiltIns = 1;
+		var defineBuiltIn = requireDefineBuiltIn();
+
+		defineBuiltIns = function (target, src, options) {
+		  for (var key in src) defineBuiltIn(target, key, src[key], options);
+		  return target;
+		};
+		return defineBuiltIns;
+	}
+
+	var anInstance;
+	var hasRequiredAnInstance;
+
+	function requireAnInstance () {
+		if (hasRequiredAnInstance) return anInstance;
+		hasRequiredAnInstance = 1;
+		var isPrototypeOf = requireObjectIsPrototypeOf();
+
+		var $TypeError = TypeError;
+
+		anInstance = function (it, Prototype) {
+		  if (isPrototypeOf(Prototype, it)) return it;
+		  throw new $TypeError('Incorrect invocation');
+		};
+		return anInstance;
+	}
+
+	var toIndex;
+	var hasRequiredToIndex;
+
+	function requireToIndex () {
+		if (hasRequiredToIndex) return toIndex;
+		hasRequiredToIndex = 1;
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+		var toLength = requireToLength();
+
+		var $RangeError = RangeError;
+
+		// `ToIndex` abstract operation
+		// https://tc39.es/ecma262/#sec-toindex
+		toIndex = function (it) {
+		  if (it === undefined) return 0;
+		  var number = toIntegerOrInfinity(it);
+		  var length = toLength(number);
+		  if (number !== length) throw new $RangeError('Wrong length or index');
+		  return length;
+		};
+		return toIndex;
+	}
+
+	var mathSign;
+	var hasRequiredMathSign;
+
+	function requireMathSign () {
+		if (hasRequiredMathSign) return mathSign;
+		hasRequiredMathSign = 1;
+		// `Math.sign` method implementation
+		// https://tc39.es/ecma262/#sec-math.sign
+		// eslint-disable-next-line es/no-math-sign -- safe
+		mathSign = Math.sign || function sign(x) {
+		  var n = +x;
+		  // eslint-disable-next-line no-self-compare -- NaN check
+		  return n === 0 || n !== n ? n : n < 0 ? -1 : 1;
+		};
+		return mathSign;
+	}
+
+	var mathRoundTiesToEven;
+	var hasRequiredMathRoundTiesToEven;
+
+	function requireMathRoundTiesToEven () {
+		if (hasRequiredMathRoundTiesToEven) return mathRoundTiesToEven;
+		hasRequiredMathRoundTiesToEven = 1;
+		var EPSILON = 2.220446049250313e-16; // Number.EPSILON
+		var INVERSE_EPSILON = 1 / EPSILON;
+
+		mathRoundTiesToEven = function (n) {
+		  return n + INVERSE_EPSILON - INVERSE_EPSILON;
+		};
+		return mathRoundTiesToEven;
+	}
+
+	var mathFloatRound;
+	var hasRequiredMathFloatRound;
+
+	function requireMathFloatRound () {
+		if (hasRequiredMathFloatRound) return mathFloatRound;
+		hasRequiredMathFloatRound = 1;
+		var sign = requireMathSign();
+		var roundTiesToEven = requireMathRoundTiesToEven();
+
+		var abs = Math.abs;
+
+		var EPSILON = 2.220446049250313e-16; // Number.EPSILON
+
+		mathFloatRound = function (x, FLOAT_EPSILON, FLOAT_MAX_VALUE, FLOAT_MIN_VALUE) {
+		  var n = +x;
+		  var absolute = abs(n);
+		  var s = sign(n);
+		  if (absolute < FLOAT_MIN_VALUE) return s * roundTiesToEven(absolute / FLOAT_MIN_VALUE / FLOAT_EPSILON) * FLOAT_MIN_VALUE * FLOAT_EPSILON;
+		  var a = (1 + FLOAT_EPSILON / EPSILON) * absolute;
+		  var result = a - (a - absolute);
+		  // eslint-disable-next-line no-self-compare -- NaN check
+		  if (result > FLOAT_MAX_VALUE || result !== result) return s * Infinity;
+		  return s * result;
+		};
+		return mathFloatRound;
+	}
+
+	var mathFround;
+	var hasRequiredMathFround;
+
+	function requireMathFround () {
+		if (hasRequiredMathFround) return mathFround;
+		hasRequiredMathFround = 1;
+		var floatRound = requireMathFloatRound();
+
+		var FLOAT32_EPSILON = 1.1920928955078125e-7; // 2 ** -23;
+		var FLOAT32_MAX_VALUE = 3.4028234663852886e+38; // 2 ** 128 - 2 ** 104
+		var FLOAT32_MIN_VALUE = 1.1754943508222875e-38; // 2 ** -126;
+
+		// `Math.fround` method implementation
+		// https://tc39.es/ecma262/#sec-math.fround
+		// eslint-disable-next-line es/no-math-fround -- safe
+		mathFround = Math.fround || function fround(x) {
+		  return floatRound(x, FLOAT32_EPSILON, FLOAT32_MAX_VALUE, FLOAT32_MIN_VALUE);
+		};
+		return mathFround;
+	}
+
+	var ieee754;
+	var hasRequiredIeee754;
+
+	function requireIeee754 () {
+		if (hasRequiredIeee754) return ieee754;
+		hasRequiredIeee754 = 1;
+		// IEEE754 conversions based on https://github.com/feross/ieee754
+		var $Array = Array;
+		var abs = Math.abs;
+		var pow = Math.pow;
+		var floor = Math.floor;
+		var log = Math.log;
+		var LN2 = Math.LN2;
+
+		var pack = function (number, mantissaLength, bytes) {
+		  var buffer = $Array(bytes);
+		  var exponentLength = bytes * 8 - mantissaLength - 1;
+		  var eMax = (1 << exponentLength) - 1;
+		  var eBias = eMax >> 1;
+		  var rt = mantissaLength === 23 ? pow(2, -24) - pow(2, -77) : 0;
+		  var sign = number < 0 || number === 0 && 1 / number < 0 ? 1 : 0;
+		  var index = 0;
+		  var exponent, mantissa, c;
+		  number = abs(number);
+		  // eslint-disable-next-line no-self-compare -- NaN check
+		  if (number !== number || number === Infinity) {
+		    // eslint-disable-next-line no-self-compare -- NaN check
+		    mantissa = number !== number ? 1 : 0;
+		    exponent = eMax;
+		  } else {
+		    exponent = floor(log(number) / LN2);
+		    c = pow(2, -exponent);
+		    if (number * c < 1) {
+		      exponent--;
+		      c *= 2;
+		    }
+		    if (exponent + eBias >= 1) {
+		      number += rt / c;
+		    } else {
+		      number += rt * pow(2, 1 - eBias);
+		    }
+		    if (number * c >= 2) {
+		      exponent++;
+		      c /= 2;
+		    }
+		    if (exponent + eBias >= eMax) {
+		      mantissa = 0;
+		      exponent = eMax;
+		    } else if (exponent + eBias >= 1) {
+		      mantissa = (number * c - 1) * pow(2, mantissaLength);
+		      exponent += eBias;
+		    } else {
+		      mantissa = number * pow(2, eBias - 1) * pow(2, mantissaLength);
+		      exponent = 0;
+		    }
+		  }
+		  while (mantissaLength >= 8) {
+		    buffer[index++] = mantissa & 255;
+		    mantissa /= 256;
+		    mantissaLength -= 8;
+		  }
+		  exponent = exponent << mantissaLength | mantissa;
+		  exponentLength += mantissaLength;
+		  while (exponentLength > 0) {
+		    buffer[index++] = exponent & 255;
+		    exponent /= 256;
+		    exponentLength -= 8;
+		  }
+		  buffer[index - 1] |= sign * 128;
+		  return buffer;
+		};
+
+		var unpack = function (buffer, mantissaLength) {
+		  var bytes = buffer.length;
+		  var exponentLength = bytes * 8 - mantissaLength - 1;
+		  var eMax = (1 << exponentLength) - 1;
+		  var eBias = eMax >> 1;
+		  var nBits = exponentLength - 7;
+		  var index = bytes - 1;
+		  var sign = buffer[index--];
+		  var exponent = sign & 127;
+		  var mantissa;
+		  sign >>= 7;
+		  while (nBits > 0) {
+		    exponent = exponent * 256 + buffer[index--];
+		    nBits -= 8;
+		  }
+		  mantissa = exponent & (1 << -nBits) - 1;
+		  exponent >>= -nBits;
+		  nBits += mantissaLength;
+		  while (nBits > 0) {
+		    mantissa = mantissa * 256 + buffer[index--];
+		    nBits -= 8;
+		  }
+		  if (exponent === 0) {
+		    exponent = 1 - eBias;
+		  } else if (exponent === eMax) {
+		    return mantissa ? NaN : sign ? -Infinity : Infinity;
+		  } else {
+		    mantissa += pow(2, mantissaLength);
+		    exponent -= eBias;
+		  } return (sign ? -1 : 1) * mantissa * pow(2, exponent - mantissaLength);
+		};
+
+		ieee754 = {
+		  pack: pack,
+		  unpack: unpack
+		};
+		return ieee754;
+	}
+
+	var arrayFill;
+	var hasRequiredArrayFill;
+
+	function requireArrayFill () {
+		if (hasRequiredArrayFill) return arrayFill;
+		hasRequiredArrayFill = 1;
+		var toObject = requireToObject();
+		var toAbsoluteIndex = requireToAbsoluteIndex();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+
+		// `Array.prototype.fill` method implementation
+		// https://tc39.es/ecma262/#sec-array.prototype.fill
+		arrayFill = function fill(value /* , start = 0, end = @length */) {
+		  var O = toObject(this);
+		  var length = lengthOfArrayLike(O);
+		  var argumentsLength = arguments.length;
+		  var index = toAbsoluteIndex(argumentsLength > 1 ? arguments[1] : undefined, length);
+		  var end = argumentsLength > 2 ? arguments[2] : undefined;
+		  var endPos = end === undefined ? length : toAbsoluteIndex(end, length);
+		  while (endPos > index) O[index++] = value;
+		  return O;
+		};
+		return arrayFill;
+	}
+
+	var inheritIfRequired;
+	var hasRequiredInheritIfRequired;
+
+	function requireInheritIfRequired () {
+		if (hasRequiredInheritIfRequired) return inheritIfRequired;
+		hasRequiredInheritIfRequired = 1;
+		var isCallable = requireIsCallable();
+		var isObject = requireIsObject();
+		var setPrototypeOf = requireObjectSetPrototypeOf();
+
+		// makes subclassing work correct for wrapped built-ins
+		inheritIfRequired = function ($this, dummy, Wrapper) {
+		  var NewTarget, NewTargetPrototype;
+		  if (
+		    // it can work only with native `setPrototypeOf`
+		    setPrototypeOf &&
+		    // we haven't completely correct pre-ES6 way for getting `new.target`, so use this
+		    isCallable(NewTarget = dummy.constructor) &&
+		    NewTarget !== Wrapper &&
+		    isObject(NewTargetPrototype = NewTarget.prototype) &&
+		    NewTargetPrototype !== Wrapper.prototype
+		  ) setPrototypeOf($this, NewTargetPrototype);
+		  return $this;
+		};
+		return inheritIfRequired;
+	}
+
+	var arrayBuffer;
+	var hasRequiredArrayBuffer;
+
+	function requireArrayBuffer () {
+		if (hasRequiredArrayBuffer) return arrayBuffer;
+		hasRequiredArrayBuffer = 1;
+		var globalThis = requireGlobalThis();
+		var uncurryThis = requireFunctionUncurryThis();
+		var DESCRIPTORS = requireDescriptors();
+		var NATIVE_ARRAY_BUFFER = requireArrayBufferBasicDetection();
+		var FunctionName = requireFunctionName();
+		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
+		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+		var defineBuiltIns = requireDefineBuiltIns();
+		var fails = requireFails();
+		var anInstance = requireAnInstance();
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+		var toIndex = requireToIndex();
+		var fround = requireMathFround();
+		var IEEE754 = requireIeee754();
+		var getPrototypeOf = requireObjectGetPrototypeOf();
+		var setPrototypeOf = requireObjectSetPrototypeOf();
+		var arrayFill = requireArrayFill();
+		var arraySlice = requireArraySlice();
+		var inheritIfRequired = requireInheritIfRequired();
+		var copyConstructorProperties = requireCopyConstructorProperties();
+		var setToStringTag = requireSetToStringTag();
+		var InternalStateModule = requireInternalState();
+
+		var PROPER_FUNCTION_NAME = FunctionName.PROPER;
+		var CONFIGURABLE_FUNCTION_NAME = FunctionName.CONFIGURABLE;
+		var ARRAY_BUFFER = 'ArrayBuffer';
+		var DATA_VIEW = 'DataView';
+		var PROTOTYPE = 'prototype';
+		var WRONG_LENGTH = 'Wrong length';
+		var WRONG_INDEX = 'Wrong index';
+		var getInternalArrayBufferState = InternalStateModule.getterFor(ARRAY_BUFFER);
+		var getInternalDataViewState = InternalStateModule.getterFor(DATA_VIEW);
+		var setInternalState = InternalStateModule.set;
+		var NativeArrayBuffer = globalThis[ARRAY_BUFFER];
+		var $ArrayBuffer = NativeArrayBuffer;
+		var ArrayBufferPrototype = $ArrayBuffer && $ArrayBuffer[PROTOTYPE];
+		var $DataView = globalThis[DATA_VIEW];
+		var DataViewPrototype = $DataView && $DataView[PROTOTYPE];
+		var ObjectPrototype = Object.prototype;
+		var Array = globalThis.Array;
+		var RangeError = globalThis.RangeError;
+		var fill = uncurryThis(arrayFill);
+		var reverse = uncurryThis([].reverse);
+
+		var packIEEE754 = IEEE754.pack;
+		var unpackIEEE754 = IEEE754.unpack;
+
+		var packInt8 = function (number) {
+		  return [number & 0xFF];
+		};
+
+		var packInt16 = function (number) {
+		  return [number & 0xFF, number >> 8 & 0xFF];
+		};
+
+		var packInt32 = function (number) {
+		  return [number & 0xFF, number >> 8 & 0xFF, number >> 16 & 0xFF, number >> 24 & 0xFF];
+		};
+
+		var unpackInt32 = function (buffer) {
+		  return buffer[3] << 24 | buffer[2] << 16 | buffer[1] << 8 | buffer[0];
+		};
+
+		var packFloat32 = function (number) {
+		  return packIEEE754(fround(number), 23, 4);
+		};
+
+		var packFloat64 = function (number) {
+		  return packIEEE754(number, 52, 8);
+		};
+
+		var addGetter = function (Constructor, key, getInternalState) {
+		  defineBuiltInAccessor(Constructor[PROTOTYPE], key, {
+		    configurable: true,
+		    get: function () {
+		      return getInternalState(this)[key];
+		    }
+		  });
+		};
+
+		var get = function (view, count, index, isLittleEndian) {
+		  var store = getInternalDataViewState(view);
+		  var intIndex = toIndex(index);
+		  var boolIsLittleEndian = !!isLittleEndian;
+		  if (intIndex + count > store.byteLength) throw new RangeError(WRONG_INDEX);
+		  var bytes = store.bytes;
+		  var start = intIndex + store.byteOffset;
+		  var pack = arraySlice(bytes, start, start + count);
+		  return boolIsLittleEndian ? pack : reverse(pack);
+		};
+
+		var set = function (view, count, index, conversion, value, isLittleEndian) {
+		  var store = getInternalDataViewState(view);
+		  var intIndex = toIndex(index);
+		  var pack = conversion(+value);
+		  var boolIsLittleEndian = !!isLittleEndian;
+		  if (intIndex + count > store.byteLength) throw new RangeError(WRONG_INDEX);
+		  var bytes = store.bytes;
+		  var start = intIndex + store.byteOffset;
+		  for (var i = 0; i < count; i++) bytes[start + i] = pack[boolIsLittleEndian ? i : count - i - 1];
+		};
+
+		if (!NATIVE_ARRAY_BUFFER) {
+		  $ArrayBuffer = function ArrayBuffer(length) {
+		    anInstance(this, ArrayBufferPrototype);
+		    var byteLength = toIndex(length);
+		    setInternalState(this, {
+		      type: ARRAY_BUFFER,
+		      bytes: fill(Array(byteLength), 0),
+		      byteLength: byteLength
+		    });
+		    if (!DESCRIPTORS) {
+		      this.byteLength = byteLength;
+		      this.detached = false;
+		    }
+		  };
+
+		  ArrayBufferPrototype = $ArrayBuffer[PROTOTYPE];
+
+		  $DataView = function DataView(buffer, byteOffset, byteLength) {
+		    anInstance(this, DataViewPrototype);
+		    anInstance(buffer, ArrayBufferPrototype);
+		    var bufferState = getInternalArrayBufferState(buffer);
+		    var bufferLength = bufferState.byteLength;
+		    var offset = toIntegerOrInfinity(byteOffset);
+		    if (offset < 0 || offset > bufferLength) throw new RangeError('Wrong offset');
+		    byteLength = byteLength === undefined ? bufferLength - offset : toIndex(byteLength);
+		    if (offset + byteLength > bufferLength) throw new RangeError(WRONG_LENGTH);
+		    setInternalState(this, {
+		      type: DATA_VIEW,
+		      buffer: buffer,
+		      byteLength: byteLength,
+		      byteOffset: offset,
+		      bytes: bufferState.bytes
+		    });
+		    if (!DESCRIPTORS) {
+		      this.buffer = buffer;
+		      this.byteLength = byteLength;
+		      this.byteOffset = offset;
+		    }
+		  };
+
+		  DataViewPrototype = $DataView[PROTOTYPE];
+
+		  if (DESCRIPTORS) {
+		    addGetter($ArrayBuffer, 'byteLength', getInternalArrayBufferState);
+		    addGetter($DataView, 'buffer', getInternalDataViewState);
+		    addGetter($DataView, 'byteLength', getInternalDataViewState);
+		    addGetter($DataView, 'byteOffset', getInternalDataViewState);
+		  }
+
+		  defineBuiltIns(DataViewPrototype, {
+		    getInt8: function getInt8(byteOffset) {
+		      return get(this, 1, byteOffset)[0] << 24 >> 24;
+		    },
+		    getUint8: function getUint8(byteOffset) {
+		      return get(this, 1, byteOffset)[0];
+		    },
+		    getInt16: function getInt16(byteOffset /* , littleEndian */) {
+		      var bytes = get(this, 2, byteOffset, arguments.length > 1 ? arguments[1] : false);
+		      return (bytes[1] << 8 | bytes[0]) << 16 >> 16;
+		    },
+		    getUint16: function getUint16(byteOffset /* , littleEndian */) {
+		      var bytes = get(this, 2, byteOffset, arguments.length > 1 ? arguments[1] : false);
+		      return bytes[1] << 8 | bytes[0];
+		    },
+		    getInt32: function getInt32(byteOffset /* , littleEndian */) {
+		      return unpackInt32(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false));
+		    },
+		    getUint32: function getUint32(byteOffset /* , littleEndian */) {
+		      return unpackInt32(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false)) >>> 0;
+		    },
+		    getFloat32: function getFloat32(byteOffset /* , littleEndian */) {
+		      return unpackIEEE754(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false), 23);
+		    },
+		    getFloat64: function getFloat64(byteOffset /* , littleEndian */) {
+		      return unpackIEEE754(get(this, 8, byteOffset, arguments.length > 1 ? arguments[1] : false), 52);
+		    },
+		    setInt8: function setInt8(byteOffset, value) {
+		      set(this, 1, byteOffset, packInt8, value);
+		    },
+		    setUint8: function setUint8(byteOffset, value) {
+		      set(this, 1, byteOffset, packInt8, value);
+		    },
+		    setInt16: function setInt16(byteOffset, value /* , littleEndian */) {
+		      set(this, 2, byteOffset, packInt16, value, arguments.length > 2 ? arguments[2] : false);
+		    },
+		    setUint16: function setUint16(byteOffset, value /* , littleEndian */) {
+		      set(this, 2, byteOffset, packInt16, value, arguments.length > 2 ? arguments[2] : false);
+		    },
+		    setInt32: function setInt32(byteOffset, value /* , littleEndian */) {
+		      set(this, 4, byteOffset, packInt32, value, arguments.length > 2 ? arguments[2] : false);
+		    },
+		    setUint32: function setUint32(byteOffset, value /* , littleEndian */) {
+		      set(this, 4, byteOffset, packInt32, value, arguments.length > 2 ? arguments[2] : false);
+		    },
+		    setFloat32: function setFloat32(byteOffset, value /* , littleEndian */) {
+		      set(this, 4, byteOffset, packFloat32, value, arguments.length > 2 ? arguments[2] : false);
+		    },
+		    setFloat64: function setFloat64(byteOffset, value /* , littleEndian */) {
+		      set(this, 8, byteOffset, packFloat64, value, arguments.length > 2 ? arguments[2] : false);
+		    }
+		  });
+		} else {
+		  var INCORRECT_ARRAY_BUFFER_NAME = PROPER_FUNCTION_NAME && NativeArrayBuffer.name !== ARRAY_BUFFER;
+		  /* eslint-disable no-new, sonarjs/inconsistent-function-call -- required for testing */
+		  if (!fails(function () {
+		    NativeArrayBuffer(1);
+		  }) || !fails(function () {
+		    new NativeArrayBuffer(-1);
+		  }) || fails(function () {
+		    new NativeArrayBuffer();
+		    new NativeArrayBuffer(1.5);
+		    new NativeArrayBuffer(NaN);
+		    return NativeArrayBuffer.length !== 1 || INCORRECT_ARRAY_BUFFER_NAME && !CONFIGURABLE_FUNCTION_NAME;
+		  })) {
+		    /* eslint-enable no-new, sonarjs/inconsistent-function-call -- required for testing */
+		    $ArrayBuffer = function ArrayBuffer(length) {
+		      anInstance(this, ArrayBufferPrototype);
+		      return inheritIfRequired(new NativeArrayBuffer(toIndex(length)), this, $ArrayBuffer);
+		    };
+
+		    $ArrayBuffer[PROTOTYPE] = ArrayBufferPrototype;
+
+		    ArrayBufferPrototype.constructor = $ArrayBuffer;
+
+		    copyConstructorProperties($ArrayBuffer, NativeArrayBuffer);
+		  } else if (INCORRECT_ARRAY_BUFFER_NAME && CONFIGURABLE_FUNCTION_NAME) {
+		    createNonEnumerableProperty(NativeArrayBuffer, 'name', ARRAY_BUFFER);
+		  }
+
+		  // WebKit bug - the same parent prototype for typed arrays and data view
+		  if (setPrototypeOf && getPrototypeOf(DataViewPrototype) !== ObjectPrototype) {
+		    setPrototypeOf(DataViewPrototype, ObjectPrototype);
+		  }
+
+		  // iOS Safari 7.x bug
+		  var testView = new $DataView(new $ArrayBuffer(2));
+		  var $setInt8 = uncurryThis(DataViewPrototype.setInt8);
+		  testView.setInt8(0, 2147483648);
+		  testView.setInt8(1, 2147483649);
+		  if (testView.getInt8(0) || !testView.getInt8(1)) defineBuiltIns(DataViewPrototype, {
+		    setInt8: function setInt8(byteOffset, value) {
+		      $setInt8(this, byteOffset, value << 24 >> 24);
+		    },
+		    setUint8: function setUint8(byteOffset, value) {
+		      $setInt8(this, byteOffset, value << 24 >> 24);
+		    }
+		  }, { unsafe: true });
+		}
+
+		setToStringTag($ArrayBuffer, ARRAY_BUFFER);
+		setToStringTag($DataView, DATA_VIEW);
+
+		arrayBuffer = {
+		  ArrayBuffer: $ArrayBuffer,
+		  DataView: $DataView
+		};
+		return arrayBuffer;
+	}
+
+	var hasRequiredEs_arrayBuffer_slice;
+
+	function requireEs_arrayBuffer_slice () {
+		if (hasRequiredEs_arrayBuffer_slice) return es_arrayBuffer_slice;
+		hasRequiredEs_arrayBuffer_slice = 1;
+		var $ = require_export();
+		var uncurryThis = requireFunctionUncurryThisClause();
+		var fails = requireFails();
+		var ArrayBufferModule = requireArrayBuffer();
+		var anObject = requireAnObject();
+		var toAbsoluteIndex = requireToAbsoluteIndex();
+		var toLength = requireToLength();
+
+		var ArrayBuffer = ArrayBufferModule.ArrayBuffer;
+		var DataView = ArrayBufferModule.DataView;
+		var DataViewPrototype = DataView.prototype;
+		var nativeArrayBufferSlice = uncurryThis(ArrayBuffer.prototype.slice);
+		var getUint8 = uncurryThis(DataViewPrototype.getUint8);
+		var setUint8 = uncurryThis(DataViewPrototype.setUint8);
+
+		var INCORRECT_SLICE = fails(function () {
+		  return !new ArrayBuffer(2).slice(1, undefined).byteLength;
+		});
+
+		// `ArrayBuffer.prototype.slice` method
+		// https://tc39.es/ecma262/#sec-arraybuffer.prototype.slice
+		$({ target: 'ArrayBuffer', proto: true, unsafe: true, forced: INCORRECT_SLICE }, {
+		  slice: function slice(start, end) {
+		    if (nativeArrayBufferSlice && end === undefined) {
+		      return nativeArrayBufferSlice(anObject(this), start); // FF fix
+		    }
+		    var length = anObject(this).byteLength;
+		    var first = toAbsoluteIndex(start, length);
+		    var fin = toAbsoluteIndex(end === undefined ? length : end, length);
+		    var result = new ArrayBuffer(toLength(fin - first));
+		    var viewSource = new DataView(this);
+		    var viewTarget = new DataView(result);
+		    var index = 0;
+		    while (first < fin) {
+		      setUint8(viewTarget, index++, getUint8(viewSource, first++));
+		    } return result;
+		  }
+		});
+		return es_arrayBuffer_slice;
+	}
+
+	requireEs_arrayBuffer_slice();
+
+	var es_object_assign = {};
 
 	var objectAssign;
 	var hasRequiredObjectAssign;
@@ -3313,53 +4814,6 @@
 	requireEs_object_assign();
 
 	var es_object_entries = {};
-
-	var correctPrototypeGetter;
-	var hasRequiredCorrectPrototypeGetter;
-
-	function requireCorrectPrototypeGetter () {
-		if (hasRequiredCorrectPrototypeGetter) return correctPrototypeGetter;
-		hasRequiredCorrectPrototypeGetter = 1;
-		var fails = requireFails();
-
-		correctPrototypeGetter = !fails(function () {
-		  function F() { /* empty */ }
-		  F.prototype.constructor = null;
-		  // eslint-disable-next-line es/no-object-getprototypeof -- required for testing
-		  return Object.getPrototypeOf(new F()) !== F.prototype;
-		});
-		return correctPrototypeGetter;
-	}
-
-	var objectGetPrototypeOf;
-	var hasRequiredObjectGetPrototypeOf;
-
-	function requireObjectGetPrototypeOf () {
-		if (hasRequiredObjectGetPrototypeOf) return objectGetPrototypeOf;
-		hasRequiredObjectGetPrototypeOf = 1;
-		var hasOwn = requireHasOwnProperty();
-		var isCallable = requireIsCallable();
-		var toObject = requireToObject();
-		var sharedKey = requireSharedKey();
-		var CORRECT_PROTOTYPE_GETTER = requireCorrectPrototypeGetter();
-
-		var IE_PROTO = sharedKey('IE_PROTO');
-		var $Object = Object;
-		var ObjectPrototype = $Object.prototype;
-
-		// `Object.getPrototypeOf` method
-		// https://tc39.es/ecma262/#sec-object.getprototypeof
-		// eslint-disable-next-line es/no-object-getprototypeof -- safe
-		objectGetPrototypeOf = CORRECT_PROTOTYPE_GETTER ? $Object.getPrototypeOf : function (O) {
-		  var object = toObject(O);
-		  if (hasOwn(object, IE_PROTO)) return object[IE_PROTO];
-		  var constructor = object.constructor;
-		  if (isCallable(constructor) && object instanceof constructor) {
-		    return constructor.prototype;
-		  } return object instanceof $Object ? ObjectPrototype : null;
-		};
-		return objectGetPrototypeOf;
-	}
 
 	var objectToArray;
 	var hasRequiredObjectToArray;
@@ -3521,131 +4975,6 @@
 		return path;
 	}
 
-	var functionUncurryThisAccessor;
-	var hasRequiredFunctionUncurryThisAccessor;
-
-	function requireFunctionUncurryThisAccessor () {
-		if (hasRequiredFunctionUncurryThisAccessor) return functionUncurryThisAccessor;
-		hasRequiredFunctionUncurryThisAccessor = 1;
-		var uncurryThis = requireFunctionUncurryThis();
-		var aCallable = requireACallable();
-
-		functionUncurryThisAccessor = function (object, key, method) {
-		  try {
-		    // eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
-		    return uncurryThis(aCallable(Object.getOwnPropertyDescriptor(object, key)[method]));
-		  } catch (error) { /* empty */ }
-		};
-		return functionUncurryThisAccessor;
-	}
-
-	var isPossiblePrototype;
-	var hasRequiredIsPossiblePrototype;
-
-	function requireIsPossiblePrototype () {
-		if (hasRequiredIsPossiblePrototype) return isPossiblePrototype;
-		hasRequiredIsPossiblePrototype = 1;
-		var isObject = requireIsObject();
-
-		isPossiblePrototype = function (argument) {
-		  return isObject(argument) || argument === null;
-		};
-		return isPossiblePrototype;
-	}
-
-	var aPossiblePrototype;
-	var hasRequiredAPossiblePrototype;
-
-	function requireAPossiblePrototype () {
-		if (hasRequiredAPossiblePrototype) return aPossiblePrototype;
-		hasRequiredAPossiblePrototype = 1;
-		var isPossiblePrototype = requireIsPossiblePrototype();
-
-		var $String = String;
-		var $TypeError = TypeError;
-
-		aPossiblePrototype = function (argument) {
-		  if (isPossiblePrototype(argument)) return argument;
-		  throw new $TypeError("Can't set " + $String(argument) + ' as a prototype');
-		};
-		return aPossiblePrototype;
-	}
-
-	var objectSetPrototypeOf;
-	var hasRequiredObjectSetPrototypeOf;
-
-	function requireObjectSetPrototypeOf () {
-		if (hasRequiredObjectSetPrototypeOf) return objectSetPrototypeOf;
-		hasRequiredObjectSetPrototypeOf = 1;
-		/* eslint-disable no-proto -- safe */
-		var uncurryThisAccessor = requireFunctionUncurryThisAccessor();
-		var isObject = requireIsObject();
-		var requireObjectCoercible = requireRequireObjectCoercible();
-		var aPossiblePrototype = requireAPossiblePrototype();
-
-		// `Object.setPrototypeOf` method
-		// https://tc39.es/ecma262/#sec-object.setprototypeof
-		// Works with __proto__ only. Old v8 can't work with null proto objects.
-		// eslint-disable-next-line es/no-object-setprototypeof -- safe
-		objectSetPrototypeOf = Object.setPrototypeOf || ('__proto__' in {} ? function () {
-		  var CORRECT_SETTER = false;
-		  var test = {};
-		  var setter;
-		  try {
-		    setter = uncurryThisAccessor(Object.prototype, '__proto__', 'set');
-		    setter(test, []);
-		    CORRECT_SETTER = test instanceof Array;
-		  } catch (error) { /* empty */ }
-		  return function setPrototypeOf(O, proto) {
-		    requireObjectCoercible(O);
-		    aPossiblePrototype(proto);
-		    if (!isObject(O)) return O;
-		    if (CORRECT_SETTER) setter(O, proto);
-		    else O.__proto__ = proto;
-		    return O;
-		  };
-		}() : undefined);
-		return objectSetPrototypeOf;
-	}
-
-	var setToStringTag;
-	var hasRequiredSetToStringTag;
-
-	function requireSetToStringTag () {
-		if (hasRequiredSetToStringTag) return setToStringTag;
-		hasRequiredSetToStringTag = 1;
-		var defineProperty = requireObjectDefineProperty().f;
-		var hasOwn = requireHasOwnProperty();
-		var wellKnownSymbol = requireWellKnownSymbol();
-
-		var TO_STRING_TAG = wellKnownSymbol('toStringTag');
-
-		setToStringTag = function (target, TAG, STATIC) {
-		  if (target && !STATIC) target = target.prototype;
-		  if (target && !hasOwn(target, TO_STRING_TAG)) {
-		    defineProperty(target, TO_STRING_TAG, { configurable: true, value: TAG });
-		  }
-		};
-		return setToStringTag;
-	}
-
-	var defineBuiltInAccessor;
-	var hasRequiredDefineBuiltInAccessor;
-
-	function requireDefineBuiltInAccessor () {
-		if (hasRequiredDefineBuiltInAccessor) return defineBuiltInAccessor;
-		hasRequiredDefineBuiltInAccessor = 1;
-		var makeBuiltIn = requireMakeBuiltIn();
-		var defineProperty = requireObjectDefineProperty();
-
-		defineBuiltInAccessor = function (target, name, descriptor) {
-		  if (descriptor.get) makeBuiltIn(descriptor.get, name, { getter: true });
-		  if (descriptor.set) makeBuiltIn(descriptor.set, name, { setter: true });
-		  return defineProperty.f(target, name, descriptor);
-		};
-		return defineBuiltInAccessor;
-	}
-
 	var setSpecies;
 	var hasRequiredSetSpecies;
 
@@ -3670,23 +4999,6 @@
 		  }
 		};
 		return setSpecies;
-	}
-
-	var anInstance;
-	var hasRequiredAnInstance;
-
-	function requireAnInstance () {
-		if (hasRequiredAnInstance) return anInstance;
-		hasRequiredAnInstance = 1;
-		var isPrototypeOf = requireObjectIsPrototypeOf();
-
-		var $TypeError = TypeError;
-
-		anInstance = function (it, Prototype) {
-		  if (isPrototypeOf(Prototype, it)) return it;
-		  throw new $TypeError('Incorrect invocation');
-		};
-		return anInstance;
 	}
 
 	var aConstructor;
@@ -3748,18 +5060,6 @@
 		  return call.apply(apply, arguments);
 		});
 		return functionApply;
-	}
-
-	var html;
-	var hasRequiredHtml;
-
-	function requireHtml () {
-		if (hasRequiredHtml) return html;
-		hasRequiredHtml = 1;
-		var getBuiltIn = requireGetBuiltIn();
-
-		html = getBuiltIn('document', 'documentElement');
-		return html;
 	}
 
 	var validateArgumentsLength;
@@ -4509,111 +5809,6 @@
 
 	var es_promise_all = {};
 
-	var iterators;
-	var hasRequiredIterators;
-
-	function requireIterators () {
-		if (hasRequiredIterators) return iterators;
-		hasRequiredIterators = 1;
-		iterators = {};
-		return iterators;
-	}
-
-	var isArrayIteratorMethod;
-	var hasRequiredIsArrayIteratorMethod;
-
-	function requireIsArrayIteratorMethod () {
-		if (hasRequiredIsArrayIteratorMethod) return isArrayIteratorMethod;
-		hasRequiredIsArrayIteratorMethod = 1;
-		var wellKnownSymbol = requireWellKnownSymbol();
-		var Iterators = requireIterators();
-
-		var ITERATOR = wellKnownSymbol('iterator');
-		var ArrayPrototype = Array.prototype;
-
-		// check on default Array iterator
-		isArrayIteratorMethod = function (it) {
-		  return it !== undefined && (Iterators.Array === it || ArrayPrototype[ITERATOR] === it);
-		};
-		return isArrayIteratorMethod;
-	}
-
-	var getIteratorMethod;
-	var hasRequiredGetIteratorMethod;
-
-	function requireGetIteratorMethod () {
-		if (hasRequiredGetIteratorMethod) return getIteratorMethod;
-		hasRequiredGetIteratorMethod = 1;
-		var classof = requireClassof();
-		var getMethod = requireGetMethod();
-		var isNullOrUndefined = requireIsNullOrUndefined();
-		var Iterators = requireIterators();
-		var wellKnownSymbol = requireWellKnownSymbol();
-
-		var ITERATOR = wellKnownSymbol('iterator');
-
-		getIteratorMethod = function (it) {
-		  if (!isNullOrUndefined(it)) return getMethod(it, ITERATOR)
-		    || getMethod(it, '@@iterator')
-		    || Iterators[classof(it)];
-		};
-		return getIteratorMethod;
-	}
-
-	var getIterator;
-	var hasRequiredGetIterator;
-
-	function requireGetIterator () {
-		if (hasRequiredGetIterator) return getIterator;
-		hasRequiredGetIterator = 1;
-		var call = requireFunctionCall();
-		var aCallable = requireACallable();
-		var anObject = requireAnObject();
-		var tryToString = requireTryToString();
-		var getIteratorMethod = requireGetIteratorMethod();
-
-		var $TypeError = TypeError;
-
-		getIterator = function (argument, usingIterator) {
-		  var iteratorMethod = arguments.length < 2 ? getIteratorMethod(argument) : usingIterator;
-		  if (aCallable(iteratorMethod)) return anObject(call(iteratorMethod, argument));
-		  throw new $TypeError(tryToString(argument) + ' is not iterable');
-		};
-		return getIterator;
-	}
-
-	var iteratorClose;
-	var hasRequiredIteratorClose;
-
-	function requireIteratorClose () {
-		if (hasRequiredIteratorClose) return iteratorClose;
-		hasRequiredIteratorClose = 1;
-		var call = requireFunctionCall();
-		var anObject = requireAnObject();
-		var getMethod = requireGetMethod();
-
-		iteratorClose = function (iterator, kind, value) {
-		  var innerResult, innerError;
-		  anObject(iterator);
-		  try {
-		    innerResult = getMethod(iterator, 'return');
-		    if (!innerResult) {
-		      if (kind === 'throw') throw value;
-		      return value;
-		    }
-		    innerResult = call(innerResult, iterator);
-		  } catch (error) {
-		    innerError = true;
-		    innerResult = error;
-		  }
-		  if (kind === 'throw') throw value;
-		  if (innerError) throw innerResult;
-		  anObject(innerResult);
-		  return value;
-		};
-		return iteratorClose;
-	}
-
 	var iterate;
 	var hasRequiredIterate;
 
@@ -4694,57 +5889,6 @@
 		  } return new Result(false);
 		};
 		return iterate;
-	}
-
-	var checkCorrectnessOfIteration;
-	var hasRequiredCheckCorrectnessOfIteration;
-
-	function requireCheckCorrectnessOfIteration () {
-		if (hasRequiredCheckCorrectnessOfIteration) return checkCorrectnessOfIteration;
-		hasRequiredCheckCorrectnessOfIteration = 1;
-		var wellKnownSymbol = requireWellKnownSymbol();
-
-		var ITERATOR = wellKnownSymbol('iterator');
-		var SAFE_CLOSING = false;
-
-		try {
-		  var called = 0;
-		  var iteratorWithReturn = {
-		    next: function () {
-		      return { done: !!called++ };
-		    },
-		    'return': function () {
-		      SAFE_CLOSING = true;
-		    }
-		  };
-		  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
-		  iteratorWithReturn[ITERATOR] = function () {
-		    return this;
-		  };
-		  // eslint-disable-next-line es/no-array-from, no-throw-literal -- required for testing
-		  Array.from(iteratorWithReturn, function () { throw 2; });
-		} catch (error) { /* empty */ }
-
-		checkCorrectnessOfIteration = function (exec, SKIP_CLOSING) {
-		  try {
-		    if (!SKIP_CLOSING && !SAFE_CLOSING) return false;
-		  } catch (error) { return false; } // workaround of old WebKit + `eval` bug
-		  var ITERATION_SUPPORT = false;
-		  try {
-		    var object = {};
-		    // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
-		    object[ITERATOR] = function () {
-		      return {
-		        next: function () {
-		          return { done: ITERATION_SUPPORT = true };
-		        }
-		      };
-		    };
-		    exec(object);
-		  } catch (error) { /* empty */ }
-		  return ITERATION_SUPPORT;
-		};
-		return checkCorrectnessOfIteration;
 	}
 
 	var promiseStaticsIncorrectIteration;
@@ -5033,129 +6177,6 @@
 		  UNSUPPORTED_Y: UNSUPPORTED_Y
 		};
 		return regexpStickyHelpers;
-	}
-
-	var objectDefineProperties = {};
-
-	var hasRequiredObjectDefineProperties;
-
-	function requireObjectDefineProperties () {
-		if (hasRequiredObjectDefineProperties) return objectDefineProperties;
-		hasRequiredObjectDefineProperties = 1;
-		var DESCRIPTORS = requireDescriptors();
-		var V8_PROTOTYPE_DEFINE_BUG = requireV8PrototypeDefineBug();
-		var definePropertyModule = requireObjectDefineProperty();
-		var anObject = requireAnObject();
-		var toIndexedObject = requireToIndexedObject();
-		var objectKeys = requireObjectKeys();
-
-		// `Object.defineProperties` method
-		// https://tc39.es/ecma262/#sec-object.defineproperties
-		// eslint-disable-next-line es/no-object-defineproperties -- safe
-		objectDefineProperties.f = DESCRIPTORS && !V8_PROTOTYPE_DEFINE_BUG ? Object.defineProperties : function defineProperties(O, Properties) {
-		  anObject(O);
-		  var props = toIndexedObject(Properties);
-		  var keys = objectKeys(Properties);
-		  var length = keys.length;
-		  var index = 0;
-		  var key;
-		  while (length > index) definePropertyModule.f(O, key = keys[index++], props[key]);
-		  return O;
-		};
-		return objectDefineProperties;
-	}
-
-	var objectCreate;
-	var hasRequiredObjectCreate;
-
-	function requireObjectCreate () {
-		if (hasRequiredObjectCreate) return objectCreate;
-		hasRequiredObjectCreate = 1;
-		/* global ActiveXObject -- old IE, WSH */
-		var anObject = requireAnObject();
-		var definePropertiesModule = requireObjectDefineProperties();
-		var enumBugKeys = requireEnumBugKeys();
-		var hiddenKeys = requireHiddenKeys();
-		var html = requireHtml();
-		var documentCreateElement = requireDocumentCreateElement();
-		var sharedKey = requireSharedKey();
-
-		var GT = '>';
-		var LT = '<';
-		var PROTOTYPE = 'prototype';
-		var SCRIPT = 'script';
-		var IE_PROTO = sharedKey('IE_PROTO');
-
-		var EmptyConstructor = function () { /* empty */ };
-
-		var scriptTag = function (content) {
-		  return LT + SCRIPT + GT + content + LT + '/' + SCRIPT + GT;
-		};
-
-		// Create object with fake `null` prototype: use ActiveX Object with cleared prototype
-		var NullProtoObjectViaActiveX = function (activeXDocument) {
-		  activeXDocument.write(scriptTag(''));
-		  activeXDocument.close();
-		  var temp = activeXDocument.parentWindow.Object;
-		  // eslint-disable-next-line no-useless-assignment -- avoid memory leak
-		  activeXDocument = null;
-		  return temp;
-		};
-
-		// Create object with fake `null` prototype: use iframe Object with cleared prototype
-		var NullProtoObjectViaIFrame = function () {
-		  // Thrash, waste and sodomy: IE GC bug
-		  var iframe = documentCreateElement('iframe');
-		  var JS = 'java' + SCRIPT + ':';
-		  var iframeDocument;
-		  iframe.style.display = 'none';
-		  html.appendChild(iframe);
-		  // https://github.com/zloirock/core-js/issues/475
-		  iframe.src = String(JS);
-		  iframeDocument = iframe.contentWindow.document;
-		  iframeDocument.open();
-		  iframeDocument.write(scriptTag('document.F=Object'));
-		  iframeDocument.close();
-		  return iframeDocument.F;
-		};
-
-		// Check for document.domain and active x support
-		// No need to use active x approach when document.domain is not set
-		// see https://github.com/es-shims/es5-shim/issues/150
-		// variation of https://github.com/kitcambridge/es5-shim/commit/4f738ac066346
-		// avoid IE GC bug
-		var activeXDocument;
-		var NullProtoObject = function () {
-		  try {
-		    activeXDocument = new ActiveXObject('htmlfile');
-		  } catch (error) { /* ignore */ }
-		  NullProtoObject = typeof document != 'undefined'
-		    ? document.domain && activeXDocument
-		      ? NullProtoObjectViaActiveX(activeXDocument) // old IE
-		      : NullProtoObjectViaIFrame()
-		    : NullProtoObjectViaActiveX(activeXDocument); // WSH
-		  var length = enumBugKeys.length;
-		  while (length--) delete NullProtoObject[PROTOTYPE][enumBugKeys[length]];
-		  return NullProtoObject();
-		};
-
-		hiddenKeys[IE_PROTO] = true;
-
-		// `Object.create` method
-		// https://tc39.es/ecma262/#sec-object.create
-		// eslint-disable-next-line es/no-object-create -- safe
-		objectCreate = Object.create || function create(O, Properties) {
-		  var result;
-		  if (O !== null) {
-		    EmptyConstructor[PROTOTYPE] = anObject(O);
-		    result = new EmptyConstructor();
-		    EmptyConstructor[PROTOTYPE] = null;
-		    // add "__proto__" for Object.getPrototypeOf polyfill
-		    result[IE_PROTO] = O;
-		  } else result = NullProtoObject();
-		  return Properties === undefined ? result : definePropertiesModule.f(result, Properties);
-		};
-		return objectCreate;
 	}
 
 	var regexpUnsupportedDotAll;
@@ -5463,6 +6484,199 @@
 
 	requireEs_regexp_toString();
 
+	var es_string_iterator = {};
+
+	var stringMultibyte;
+	var hasRequiredStringMultibyte;
+
+	function requireStringMultibyte () {
+		if (hasRequiredStringMultibyte) return stringMultibyte;
+		hasRequiredStringMultibyte = 1;
+		var uncurryThis = requireFunctionUncurryThis();
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+		var toString = requireToString();
+		var requireObjectCoercible = requireRequireObjectCoercible();
+
+		var charAt = uncurryThis(''.charAt);
+		var charCodeAt = uncurryThis(''.charCodeAt);
+		var stringSlice = uncurryThis(''.slice);
+
+		var createMethod = function (CONVERT_TO_STRING) {
+		  return function ($this, pos) {
+		    var S = toString(requireObjectCoercible($this));
+		    var position = toIntegerOrInfinity(pos);
+		    var size = S.length;
+		    var first, second;
+		    if (position < 0 || position >= size) return CONVERT_TO_STRING ? '' : undefined;
+		    first = charCodeAt(S, position);
+		    return first < 0xD800 || first > 0xDBFF || position + 1 === size
+		      || (second = charCodeAt(S, position + 1)) < 0xDC00 || second > 0xDFFF
+		        ? CONVERT_TO_STRING
+		          ? charAt(S, position)
+		          : first
+		        : CONVERT_TO_STRING
+		          ? stringSlice(S, position, position + 2)
+		          : (first - 0xD800 << 10) + (second - 0xDC00) + 0x10000;
+		  };
+		};
+
+		stringMultibyte = {
+		  // `String.prototype.codePointAt` method
+		  // https://tc39.es/ecma262/#sec-string.prototype.codepointat
+		  codeAt: createMethod(false),
+		  // `String.prototype.at` method
+		  // https://github.com/mathiasbynens/String.prototype.at
+		  charAt: createMethod(true)
+		};
+		return stringMultibyte;
+	}
+
+	var hasRequiredEs_string_iterator;
+
+	function requireEs_string_iterator () {
+		if (hasRequiredEs_string_iterator) return es_string_iterator;
+		hasRequiredEs_string_iterator = 1;
+		var charAt = requireStringMultibyte().charAt;
+		var toString = requireToString();
+		var InternalStateModule = requireInternalState();
+		var defineIterator = requireIteratorDefine();
+		var createIterResultObject = requireCreateIterResultObject();
+
+		var STRING_ITERATOR = 'String Iterator';
+		var setInternalState = InternalStateModule.set;
+		var getInternalState = InternalStateModule.getterFor(STRING_ITERATOR);
+
+		// `String.prototype[@@iterator]` method
+		// https://tc39.es/ecma262/#sec-string.prototype-@@iterator
+		defineIterator(String, 'String', function (iterated) {
+		  setInternalState(this, {
+		    type: STRING_ITERATOR,
+		    string: toString(iterated),
+		    index: 0
+		  });
+		// `%StringIteratorPrototype%.next` method
+		// https://tc39.es/ecma262/#sec-%stringiteratorprototype%.next
+		}, function next() {
+		  var state = getInternalState(this);
+		  var string = state.string;
+		  var index = state.index;
+		  var point;
+		  if (index >= string.length) return createIterResultObject(undefined, true);
+		  point = charAt(string, index);
+		  state.index += point.length;
+		  return createIterResultObject(point, false);
+		});
+		return es_string_iterator;
+	}
+
+	requireEs_string_iterator();
+
+	var es_string_padStart = {};
+
+	var stringRepeat;
+	var hasRequiredStringRepeat;
+
+	function requireStringRepeat () {
+		if (hasRequiredStringRepeat) return stringRepeat;
+		hasRequiredStringRepeat = 1;
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+		var toString = requireToString();
+		var requireObjectCoercible = requireRequireObjectCoercible();
+
+		var $RangeError = RangeError;
+		var floor = Math.floor;
+
+		// `String.prototype.repeat` method implementation
+		// https://tc39.es/ecma262/#sec-string.prototype.repeat
+		stringRepeat = function repeat(count) {
+		  var str = toString(requireObjectCoercible(this));
+		  var result = '';
+		  var n = toIntegerOrInfinity(count);
+		  if (n < 0 || n === Infinity) throw new $RangeError('Wrong number of repetitions');
+		  for (;n > 0; (n = floor(n / 2)) && (str += str)) if (n % 2) result += str;
+		  return result;
+		};
+		return stringRepeat;
+	}
+
+	var stringPad;
+	var hasRequiredStringPad;
+
+	function requireStringPad () {
+		if (hasRequiredStringPad) return stringPad;
+		hasRequiredStringPad = 1;
+		var uncurryThis = requireFunctionUncurryThis();
+		var toLength = requireToLength();
+		var toString = requireToString();
+		var $repeat = requireStringRepeat();
+		var requireObjectCoercible = requireRequireObjectCoercible();
+
+		var repeat = uncurryThis($repeat);
+		var stringSlice = uncurryThis(''.slice);
+		var ceil = Math.ceil;
+
+		// `String.prototype.{ padStart, padEnd }` methods implementation
+		var createMethod = function (IS_END) {
+		  return function ($this, maxLength, fillString) {
+		    var S = toString(requireObjectCoercible($this));
+		    var intMaxLength = toLength(maxLength);
+		    var stringLength = S.length;
+		    if (intMaxLength <= stringLength) return S;
+		    var fillStr = fillString === undefined ? ' ' : toString(fillString);
+		    var fillLen, stringFiller;
+		    if (fillStr === '') return S;
+		    fillLen = intMaxLength - stringLength;
+		    stringFiller = repeat(fillStr, ceil(fillLen / fillStr.length));
+		    if (stringFiller.length > fillLen) stringFiller = stringSlice(stringFiller, 0, fillLen);
+		    return IS_END ? S + stringFiller : stringFiller + S;
+		  };
+		};
+
+		stringPad = {
+		  // `String.prototype.padStart` method
+		  // https://tc39.es/ecma262/#sec-string.prototype.padstart
+		  start: createMethod(false),
+		  // `String.prototype.padEnd` method
+		  // https://tc39.es/ecma262/#sec-string.prototype.padend
+		  end: createMethod(true)
+		};
+		return stringPad;
+	}
+
+	var stringPadWebkitBug;
+	var hasRequiredStringPadWebkitBug;
+
+	function requireStringPadWebkitBug () {
+		if (hasRequiredStringPadWebkitBug) return stringPadWebkitBug;
+		hasRequiredStringPadWebkitBug = 1;
+		// https://github.com/zloirock/core-js/issues/280
+		var userAgent = requireEnvironmentUserAgent();
+
+		stringPadWebkitBug = /Version\/10(?:\.\d+){1,2}(?: [\w./]+)?(?: Mobile\/\w+)? Safari\//.test(userAgent);
+		return stringPadWebkitBug;
+	}
+
+	var hasRequiredEs_string_padStart;
+
+	function requireEs_string_padStart () {
+		if (hasRequiredEs_string_padStart) return es_string_padStart;
+		hasRequiredEs_string_padStart = 1;
+		var $ = require_export();
+		var $padStart = requireStringPad().start;
+		var WEBKIT_BUG = requireStringPadWebkitBug();
+
+		// `String.prototype.padStart` method
+		// https://tc39.es/ecma262/#sec-string.prototype.padstart
+		$({ target: 'String', proto: true, forced: WEBKIT_BUG }, {
+		  padStart: function padStart(maxLength /* , fillString = ' ' */) {
+		    return $padStart(this, maxLength, arguments.length > 1 ? arguments[1] : undefined);
+		  }
+		});
+		return es_string_padStart;
+	}
+
+	requireEs_string_padStart();
+
 	var es_string_replace = {};
 
 	var fixRegexpWellKnownSymbolLogic;
@@ -5549,51 +6763,6 @@
 		  if (SHAM) createNonEnumerableProperty(RegExpPrototype[SYMBOL], 'sham', true);
 		};
 		return fixRegexpWellKnownSymbolLogic;
-	}
-
-	var stringMultibyte;
-	var hasRequiredStringMultibyte;
-
-	function requireStringMultibyte () {
-		if (hasRequiredStringMultibyte) return stringMultibyte;
-		hasRequiredStringMultibyte = 1;
-		var uncurryThis = requireFunctionUncurryThis();
-		var toIntegerOrInfinity = requireToIntegerOrInfinity();
-		var toString = requireToString();
-		var requireObjectCoercible = requireRequireObjectCoercible();
-
-		var charAt = uncurryThis(''.charAt);
-		var charCodeAt = uncurryThis(''.charCodeAt);
-		var stringSlice = uncurryThis(''.slice);
-
-		var createMethod = function (CONVERT_TO_STRING) {
-		  return function ($this, pos) {
-		    var S = toString(requireObjectCoercible($this));
-		    var position = toIntegerOrInfinity(pos);
-		    var size = S.length;
-		    var first, second;
-		    if (position < 0 || position >= size) return CONVERT_TO_STRING ? '' : undefined;
-		    first = charCodeAt(S, position);
-		    return first < 0xD800 || first > 0xDBFF || position + 1 === size
-		      || (second = charCodeAt(S, position + 1)) < 0xDC00 || second > 0xDFFF
-		        ? CONVERT_TO_STRING
-		          ? charAt(S, position)
-		          : first
-		        : CONVERT_TO_STRING
-		          ? stringSlice(S, position, position + 2)
-		          : (first - 0xD800 << 10) + (second - 0xDC00) + 0x10000;
-		  };
-		};
-
-		stringMultibyte = {
-		  // `String.prototype.codePointAt` method
-		  // https://tc39.es/ecma262/#sec-string.prototype.codepointat
-		  codeAt: createMethod(false),
-		  // `String.prototype.at` method
-		  // https://github.com/mathiasbynens/String.prototype.at
-		  charAt: createMethod(true)
-		};
-		return stringMultibyte;
 	}
 
 	var advanceStringIndex;
@@ -5848,6 +7017,1631 @@
 	}
 
 	requireEs_string_replace();
+
+	var es_typedArray_uint8Array = {};
+
+	var typedArrayConstructor = {exports: {}};
+
+	var arrayBufferViewCore;
+	var hasRequiredArrayBufferViewCore;
+
+	function requireArrayBufferViewCore () {
+		if (hasRequiredArrayBufferViewCore) return arrayBufferViewCore;
+		hasRequiredArrayBufferViewCore = 1;
+		var NATIVE_ARRAY_BUFFER = requireArrayBufferBasicDetection();
+		var DESCRIPTORS = requireDescriptors();
+		var globalThis = requireGlobalThis();
+		var isCallable = requireIsCallable();
+		var isObject = requireIsObject();
+		var hasOwn = requireHasOwnProperty();
+		var classof = requireClassof();
+		var tryToString = requireTryToString();
+		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
+		var defineBuiltIn = requireDefineBuiltIn();
+		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+		var isPrototypeOf = requireObjectIsPrototypeOf();
+		var getPrototypeOf = requireObjectGetPrototypeOf();
+		var setPrototypeOf = requireObjectSetPrototypeOf();
+		var wellKnownSymbol = requireWellKnownSymbol();
+		var uid = requireUid();
+		var InternalStateModule = requireInternalState();
+
+		var enforceInternalState = InternalStateModule.enforce;
+		var getInternalState = InternalStateModule.get;
+		var Int8Array = globalThis.Int8Array;
+		var Int8ArrayPrototype = Int8Array && Int8Array.prototype;
+		var Uint8ClampedArray = globalThis.Uint8ClampedArray;
+		var Uint8ClampedArrayPrototype = Uint8ClampedArray && Uint8ClampedArray.prototype;
+		var TypedArray = Int8Array && getPrototypeOf(Int8Array);
+		var TypedArrayPrototype = Int8ArrayPrototype && getPrototypeOf(Int8ArrayPrototype);
+		var ObjectPrototype = Object.prototype;
+		var TypeError = globalThis.TypeError;
+
+		var TO_STRING_TAG = wellKnownSymbol('toStringTag');
+		var TYPED_ARRAY_TAG = uid('TYPED_ARRAY_TAG');
+		var TYPED_ARRAY_CONSTRUCTOR = 'TypedArrayConstructor';
+		// Fixing native typed arrays in Opera Presto crashes the browser, see #595
+		var NATIVE_ARRAY_BUFFER_VIEWS = NATIVE_ARRAY_BUFFER && !!setPrototypeOf && classof(globalThis.opera) !== 'Opera';
+		var TYPED_ARRAY_TAG_REQUIRED = false;
+		var NAME, Constructor, Prototype;
+
+		var TypedArrayConstructorsList = {
+		  Int8Array: 1,
+		  Uint8Array: 1,
+		  Uint8ClampedArray: 1,
+		  Int16Array: 2,
+		  Uint16Array: 2,
+		  Int32Array: 4,
+		  Uint32Array: 4,
+		  Float32Array: 4,
+		  Float64Array: 8
+		};
+
+		var BigIntArrayConstructorsList = {
+		  BigInt64Array: 8,
+		  BigUint64Array: 8
+		};
+
+		var isView = function isView(it) {
+		  if (!isObject(it)) return false;
+		  var klass = classof(it);
+		  return klass === 'DataView'
+		    || hasOwn(TypedArrayConstructorsList, klass)
+		    || hasOwn(BigIntArrayConstructorsList, klass);
+		};
+
+		var getTypedArrayConstructor = function (it) {
+		  var proto = getPrototypeOf(it);
+		  if (!isObject(proto)) return;
+		  var state = getInternalState(proto);
+		  return (state && hasOwn(state, TYPED_ARRAY_CONSTRUCTOR)) ? state[TYPED_ARRAY_CONSTRUCTOR] : getTypedArrayConstructor(proto);
+		};
+
+		var isTypedArray = function (it) {
+		  if (!isObject(it)) return false;
+		  var klass = classof(it);
+		  return hasOwn(TypedArrayConstructorsList, klass)
+		    || hasOwn(BigIntArrayConstructorsList, klass);
+		};
+
+		var aTypedArray = function (it) {
+		  if (isTypedArray(it)) return it;
+		  throw new TypeError('Target is not a typed array');
+		};
+
+		var aTypedArrayConstructor = function (C) {
+		  if (isCallable(C) && (!setPrototypeOf || isPrototypeOf(TypedArray, C))) return C;
+		  throw new TypeError(tryToString(C) + ' is not a typed array constructor');
+		};
+
+		var exportTypedArrayMethod = function (KEY, property, forced, options) {
+		  if (!DESCRIPTORS) return;
+		  if (forced) for (var ARRAY in TypedArrayConstructorsList) {
+		    var TypedArrayConstructor = globalThis[ARRAY];
+		    if (TypedArrayConstructor && hasOwn(TypedArrayConstructor.prototype, KEY)) try {
+		      delete TypedArrayConstructor.prototype[KEY];
+		    } catch (error) {
+		      // old WebKit bug - some methods are non-configurable
+		      try {
+		        TypedArrayConstructor.prototype[KEY] = property;
+		      } catch (error2) { /* empty */ }
+		    }
+		  }
+		  if (!TypedArrayPrototype[KEY] || forced) {
+		    defineBuiltIn(TypedArrayPrototype, KEY, forced ? property
+		      : NATIVE_ARRAY_BUFFER_VIEWS && Int8ArrayPrototype[KEY] || property, options);
+		  }
+		};
+
+		var exportTypedArrayStaticMethod = function (KEY, property, forced) {
+		  var ARRAY, TypedArrayConstructor;
+		  if (!DESCRIPTORS) return;
+		  if (setPrototypeOf) {
+		    if (forced) for (ARRAY in TypedArrayConstructorsList) {
+		      TypedArrayConstructor = globalThis[ARRAY];
+		      if (TypedArrayConstructor && hasOwn(TypedArrayConstructor, KEY)) try {
+		        delete TypedArrayConstructor[KEY];
+		      } catch (error) { /* empty */ }
+		    }
+		    if (!TypedArray[KEY] || forced) {
+		      // V8 ~ Chrome 49-50 `%TypedArray%` methods are non-writable non-configurable
+		      try {
+		        return defineBuiltIn(TypedArray, KEY, forced ? property : NATIVE_ARRAY_BUFFER_VIEWS && TypedArray[KEY] || property);
+		      } catch (error) { /* empty */ }
+		    } else return;
+		  }
+		  for (ARRAY in TypedArrayConstructorsList) {
+		    TypedArrayConstructor = globalThis[ARRAY];
+		    if (TypedArrayConstructor && (!TypedArrayConstructor[KEY] || forced)) {
+		      defineBuiltIn(TypedArrayConstructor, KEY, property);
+		    }
+		  }
+		};
+
+		for (NAME in TypedArrayConstructorsList) {
+		  Constructor = globalThis[NAME];
+		  Prototype = Constructor && Constructor.prototype;
+		  if (Prototype) enforceInternalState(Prototype)[TYPED_ARRAY_CONSTRUCTOR] = Constructor;
+		  else NATIVE_ARRAY_BUFFER_VIEWS = false;
+		}
+
+		for (NAME in BigIntArrayConstructorsList) {
+		  Constructor = globalThis[NAME];
+		  Prototype = Constructor && Constructor.prototype;
+		  if (Prototype) enforceInternalState(Prototype)[TYPED_ARRAY_CONSTRUCTOR] = Constructor;
+		}
+
+		// WebKit bug - typed arrays constructors prototype is Object.prototype
+		if (!NATIVE_ARRAY_BUFFER_VIEWS || !isCallable(TypedArray) || TypedArray === Function.prototype) {
+		  // eslint-disable-next-line no-shadow -- safe
+		  TypedArray = function TypedArray() {
+		    throw new TypeError('Incorrect invocation');
+		  };
+		  if (NATIVE_ARRAY_BUFFER_VIEWS) for (NAME in TypedArrayConstructorsList) {
+		    if (globalThis[NAME]) setPrototypeOf(globalThis[NAME], TypedArray);
+		  }
+		}
+
+		if (!NATIVE_ARRAY_BUFFER_VIEWS || !TypedArrayPrototype || TypedArrayPrototype === ObjectPrototype) {
+		  TypedArrayPrototype = TypedArray.prototype;
+		  if (NATIVE_ARRAY_BUFFER_VIEWS) for (NAME in TypedArrayConstructorsList) {
+		    if (globalThis[NAME]) setPrototypeOf(globalThis[NAME].prototype, TypedArrayPrototype);
+		  }
+		}
+
+		// WebKit bug - one more object in Uint8ClampedArray prototype chain
+		if (NATIVE_ARRAY_BUFFER_VIEWS && getPrototypeOf(Uint8ClampedArrayPrototype) !== TypedArrayPrototype) {
+		  setPrototypeOf(Uint8ClampedArrayPrototype, TypedArrayPrototype);
+		}
+
+		if (DESCRIPTORS && !hasOwn(TypedArrayPrototype, TO_STRING_TAG)) {
+		  TYPED_ARRAY_TAG_REQUIRED = true;
+		  defineBuiltInAccessor(TypedArrayPrototype, TO_STRING_TAG, {
+		    configurable: true,
+		    get: function () {
+		      return isObject(this) ? this[TYPED_ARRAY_TAG] : undefined;
+		    }
+		  });
+		  for (NAME in TypedArrayConstructorsList) if (globalThis[NAME]) {
+		    createNonEnumerableProperty(globalThis[NAME].prototype, TYPED_ARRAY_TAG, NAME);
+		  }
+		}
+
+		arrayBufferViewCore = {
+		  NATIVE_ARRAY_BUFFER_VIEWS: NATIVE_ARRAY_BUFFER_VIEWS,
+		  TYPED_ARRAY_TAG: TYPED_ARRAY_TAG_REQUIRED && TYPED_ARRAY_TAG,
+		  aTypedArray: aTypedArray,
+		  aTypedArrayConstructor: aTypedArrayConstructor,
+		  exportTypedArrayMethod: exportTypedArrayMethod,
+		  exportTypedArrayStaticMethod: exportTypedArrayStaticMethod,
+		  getTypedArrayConstructor: getTypedArrayConstructor,
+		  isView: isView,
+		  isTypedArray: isTypedArray,
+		  TypedArray: TypedArray,
+		  TypedArrayPrototype: TypedArrayPrototype
+		};
+		return arrayBufferViewCore;
+	}
+
+	var typedArrayConstructorsRequireWrappers;
+	var hasRequiredTypedArrayConstructorsRequireWrappers;
+
+	function requireTypedArrayConstructorsRequireWrappers () {
+		if (hasRequiredTypedArrayConstructorsRequireWrappers) return typedArrayConstructorsRequireWrappers;
+		hasRequiredTypedArrayConstructorsRequireWrappers = 1;
+		/* eslint-disable no-new, sonarjs/inconsistent-function-call -- required for testing */
+		var globalThis = requireGlobalThis();
+		var fails = requireFails();
+		var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+		var NATIVE_ARRAY_BUFFER_VIEWS = requireArrayBufferViewCore().NATIVE_ARRAY_BUFFER_VIEWS;
+
+		var ArrayBuffer = globalThis.ArrayBuffer;
+		var Int8Array = globalThis.Int8Array;
+
+		typedArrayConstructorsRequireWrappers = !NATIVE_ARRAY_BUFFER_VIEWS || !fails(function () {
+		  Int8Array(1);
+		}) || !fails(function () {
+		  new Int8Array(-1);
+		}) || !checkCorrectnessOfIteration(function (iterable) {
+		  new Int8Array();
+		  new Int8Array(null);
+		  new Int8Array(1.5);
+		  new Int8Array(iterable);
+		}, true) || fails(function () {
+		  // Safari (11+) bug - a reason why even Safari 13 should load a typed array polyfill
+		  return new Int8Array(new ArrayBuffer(2), 1, undefined).length !== 1;
+		});
+		return typedArrayConstructorsRequireWrappers;
+	}
+
+	var isIntegralNumber;
+	var hasRequiredIsIntegralNumber;
+
+	function requireIsIntegralNumber () {
+		if (hasRequiredIsIntegralNumber) return isIntegralNumber;
+		hasRequiredIsIntegralNumber = 1;
+		var isObject = requireIsObject();
+
+		var floor = Math.floor;
+
+		// `IsIntegralNumber` abstract operation
+		// https://tc39.es/ecma262/#sec-isintegralnumber
+		// eslint-disable-next-line es/no-number-isinteger -- safe
+		isIntegralNumber = Number.isInteger || function isInteger(it) {
+		  return !isObject(it) && isFinite(it) && floor(it) === it;
+		};
+		return isIntegralNumber;
+	}
+
+	var toPositiveInteger;
+	var hasRequiredToPositiveInteger;
+
+	function requireToPositiveInteger () {
+		if (hasRequiredToPositiveInteger) return toPositiveInteger;
+		hasRequiredToPositiveInteger = 1;
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+
+		var $RangeError = RangeError;
+
+		toPositiveInteger = function (it) {
+		  var result = toIntegerOrInfinity(it);
+		  if (result < 0) throw new $RangeError("The argument can't be less than 0");
+		  return result;
+		};
+		return toPositiveInteger;
+	}
+
+	var toOffset;
+	var hasRequiredToOffset;
+
+	function requireToOffset () {
+		if (hasRequiredToOffset) return toOffset;
+		hasRequiredToOffset = 1;
+		var toPositiveInteger = requireToPositiveInteger();
+
+		var $RangeError = RangeError;
+
+		toOffset = function (it, BYTES) {
+		  var offset = toPositiveInteger(it);
+		  if (offset % BYTES) throw new $RangeError('Wrong offset');
+		  return offset;
+		};
+		return toOffset;
+	}
+
+	var toUint8Clamped;
+	var hasRequiredToUint8Clamped;
+
+	function requireToUint8Clamped () {
+		if (hasRequiredToUint8Clamped) return toUint8Clamped;
+		hasRequiredToUint8Clamped = 1;
+		var floor = Math.floor;
+
+		// https://tc39.es/ecma262/#sec-touint8clamp
+		toUint8Clamped = function (it) {
+		  var number = +it;
+		  // eslint-disable-next-line no-self-compare -- NaN check
+		  if (number !== number || number <= 0) return 0;
+		  if (number >= 0xFF) return 0xFF;
+		  var f = floor(number);
+		  if (f + 0.5 < number) return f + 1;
+		  if (number < f + 0.5) return f;
+		  // round-half-to-even (banker's rounding)
+		  return f % 2 === 0 ? f : f + 1;
+		};
+		return toUint8Clamped;
+	}
+
+	var isBigIntArray;
+	var hasRequiredIsBigIntArray;
+
+	function requireIsBigIntArray () {
+		if (hasRequiredIsBigIntArray) return isBigIntArray;
+		hasRequiredIsBigIntArray = 1;
+		var classof = requireClassof();
+
+		isBigIntArray = function (it) {
+		  var klass = classof(it);
+		  return klass === 'BigInt64Array' || klass === 'BigUint64Array';
+		};
+		return isBigIntArray;
+	}
+
+	var toBigInt;
+	var hasRequiredToBigInt;
+
+	function requireToBigInt () {
+		if (hasRequiredToBigInt) return toBigInt;
+		hasRequiredToBigInt = 1;
+		var toPrimitive = requireToPrimitive();
+
+		var $TypeError = TypeError;
+
+		// `ToBigInt` abstract operation
+		// https://tc39.es/ecma262/#sec-tobigint
+		toBigInt = function (argument) {
+		  var prim = toPrimitive(argument, 'number');
+		  if (typeof prim == 'number') throw new $TypeError("Can't convert number to bigint");
+		  // eslint-disable-next-line es/no-bigint -- safe
+		  return BigInt(prim);
+		};
+		return toBigInt;
+	}
+
+	var typedArrayFrom;
+	var hasRequiredTypedArrayFrom;
+
+	function requireTypedArrayFrom () {
+		if (hasRequiredTypedArrayFrom) return typedArrayFrom;
+		hasRequiredTypedArrayFrom = 1;
+		var bind = requireFunctionBindContext();
+		var call = requireFunctionCall();
+		var aCallable = requireACallable();
+		var aConstructor = requireAConstructor();
+		var toObject = requireToObject();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+		var getIterator = requireGetIterator();
+		var getIteratorMethod = requireGetIteratorMethod();
+		var isArrayIteratorMethod = requireIsArrayIteratorMethod();
+		var isBigIntArray = requireIsBigIntArray();
+		var aTypedArrayConstructor = requireArrayBufferViewCore().aTypedArrayConstructor;
+		var toBigInt = requireToBigInt();
+
+		typedArrayFrom = function from(source /* , mapfn, thisArg */) {
+		  var C = aConstructor(this);
+		  var argumentsLength = arguments.length;
+		  var mapfn = argumentsLength > 1 ? arguments[1] : undefined;
+		  var mapping = mapfn !== undefined;
+		  if (mapping) aCallable(mapfn);
+		  var O = toObject(source);
+		  var iteratorMethod = getIteratorMethod(O);
+		  var i, length, result, thisIsBigIntArray, value, step, iterator, next;
+		  if (iteratorMethod && !isArrayIteratorMethod(iteratorMethod)) {
+		    iterator = getIterator(O, iteratorMethod);
+		    next = iterator.next;
+		    O = [];
+		    while (!(step = call(next, iterator)).done) {
+		      O.push(step.value);
+		    }
+		  }
+		  if (mapping && argumentsLength > 2) {
+		    mapfn = bind(mapfn, arguments[2]);
+		  }
+		  length = lengthOfArrayLike(O);
+		  result = new (aTypedArrayConstructor(C))(length);
+		  thisIsBigIntArray = isBigIntArray(result);
+		  for (i = 0; length > i; i++) {
+		    value = mapping ? mapfn(O[i], i) : O[i];
+		    // FF30- typed arrays doesn't properly convert objects to typed array values
+		    result[i] = thisIsBigIntArray ? toBigInt(value) : +value;
+		  }
+		  return result;
+		};
+		return typedArrayFrom;
+	}
+
+	var arrayFromConstructorAndList;
+	var hasRequiredArrayFromConstructorAndList;
+
+	function requireArrayFromConstructorAndList () {
+		if (hasRequiredArrayFromConstructorAndList) return arrayFromConstructorAndList;
+		hasRequiredArrayFromConstructorAndList = 1;
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+
+		arrayFromConstructorAndList = function (Constructor, list, $length) {
+		  var index = 0;
+		  var length = arguments.length > 2 ? $length : lengthOfArrayLike(list);
+		  var result = new Constructor(length);
+		  while (length > index) result[index] = list[index++];
+		  return result;
+		};
+		return arrayFromConstructorAndList;
+	}
+
+	var hasRequiredTypedArrayConstructor;
+
+	function requireTypedArrayConstructor () {
+		if (hasRequiredTypedArrayConstructor) return typedArrayConstructor.exports;
+		hasRequiredTypedArrayConstructor = 1;
+		var $ = require_export();
+		var globalThis = requireGlobalThis();
+		var call = requireFunctionCall();
+		var DESCRIPTORS = requireDescriptors();
+		var TYPED_ARRAYS_CONSTRUCTORS_REQUIRES_WRAPPERS = requireTypedArrayConstructorsRequireWrappers();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var ArrayBufferModule = requireArrayBuffer();
+		var anInstance = requireAnInstance();
+		var createPropertyDescriptor = requireCreatePropertyDescriptor();
+		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
+		var isIntegralNumber = requireIsIntegralNumber();
+		var toIndex = requireToIndex();
+		var toOffset = requireToOffset();
+		var toUint8Clamped = requireToUint8Clamped();
+		var toPropertyKey = requireToPropertyKey();
+		var hasOwn = requireHasOwnProperty();
+		var classof = requireClassof();
+		var isObject = requireIsObject();
+		var isSymbol = requireIsSymbol();
+		var create = requireObjectCreate();
+		var isPrototypeOf = requireObjectIsPrototypeOf();
+		var setPrototypeOf = requireObjectSetPrototypeOf();
+		var getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+		var typedArrayFrom = requireTypedArrayFrom();
+		var forEach = requireArrayIteration().forEach;
+		var setSpecies = requireSetSpecies();
+		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+		var definePropertyModule = requireObjectDefineProperty();
+		var getOwnPropertyDescriptorModule = requireObjectGetOwnPropertyDescriptor();
+		var arrayFromConstructorAndList = requireArrayFromConstructorAndList();
+		var InternalStateModule = requireInternalState();
+		var inheritIfRequired = requireInheritIfRequired();
+
+		var getInternalState = InternalStateModule.get;
+		var setInternalState = InternalStateModule.set;
+		var enforceInternalState = InternalStateModule.enforce;
+		var nativeDefineProperty = definePropertyModule.f;
+		var nativeGetOwnPropertyDescriptor = getOwnPropertyDescriptorModule.f;
+		var RangeError = globalThis.RangeError;
+		var ArrayBuffer = ArrayBufferModule.ArrayBuffer;
+		var ArrayBufferPrototype = ArrayBuffer.prototype;
+		var DataView = ArrayBufferModule.DataView;
+		var NATIVE_ARRAY_BUFFER_VIEWS = ArrayBufferViewCore.NATIVE_ARRAY_BUFFER_VIEWS;
+		var TYPED_ARRAY_TAG = ArrayBufferViewCore.TYPED_ARRAY_TAG;
+		var TypedArray = ArrayBufferViewCore.TypedArray;
+		var TypedArrayPrototype = ArrayBufferViewCore.TypedArrayPrototype;
+		var isTypedArray = ArrayBufferViewCore.isTypedArray;
+		var BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
+		var WRONG_LENGTH = 'Wrong length';
+
+		var addGetter = function (it, key) {
+		  defineBuiltInAccessor(it, key, {
+		    configurable: true,
+		    get: function () {
+		      return getInternalState(this)[key];
+		    }
+		  });
+		};
+
+		var isArrayBuffer = function (it) {
+		  var klass;
+		  return isPrototypeOf(ArrayBufferPrototype, it) || (klass = classof(it)) === 'ArrayBuffer' || klass === 'SharedArrayBuffer';
+		};
+
+		var isTypedArrayIndex = function (target, key) {
+		  return isTypedArray(target)
+		    && !isSymbol(key)
+		    && key in target
+		    && isIntegralNumber(+key)
+		    && key >= 0;
+		};
+
+		var wrappedGetOwnPropertyDescriptor = function getOwnPropertyDescriptor(target, key) {
+		  key = toPropertyKey(key);
+		  return isTypedArrayIndex(target, key)
+		    ? createPropertyDescriptor(2, target[key])
+		    : nativeGetOwnPropertyDescriptor(target, key);
+		};
+
+		var wrappedDefineProperty = function defineProperty(target, key, descriptor) {
+		  key = toPropertyKey(key);
+		  if (isTypedArrayIndex(target, key)
+		    && isObject(descriptor)
+		    && hasOwn(descriptor, 'value')
+		    && !hasOwn(descriptor, 'get')
+		    && !hasOwn(descriptor, 'set')
+		    // TODO: add validation descriptor w/o calling accessors
+		    && !descriptor.configurable
+		    && (!hasOwn(descriptor, 'writable') || descriptor.writable)
+		    && (!hasOwn(descriptor, 'enumerable') || descriptor.enumerable)
+		  ) {
+		    target[key] = descriptor.value;
+		    return target;
+		  } return nativeDefineProperty(target, key, descriptor);
+		};
+
+		if (DESCRIPTORS) {
+		  if (!NATIVE_ARRAY_BUFFER_VIEWS) {
+		    getOwnPropertyDescriptorModule.f = wrappedGetOwnPropertyDescriptor;
+		    definePropertyModule.f = wrappedDefineProperty;
+		    addGetter(TypedArrayPrototype, 'buffer');
+		    addGetter(TypedArrayPrototype, 'byteOffset');
+		    addGetter(TypedArrayPrototype, 'byteLength');
+		    addGetter(TypedArrayPrototype, 'length');
+		  }
+
+		  $({ target: 'Object', stat: true, forced: !NATIVE_ARRAY_BUFFER_VIEWS }, {
+		    getOwnPropertyDescriptor: wrappedGetOwnPropertyDescriptor,
+		    defineProperty: wrappedDefineProperty
+		  });
+
+		  typedArrayConstructor.exports = function (TYPE, wrapper, CLAMPED) {
+		    var BYTES = TYPE.match(/\d+/)[0] / 8;
+		    var CONSTRUCTOR_NAME = TYPE + (CLAMPED ? 'Clamped' : '') + 'Array';
+		    var GETTER = 'get' + TYPE;
+		    var SETTER = 'set' + TYPE;
+		    var NativeTypedArrayConstructor = globalThis[CONSTRUCTOR_NAME];
+		    var TypedArrayConstructor = NativeTypedArrayConstructor;
+		    var TypedArrayConstructorPrototype = TypedArrayConstructor && TypedArrayConstructor.prototype;
+		    var exported = {};
+
+		    var getter = function (that, index) {
+		      var data = getInternalState(that);
+		      return data.view[GETTER](index * BYTES + data.byteOffset, true);
+		    };
+
+		    var setter = function (that, index, value) {
+		      var data = getInternalState(that);
+		      data.view[SETTER](index * BYTES + data.byteOffset, CLAMPED ? toUint8Clamped(value) : value, true);
+		    };
+
+		    var addElement = function (that, index) {
+		      nativeDefineProperty(that, index, {
+		        get: function () {
+		          return getter(this, index);
+		        },
+		        set: function (value) {
+		          return setter(this, index, value);
+		        },
+		        enumerable: true
+		      });
+		    };
+
+		    if (!NATIVE_ARRAY_BUFFER_VIEWS) {
+		      TypedArrayConstructor = wrapper(function (that, data, offset, $length) {
+		        anInstance(that, TypedArrayConstructorPrototype);
+		        var index = 0;
+		        var byteOffset = 0;
+		        var buffer, byteLength, length;
+		        if (!isObject(data)) {
+		          length = toIndex(data);
+		          byteLength = length * BYTES;
+		          buffer = new ArrayBuffer(byteLength);
+		        } else if (isArrayBuffer(data)) {
+		          buffer = data;
+		          byteOffset = toOffset(offset, BYTES);
+		          var $len = data.byteLength;
+		          if ($length === undefined) {
+		            if ($len % BYTES) throw new RangeError(WRONG_LENGTH);
+		            byteLength = $len - byteOffset;
+		            if (byteLength < 0) throw new RangeError(WRONG_LENGTH);
+		          } else {
+		            byteLength = toIndex($length) * BYTES;
+		            if (byteLength + byteOffset > $len) throw new RangeError(WRONG_LENGTH);
+		          }
+		          length = byteLength / BYTES;
+		        } else if (isTypedArray(data)) {
+		          return arrayFromConstructorAndList(TypedArrayConstructor, data);
+		        } else {
+		          return call(typedArrayFrom, TypedArrayConstructor, data);
+		        }
+		        setInternalState(that, {
+		          buffer: buffer,
+		          byteOffset: byteOffset,
+		          byteLength: byteLength,
+		          length: length,
+		          view: new DataView(buffer)
+		        });
+		        while (index < length) addElement(that, index++);
+		      });
+
+		      if (setPrototypeOf) setPrototypeOf(TypedArrayConstructor, TypedArray);
+		      TypedArrayConstructorPrototype = TypedArrayConstructor.prototype = create(TypedArrayPrototype);
+		    } else if (TYPED_ARRAYS_CONSTRUCTORS_REQUIRES_WRAPPERS) {
+		      TypedArrayConstructor = wrapper(function (dummy, data, typedArrayOffset, $length) {
+		        anInstance(dummy, TypedArrayConstructorPrototype);
+		        return inheritIfRequired(function () {
+		          if (!isObject(data)) return new NativeTypedArrayConstructor(toIndex(data));
+		          if (isArrayBuffer(data)) return $length !== undefined
+		            ? new NativeTypedArrayConstructor(data, toOffset(typedArrayOffset, BYTES), $length)
+		            : typedArrayOffset !== undefined
+		              ? new NativeTypedArrayConstructor(data, toOffset(typedArrayOffset, BYTES))
+		              : new NativeTypedArrayConstructor(data);
+		          if (isTypedArray(data)) return arrayFromConstructorAndList(TypedArrayConstructor, data);
+		          return call(typedArrayFrom, TypedArrayConstructor, data);
+		        }(), dummy, TypedArrayConstructor);
+		      });
+
+		      if (setPrototypeOf) setPrototypeOf(TypedArrayConstructor, TypedArray);
+		      forEach(getOwnPropertyNames(NativeTypedArrayConstructor), function (key) {
+		        if (!(key in TypedArrayConstructor)) {
+		          createNonEnumerableProperty(TypedArrayConstructor, key, NativeTypedArrayConstructor[key]);
+		        }
+		      });
+		      TypedArrayConstructor.prototype = TypedArrayConstructorPrototype;
+		    }
+
+		    if (TypedArrayConstructorPrototype.constructor !== TypedArrayConstructor) {
+		      createNonEnumerableProperty(TypedArrayConstructorPrototype, 'constructor', TypedArrayConstructor);
+		    }
+
+		    enforceInternalState(TypedArrayConstructorPrototype).TypedArrayConstructor = TypedArrayConstructor;
+
+		    if (TYPED_ARRAY_TAG) {
+		      createNonEnumerableProperty(TypedArrayConstructorPrototype, TYPED_ARRAY_TAG, CONSTRUCTOR_NAME);
+		    }
+
+		    var FORCED = TypedArrayConstructor !== NativeTypedArrayConstructor;
+
+		    exported[CONSTRUCTOR_NAME] = TypedArrayConstructor;
+
+		    $({ global: true, constructor: true, forced: FORCED, sham: !NATIVE_ARRAY_BUFFER_VIEWS }, exported);
+
+		    if (!(BYTES_PER_ELEMENT in TypedArrayConstructor)) {
+		      createNonEnumerableProperty(TypedArrayConstructor, BYTES_PER_ELEMENT, BYTES);
+		    }
+
+		    if (!(BYTES_PER_ELEMENT in TypedArrayConstructorPrototype)) {
+		      createNonEnumerableProperty(TypedArrayConstructorPrototype, BYTES_PER_ELEMENT, BYTES);
+		    }
+
+		    setSpecies(CONSTRUCTOR_NAME);
+		  };
+		} else typedArrayConstructor.exports = function () { /* empty */ };
+		return typedArrayConstructor.exports;
+	}
+
+	var hasRequiredEs_typedArray_uint8Array;
+
+	function requireEs_typedArray_uint8Array () {
+		if (hasRequiredEs_typedArray_uint8Array) return es_typedArray_uint8Array;
+		hasRequiredEs_typedArray_uint8Array = 1;
+		var createTypedArrayConstructor = requireTypedArrayConstructor();
+
+		// `Uint8Array` constructor
+		// https://tc39.es/ecma262/#sec-typedarray-objects
+		createTypedArrayConstructor('Uint8', function (init) {
+		  return function Uint8Array(data, byteOffset, length) {
+		    return init(this, data, byteOffset, length);
+		  };
+		});
+		return es_typedArray_uint8Array;
+	}
+
+	requireEs_typedArray_uint8Array();
+
+	var es_typedArray_copyWithin = {};
+
+	var arrayCopyWithin;
+	var hasRequiredArrayCopyWithin;
+
+	function requireArrayCopyWithin () {
+		if (hasRequiredArrayCopyWithin) return arrayCopyWithin;
+		hasRequiredArrayCopyWithin = 1;
+		var toObject = requireToObject();
+		var toAbsoluteIndex = requireToAbsoluteIndex();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+		var deletePropertyOrThrow = requireDeletePropertyOrThrow();
+
+		var min = Math.min;
+
+		// `Array.prototype.copyWithin` method implementation
+		// https://tc39.es/ecma262/#sec-array.prototype.copywithin
+		// eslint-disable-next-line es/no-array-prototype-copywithin -- safe
+		arrayCopyWithin = [].copyWithin || function copyWithin(target /* = 0 */, start /* = 0, end = @length */) {
+		  var O = toObject(this);
+		  var len = lengthOfArrayLike(O);
+		  var to = toAbsoluteIndex(target, len);
+		  var from = toAbsoluteIndex(start, len);
+		  var end = arguments.length > 2 ? arguments[2] : undefined;
+		  var count = min((end === undefined ? len : toAbsoluteIndex(end, len)) - from, len - to);
+		  var inc = 1;
+		  if (from < to && to < from + count) {
+		    inc = -1;
+		    from += count - 1;
+		    to += count - 1;
+		  }
+		  while (count-- > 0) {
+		    if (from in O) O[to] = O[from];
+		    else deletePropertyOrThrow(O, to);
+		    to += inc;
+		    from += inc;
+		  } return O;
+		};
+		return arrayCopyWithin;
+	}
+
+	var hasRequiredEs_typedArray_copyWithin;
+
+	function requireEs_typedArray_copyWithin () {
+		if (hasRequiredEs_typedArray_copyWithin) return es_typedArray_copyWithin;
+		hasRequiredEs_typedArray_copyWithin = 1;
+		var uncurryThis = requireFunctionUncurryThis();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $ArrayCopyWithin = requireArrayCopyWithin();
+
+		var u$ArrayCopyWithin = uncurryThis($ArrayCopyWithin);
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.copyWithin` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.copywithin
+		exportTypedArrayMethod('copyWithin', function copyWithin(target, start /* , end */) {
+		  return u$ArrayCopyWithin(aTypedArray(this), target, start, arguments.length > 2 ? arguments[2] : undefined);
+		});
+		return es_typedArray_copyWithin;
+	}
+
+	requireEs_typedArray_copyWithin();
+
+	var es_typedArray_every = {};
+
+	var hasRequiredEs_typedArray_every;
+
+	function requireEs_typedArray_every () {
+		if (hasRequiredEs_typedArray_every) return es_typedArray_every;
+		hasRequiredEs_typedArray_every = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $every = requireArrayIteration().every;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.every` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.every
+		exportTypedArrayMethod('every', function every(callbackfn /* , thisArg */) {
+		  return $every(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_every;
+	}
+
+	requireEs_typedArray_every();
+
+	var es_typedArray_fill = {};
+
+	var hasRequiredEs_typedArray_fill;
+
+	function requireEs_typedArray_fill () {
+		if (hasRequiredEs_typedArray_fill) return es_typedArray_fill;
+		hasRequiredEs_typedArray_fill = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $fill = requireArrayFill();
+		var toBigInt = requireToBigInt();
+		var classof = requireClassof();
+		var call = requireFunctionCall();
+		var uncurryThis = requireFunctionUncurryThis();
+		var fails = requireFails();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var slice = uncurryThis(''.slice);
+
+		// V8 ~ Chrome < 59, Safari < 14.1, FF < 55, Edge <=18
+		var CONVERSION_BUG = fails(function () {
+		  var count = 0;
+		  // eslint-disable-next-line es/no-typed-arrays -- safe
+		  new Int8Array(2).fill({ valueOf: function () { return count++; } });
+		  return count !== 1;
+		});
+
+		// `%TypedArray%.prototype.fill` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.fill
+		exportTypedArrayMethod('fill', function fill(value /* , start, end */) {
+		  var length = arguments.length;
+		  aTypedArray(this);
+		  var actualValue = slice(classof(this), 0, 3) === 'Big' ? toBigInt(value) : +value;
+		  return call($fill, this, actualValue, length > 1 ? arguments[1] : undefined, length > 2 ? arguments[2] : undefined);
+		}, CONVERSION_BUG);
+		return es_typedArray_fill;
+	}
+
+	requireEs_typedArray_fill();
+
+	var es_typedArray_filter = {};
+
+	var typedArrayFromSameTypeAndList;
+	var hasRequiredTypedArrayFromSameTypeAndList;
+
+	function requireTypedArrayFromSameTypeAndList () {
+		if (hasRequiredTypedArrayFromSameTypeAndList) return typedArrayFromSameTypeAndList;
+		hasRequiredTypedArrayFromSameTypeAndList = 1;
+		var arrayFromConstructorAndList = requireArrayFromConstructorAndList();
+		var getTypedArrayConstructor = requireArrayBufferViewCore().getTypedArrayConstructor;
+
+		typedArrayFromSameTypeAndList = function (instance, list) {
+		  return arrayFromConstructorAndList(getTypedArrayConstructor(instance), list);
+		};
+		return typedArrayFromSameTypeAndList;
+	}
+
+	var hasRequiredEs_typedArray_filter;
+
+	function requireEs_typedArray_filter () {
+		if (hasRequiredEs_typedArray_filter) return es_typedArray_filter;
+		hasRequiredEs_typedArray_filter = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $filter = requireArrayIteration().filter;
+		var fromSameTypeAndList = requireTypedArrayFromSameTypeAndList();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.filter` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.filter
+		exportTypedArrayMethod('filter', function filter(callbackfn /* , thisArg */) {
+		  var list = $filter(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+		  return fromSameTypeAndList(this, list);
+		});
+		return es_typedArray_filter;
+	}
+
+	requireEs_typedArray_filter();
+
+	var es_typedArray_find = {};
+
+	var hasRequiredEs_typedArray_find;
+
+	function requireEs_typedArray_find () {
+		if (hasRequiredEs_typedArray_find) return es_typedArray_find;
+		hasRequiredEs_typedArray_find = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $find = requireArrayIteration().find;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.find` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.find
+		exportTypedArrayMethod('find', function find(predicate /* , thisArg */) {
+		  return $find(aTypedArray(this), predicate, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_find;
+	}
+
+	requireEs_typedArray_find();
+
+	var es_typedArray_findIndex = {};
+
+	var hasRequiredEs_typedArray_findIndex;
+
+	function requireEs_typedArray_findIndex () {
+		if (hasRequiredEs_typedArray_findIndex) return es_typedArray_findIndex;
+		hasRequiredEs_typedArray_findIndex = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $findIndex = requireArrayIteration().findIndex;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.findIndex` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.findindex
+		exportTypedArrayMethod('findIndex', function findIndex(predicate /* , thisArg */) {
+		  return $findIndex(aTypedArray(this), predicate, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_findIndex;
+	}
+
+	requireEs_typedArray_findIndex();
+
+	var es_typedArray_forEach = {};
+
+	var hasRequiredEs_typedArray_forEach;
+
+	function requireEs_typedArray_forEach () {
+		if (hasRequiredEs_typedArray_forEach) return es_typedArray_forEach;
+		hasRequiredEs_typedArray_forEach = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $forEach = requireArrayIteration().forEach;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.forEach` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.foreach
+		exportTypedArrayMethod('forEach', function forEach(callbackfn /* , thisArg */) {
+		  $forEach(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_forEach;
+	}
+
+	requireEs_typedArray_forEach();
+
+	var es_typedArray_includes = {};
+
+	var hasRequiredEs_typedArray_includes;
+
+	function requireEs_typedArray_includes () {
+		if (hasRequiredEs_typedArray_includes) return es_typedArray_includes;
+		hasRequiredEs_typedArray_includes = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $includes = requireArrayIncludes().includes;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.includes` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.includes
+		exportTypedArrayMethod('includes', function includes(searchElement /* , fromIndex */) {
+		  return $includes(aTypedArray(this), searchElement, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_includes;
+	}
+
+	requireEs_typedArray_includes();
+
+	var es_typedArray_indexOf = {};
+
+	var hasRequiredEs_typedArray_indexOf;
+
+	function requireEs_typedArray_indexOf () {
+		if (hasRequiredEs_typedArray_indexOf) return es_typedArray_indexOf;
+		hasRequiredEs_typedArray_indexOf = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $indexOf = requireArrayIncludes().indexOf;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.indexOf` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.indexof
+		exportTypedArrayMethod('indexOf', function indexOf(searchElement /* , fromIndex */) {
+		  return $indexOf(aTypedArray(this), searchElement, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_indexOf;
+	}
+
+	requireEs_typedArray_indexOf();
+
+	var es_typedArray_iterator = {};
+
+	var hasRequiredEs_typedArray_iterator;
+
+	function requireEs_typedArray_iterator () {
+		if (hasRequiredEs_typedArray_iterator) return es_typedArray_iterator;
+		hasRequiredEs_typedArray_iterator = 1;
+		var globalThis = requireGlobalThis();
+		var fails = requireFails();
+		var uncurryThis = requireFunctionUncurryThis();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var ArrayIterators = requireEs_array_iterator();
+		var wellKnownSymbol = requireWellKnownSymbol();
+
+		var ITERATOR = wellKnownSymbol('iterator');
+		var Uint8Array = globalThis.Uint8Array;
+		var arrayValues = uncurryThis(ArrayIterators.values);
+		var arrayKeys = uncurryThis(ArrayIterators.keys);
+		var arrayEntries = uncurryThis(ArrayIterators.entries);
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var TypedArrayPrototype = Uint8Array && Uint8Array.prototype;
+
+		var GENERIC = !fails(function () {
+		  TypedArrayPrototype[ITERATOR].call([1]);
+		});
+
+		var ITERATOR_IS_VALUES = !!TypedArrayPrototype
+		  && TypedArrayPrototype.values
+		  && TypedArrayPrototype[ITERATOR] === TypedArrayPrototype.values
+		  && TypedArrayPrototype.values.name === 'values';
+
+		var typedArrayValues = function values() {
+		  return arrayValues(aTypedArray(this));
+		};
+
+		// `%TypedArray%.prototype.entries` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.entries
+		exportTypedArrayMethod('entries', function entries() {
+		  return arrayEntries(aTypedArray(this));
+		}, GENERIC);
+		// `%TypedArray%.prototype.keys` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.keys
+		exportTypedArrayMethod('keys', function keys() {
+		  return arrayKeys(aTypedArray(this));
+		}, GENERIC);
+		// `%TypedArray%.prototype.values` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.values
+		exportTypedArrayMethod('values', typedArrayValues, GENERIC || !ITERATOR_IS_VALUES, { name: 'values' });
+		// `%TypedArray%.prototype[@@iterator]` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype-@@iterator
+		exportTypedArrayMethod(ITERATOR, typedArrayValues, GENERIC || !ITERATOR_IS_VALUES, { name: 'values' });
+		return es_typedArray_iterator;
+	}
+
+	requireEs_typedArray_iterator();
+
+	var es_typedArray_join = {};
+
+	var hasRequiredEs_typedArray_join;
+
+	function requireEs_typedArray_join () {
+		if (hasRequiredEs_typedArray_join) return es_typedArray_join;
+		hasRequiredEs_typedArray_join = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var uncurryThis = requireFunctionUncurryThis();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var $join = uncurryThis([].join);
+
+		// `%TypedArray%.prototype.join` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.join
+		exportTypedArrayMethod('join', function join(separator) {
+		  return $join(aTypedArray(this), separator);
+		});
+		return es_typedArray_join;
+	}
+
+	requireEs_typedArray_join();
+
+	var es_typedArray_lastIndexOf = {};
+
+	var arrayLastIndexOf;
+	var hasRequiredArrayLastIndexOf;
+
+	function requireArrayLastIndexOf () {
+		if (hasRequiredArrayLastIndexOf) return arrayLastIndexOf;
+		hasRequiredArrayLastIndexOf = 1;
+		/* eslint-disable es/no-array-prototype-lastindexof -- safe */
+		var apply = requireFunctionApply();
+		var toIndexedObject = requireToIndexedObject();
+		var toIntegerOrInfinity = requireToIntegerOrInfinity();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+		var arrayMethodIsStrict = requireArrayMethodIsStrict();
+
+		var min = Math.min;
+		var $lastIndexOf = [].lastIndexOf;
+		var NEGATIVE_ZERO = !!$lastIndexOf && 1 / [1].lastIndexOf(1, -0) < 0;
+		var STRICT_METHOD = arrayMethodIsStrict('lastIndexOf');
+		var FORCED = NEGATIVE_ZERO || !STRICT_METHOD;
+
+		// `Array.prototype.lastIndexOf` method implementation
+		// https://tc39.es/ecma262/#sec-array.prototype.lastindexof
+		arrayLastIndexOf = FORCED ? function lastIndexOf(searchElement /* , fromIndex = @[*-1] */) {
+		  // convert -0 to +0
+		  if (NEGATIVE_ZERO) return apply($lastIndexOf, this, arguments) || 0;
+		  var O = toIndexedObject(this);
+		  var length = lengthOfArrayLike(O);
+		  if (length === 0) return -1;
+		  var index = length - 1;
+		  if (arguments.length > 1) index = min(index, toIntegerOrInfinity(arguments[1]));
+		  if (index < 0) index = length + index;
+		  for (;index >= 0; index--) if (index in O && O[index] === searchElement) return index || 0;
+		  return -1;
+		} : $lastIndexOf;
+		return arrayLastIndexOf;
+	}
+
+	var hasRequiredEs_typedArray_lastIndexOf;
+
+	function requireEs_typedArray_lastIndexOf () {
+		if (hasRequiredEs_typedArray_lastIndexOf) return es_typedArray_lastIndexOf;
+		hasRequiredEs_typedArray_lastIndexOf = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var apply = requireFunctionApply();
+		var $lastIndexOf = requireArrayLastIndexOf();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.lastIndexOf` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.lastindexof
+		exportTypedArrayMethod('lastIndexOf', function lastIndexOf(searchElement /* , fromIndex */) {
+		  var length = arguments.length;
+		  return apply($lastIndexOf, aTypedArray(this), length > 1 ? [searchElement, arguments[1]] : [searchElement]);
+		});
+		return es_typedArray_lastIndexOf;
+	}
+
+	requireEs_typedArray_lastIndexOf();
+
+	var es_typedArray_map = {};
+
+	var hasRequiredEs_typedArray_map;
+
+	function requireEs_typedArray_map () {
+		if (hasRequiredEs_typedArray_map) return es_typedArray_map;
+		hasRequiredEs_typedArray_map = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $map = requireArrayIteration().map;
+		var fromSameTypeAndList = requireTypedArrayFromSameTypeAndList();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.map` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.map
+		exportTypedArrayMethod('map', function map(mapfn /* , thisArg */) {
+		  var list = $map(aTypedArray(this), mapfn, arguments.length > 1 ? arguments[1] : undefined);
+		  return fromSameTypeAndList(this, list);
+		});
+		return es_typedArray_map;
+	}
+
+	requireEs_typedArray_map();
+
+	var es_typedArray_reduce = {};
+
+	var arrayReduce;
+	var hasRequiredArrayReduce;
+
+	function requireArrayReduce () {
+		if (hasRequiredArrayReduce) return arrayReduce;
+		hasRequiredArrayReduce = 1;
+		var aCallable = requireACallable();
+		var toObject = requireToObject();
+		var IndexedObject = requireIndexedObject();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+
+		var $TypeError = TypeError;
+
+		var REDUCE_EMPTY = 'Reduce of empty array with no initial value';
+
+		// `Array.prototype.{ reduce, reduceRight }` methods implementation
+		var createMethod = function (IS_RIGHT) {
+		  return function (that, callbackfn, argumentsLength, memo) {
+		    var O = toObject(that);
+		    var self = IndexedObject(O);
+		    var length = lengthOfArrayLike(O);
+		    aCallable(callbackfn);
+		    if (length === 0 && argumentsLength < 2) throw new $TypeError(REDUCE_EMPTY);
+		    var index = IS_RIGHT ? length - 1 : 0;
+		    var i = IS_RIGHT ? -1 : 1;
+		    if (argumentsLength < 2) while (true) {
+		      if (index in self) {
+		        memo = self[index];
+		        index += i;
+		        break;
+		      }
+		      index += i;
+		      if (IS_RIGHT ? index < 0 : length <= index) {
+		        throw new $TypeError(REDUCE_EMPTY);
+		      }
+		    }
+		    for (;IS_RIGHT ? index >= 0 : length > index; index += i) if (index in self) {
+		      memo = callbackfn(memo, self[index], index, O);
+		    }
+		    return memo;
+		  };
+		};
+
+		arrayReduce = {
+		  // `Array.prototype.reduce` method
+		  // https://tc39.es/ecma262/#sec-array.prototype.reduce
+		  left: createMethod(false),
+		  // `Array.prototype.reduceRight` method
+		  // https://tc39.es/ecma262/#sec-array.prototype.reduceright
+		  right: createMethod(true)
+		};
+		return arrayReduce;
+	}
+
+	var hasRequiredEs_typedArray_reduce;
+
+	function requireEs_typedArray_reduce () {
+		if (hasRequiredEs_typedArray_reduce) return es_typedArray_reduce;
+		hasRequiredEs_typedArray_reduce = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $reduce = requireArrayReduce().left;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.reduce` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reduce
+		exportTypedArrayMethod('reduce', function reduce(callbackfn /* , initialValue */) {
+		  var length = arguments.length;
+		  return $reduce(aTypedArray(this), callbackfn, length, length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_reduce;
+	}
+
+	requireEs_typedArray_reduce();
+
+	var es_typedArray_reduceRight = {};
+
+	var hasRequiredEs_typedArray_reduceRight;
+
+	function requireEs_typedArray_reduceRight () {
+		if (hasRequiredEs_typedArray_reduceRight) return es_typedArray_reduceRight;
+		hasRequiredEs_typedArray_reduceRight = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $reduceRight = requireArrayReduce().right;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.reduceRight` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reduceright
+		exportTypedArrayMethod('reduceRight', function reduceRight(callbackfn /* , initialValue */) {
+		  var length = arguments.length;
+		  return $reduceRight(aTypedArray(this), callbackfn, length, length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_reduceRight;
+	}
+
+	requireEs_typedArray_reduceRight();
+
+	var es_typedArray_reverse = {};
+
+	var hasRequiredEs_typedArray_reverse;
+
+	function requireEs_typedArray_reverse () {
+		if (hasRequiredEs_typedArray_reverse) return es_typedArray_reverse;
+		hasRequiredEs_typedArray_reverse = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var floor = Math.floor;
+
+		// `%TypedArray%.prototype.reverse` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reverse
+		exportTypedArrayMethod('reverse', function reverse() {
+		  var that = this;
+		  var length = aTypedArray(that).length;
+		  var middle = floor(length / 2);
+		  var index = 0;
+		  var value;
+		  while (index < middle) {
+		    value = that[index];
+		    that[index++] = that[--length];
+		    that[length] = value;
+		  } return that;
+		});
+		return es_typedArray_reverse;
+	}
+
+	requireEs_typedArray_reverse();
+
+	var es_typedArray_set = {};
+
+	var hasRequiredEs_typedArray_set;
+
+	function requireEs_typedArray_set () {
+		if (hasRequiredEs_typedArray_set) return es_typedArray_set;
+		hasRequiredEs_typedArray_set = 1;
+		var globalThis = requireGlobalThis();
+		var call = requireFunctionCall();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var lengthOfArrayLike = requireLengthOfArrayLike();
+		var toOffset = requireToOffset();
+		var toIndexedObject = requireToObject();
+		var fails = requireFails();
+
+		var RangeError = globalThis.RangeError;
+		var Int8Array = globalThis.Int8Array;
+		var Int8ArrayPrototype = Int8Array && Int8Array.prototype;
+		var $set = Int8ArrayPrototype && Int8ArrayPrototype.set;
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		var WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS = !fails(function () {
+		  // eslint-disable-next-line es/no-typed-arrays -- required for testing
+		  var array = new Uint8ClampedArray(2);
+		  call($set, array, { length: 1, 0: 3 }, 1);
+		  return array[1] !== 3;
+		});
+
+		// https://bugs.chromium.org/p/v8/issues/detail?id=11294 and other
+		var TO_OBJECT_BUG = WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS && ArrayBufferViewCore.NATIVE_ARRAY_BUFFER_VIEWS && fails(function () {
+		  var array = new Int8Array(2);
+		  array.set(1);
+		  array.set('2', 1);
+		  return array[0] !== 0 || array[1] !== 2;
+		});
+
+		// `%TypedArray%.prototype.set` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.set
+		exportTypedArrayMethod('set', function set(arrayLike /* , offset */) {
+		  aTypedArray(this);
+		  var offset = toOffset(arguments.length > 1 ? arguments[1] : undefined, 1);
+		  var src = toIndexedObject(arrayLike);
+		  if (WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS) return call($set, this, src, offset);
+		  var length = this.length;
+		  var len = lengthOfArrayLike(src);
+		  var index = 0;
+		  if (len + offset > length) throw new RangeError('Wrong length');
+		  while (index < len) this[offset + index] = src[index++];
+		}, !WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS || TO_OBJECT_BUG);
+		return es_typedArray_set;
+	}
+
+	requireEs_typedArray_set();
+
+	var es_typedArray_slice = {};
+
+	var hasRequiredEs_typedArray_slice;
+
+	function requireEs_typedArray_slice () {
+		if (hasRequiredEs_typedArray_slice) return es_typedArray_slice;
+		hasRequiredEs_typedArray_slice = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var fails = requireFails();
+		var arraySlice = requireArraySlice();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var getTypedArrayConstructor = ArrayBufferViewCore.getTypedArrayConstructor;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		var FORCED = fails(function () {
+		  // eslint-disable-next-line es/no-typed-arrays -- required for testing
+		  new Int8Array(1).slice();
+		});
+
+		// `%TypedArray%.prototype.slice` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.slice
+		exportTypedArrayMethod('slice', function slice(start, end) {
+		  var list = arraySlice(aTypedArray(this), start, end);
+		  var C = getTypedArrayConstructor(this);
+		  var index = 0;
+		  var length = list.length;
+		  var result = new C(length);
+		  while (length > index) result[index] = list[index++];
+		  return result;
+		}, FORCED);
+		return es_typedArray_slice;
+	}
+
+	requireEs_typedArray_slice();
+
+	var es_typedArray_some = {};
+
+	var hasRequiredEs_typedArray_some;
+
+	function requireEs_typedArray_some () {
+		if (hasRequiredEs_typedArray_some) return es_typedArray_some;
+		hasRequiredEs_typedArray_some = 1;
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var $some = requireArrayIteration().some;
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+
+		// `%TypedArray%.prototype.some` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.some
+		exportTypedArrayMethod('some', function some(callbackfn /* , thisArg */) {
+		  return $some(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+		});
+		return es_typedArray_some;
+	}
+
+	requireEs_typedArray_some();
+
+	var es_typedArray_sort = {};
+
+	var arraySort;
+	var hasRequiredArraySort;
+
+	function requireArraySort () {
+		if (hasRequiredArraySort) return arraySort;
+		hasRequiredArraySort = 1;
+		var arraySlice = requireArraySlice();
+
+		var floor = Math.floor;
+
+		var sort = function (array, comparefn) {
+		  var length = array.length;
+
+		  if (length < 8) {
+		    // insertion sort
+		    var i = 1;
+		    var element, j;
+
+		    while (i < length) {
+		      j = i;
+		      element = array[i];
+		      while (j && comparefn(array[j - 1], element) > 0) {
+		        array[j] = array[--j];
+		      }
+		      if (j !== i++) array[j] = element;
+		    }
+		  } else {
+		    // merge sort
+		    var middle = floor(length / 2);
+		    var left = sort(arraySlice(array, 0, middle), comparefn);
+		    var right = sort(arraySlice(array, middle), comparefn);
+		    var llength = left.length;
+		    var rlength = right.length;
+		    var lindex = 0;
+		    var rindex = 0;
+
+		    while (lindex < llength || rindex < rlength) {
+		      array[lindex + rindex] = (lindex < llength && rindex < rlength)
+		        ? comparefn(left[lindex], right[rindex]) <= 0 ? left[lindex++] : right[rindex++]
+		        : lindex < llength ? left[lindex++] : right[rindex++];
+		    }
+		  }
+
+		  return array;
+		};
+
+		arraySort = sort;
+		return arraySort;
+	}
+
+	var environmentFfVersion;
+	var hasRequiredEnvironmentFfVersion;
+
+	function requireEnvironmentFfVersion () {
+		if (hasRequiredEnvironmentFfVersion) return environmentFfVersion;
+		hasRequiredEnvironmentFfVersion = 1;
+		var userAgent = requireEnvironmentUserAgent();
+
+		var firefox = userAgent.match(/firefox\/(\d+)/i);
+
+		environmentFfVersion = !!firefox && +firefox[1];
+		return environmentFfVersion;
+	}
+
+	var environmentIsIeOrEdge;
+	var hasRequiredEnvironmentIsIeOrEdge;
+
+	function requireEnvironmentIsIeOrEdge () {
+		if (hasRequiredEnvironmentIsIeOrEdge) return environmentIsIeOrEdge;
+		hasRequiredEnvironmentIsIeOrEdge = 1;
+		var UA = requireEnvironmentUserAgent();
+
+		environmentIsIeOrEdge = /MSIE|Trident/.test(UA);
+		return environmentIsIeOrEdge;
+	}
+
+	var environmentWebkitVersion;
+	var hasRequiredEnvironmentWebkitVersion;
+
+	function requireEnvironmentWebkitVersion () {
+		if (hasRequiredEnvironmentWebkitVersion) return environmentWebkitVersion;
+		hasRequiredEnvironmentWebkitVersion = 1;
+		var userAgent = requireEnvironmentUserAgent();
+
+		var webkit = userAgent.match(/AppleWebKit\/(\d+)\./);
+
+		environmentWebkitVersion = !!webkit && +webkit[1];
+		return environmentWebkitVersion;
+	}
+
+	var hasRequiredEs_typedArray_sort;
+
+	function requireEs_typedArray_sort () {
+		if (hasRequiredEs_typedArray_sort) return es_typedArray_sort;
+		hasRequiredEs_typedArray_sort = 1;
+		var globalThis = requireGlobalThis();
+		var uncurryThis = requireFunctionUncurryThisClause();
+		var fails = requireFails();
+		var aCallable = requireACallable();
+		var internalSort = requireArraySort();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var FF = requireEnvironmentFfVersion();
+		var IE_OR_EDGE = requireEnvironmentIsIeOrEdge();
+		var V8 = requireEnvironmentV8Version();
+		var WEBKIT = requireEnvironmentWebkitVersion();
+
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var Uint16Array = globalThis.Uint16Array;
+		var nativeSort = Uint16Array && uncurryThis(Uint16Array.prototype.sort);
+
+		// WebKit
+		var ACCEPT_INCORRECT_ARGUMENTS = !!nativeSort && !(fails(function () {
+		  nativeSort(new Uint16Array(2), null);
+		}) && fails(function () {
+		  nativeSort(new Uint16Array(2), {});
+		}));
+
+		var STABLE_SORT = !!nativeSort && !fails(function () {
+		  // feature detection can be too slow, so check engines versions
+		  if (V8) return V8 < 74;
+		  if (FF) return FF < 67;
+		  if (IE_OR_EDGE) return true;
+		  if (WEBKIT) return WEBKIT < 602;
+
+		  var array = new Uint16Array(516);
+		  var expected = Array(516);
+		  var index, mod;
+
+		  for (index = 0; index < 516; index++) {
+		    mod = index % 4;
+		    array[index] = 515 - index;
+		    expected[index] = index - 2 * mod + 3;
+		  }
+
+		  nativeSort(array, function (a, b) {
+		    return (a / 4 | 0) - (b / 4 | 0);
+		  });
+
+		  for (index = 0; index < 516; index++) {
+		    if (array[index] !== expected[index]) return true;
+		  }
+		});
+
+		var getSortCompare = function (comparefn) {
+		  return function (x, y) {
+		    if (comparefn !== undefined) return +comparefn(x, y) || 0;
+		    // eslint-disable-next-line no-self-compare -- NaN check
+		    if (y !== y) return x !== x ? 0 : -1;
+		    // eslint-disable-next-line no-self-compare -- NaN check
+		    if (x !== x) return 1;
+		    if (x === 0 && y === 0) return 1 / x > 0 ? (1 / y > 0 ? 0 : 1) : (1 / y > 0 ? -1 : 0);
+		    return x > y ? 1 : x < y ? -1 : 0;
+		  };
+		};
+
+		// `%TypedArray%.prototype.sort` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.sort
+		exportTypedArrayMethod('sort', function sort(comparefn) {
+		  if (comparefn !== undefined) aCallable(comparefn);
+		  if (STABLE_SORT) return nativeSort(this, comparefn);
+
+		  return internalSort(aTypedArray(this), getSortCompare(comparefn));
+		}, !STABLE_SORT || ACCEPT_INCORRECT_ARGUMENTS);
+		return es_typedArray_sort;
+	}
+
+	requireEs_typedArray_sort();
+
+	var es_typedArray_toLocaleString = {};
+
+	var hasRequiredEs_typedArray_toLocaleString;
+
+	function requireEs_typedArray_toLocaleString () {
+		if (hasRequiredEs_typedArray_toLocaleString) return es_typedArray_toLocaleString;
+		hasRequiredEs_typedArray_toLocaleString = 1;
+		var globalThis = requireGlobalThis();
+		var apply = requireFunctionApply();
+		var ArrayBufferViewCore = requireArrayBufferViewCore();
+		var fails = requireFails();
+		var arraySlice = requireArraySlice();
+
+		var Int8Array = globalThis.Int8Array;
+		var aTypedArray = ArrayBufferViewCore.aTypedArray;
+		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
+		var $toLocaleString = [].toLocaleString;
+
+		// iOS Safari 6.x fails here
+		var TO_LOCALE_STRING_BUG = !!Int8Array && fails(function () {
+		  $toLocaleString.call(new Int8Array(1));
+		});
+
+		var FORCED = fails(function () {
+		  return [1, 2].toLocaleString() !== new Int8Array([1, 2]).toLocaleString();
+		}) || !fails(function () {
+		  Int8Array.prototype.toLocaleString.call([1, 2]);
+		});
+
+		// `%TypedArray%.prototype.toLocaleString` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.tolocalestring
+		exportTypedArrayMethod('toLocaleString', function toLocaleString() {
+		  return apply(
+		    $toLocaleString,
+		    TO_LOCALE_STRING_BUG ? arraySlice(aTypedArray(this)) : aTypedArray(this),
+		    arraySlice(arguments)
+		  );
+		}, FORCED);
+		return es_typedArray_toLocaleString;
+	}
+
+	requireEs_typedArray_toLocaleString();
+
+	var es_typedArray_toString = {};
+
+	var hasRequiredEs_typedArray_toString;
+
+	function requireEs_typedArray_toString () {
+		if (hasRequiredEs_typedArray_toString) return es_typedArray_toString;
+		hasRequiredEs_typedArray_toString = 1;
+		var exportTypedArrayMethod = requireArrayBufferViewCore().exportTypedArrayMethod;
+		var fails = requireFails();
+		var globalThis = requireGlobalThis();
+		var uncurryThis = requireFunctionUncurryThis();
+
+		var Uint8Array = globalThis.Uint8Array;
+		var Uint8ArrayPrototype = Uint8Array && Uint8Array.prototype || {};
+		var arrayToString = [].toString;
+		var join = uncurryThis([].join);
+
+		if (fails(function () { arrayToString.call({}); })) {
+		  arrayToString = function toString() {
+		    return join(this);
+		  };
+		}
+
+		var IS_NOT_ARRAY_METHOD = Uint8ArrayPrototype.toString !== arrayToString;
+
+		// `%TypedArray%.prototype.toString` method
+		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.tostring
+		exportTypedArrayMethod('toString', arrayToString, IS_NOT_ARRAY_METHOD);
+		return es_typedArray_toString;
+	}
+
+	requireEs_typedArray_toString();
 
 	function _typeof$8(o) { "@babel/helpers - typeof"; return _typeof$8 = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof$8(o); }
 	function _createClass$8(Constructor, protoProps, staticProps) { Object.defineProperty(Constructor, "prototype", { writable: false }); return Constructor; }
@@ -8872,7 +11666,15 @@
 	  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
 	    return crypto.randomUUID();
 	  }
-	  return "starmus-upload-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 11));
+	  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+	    var values = new Uint8Array(16);
+	    crypto.getRandomValues(values);
+	    var suffix = Array.from(values, function (value) {
+	      return value.toString(16).padStart(2, "0");
+	    }).join("");
+	    return "starmus-upload-".concat(Date.now(), "-").concat(suffix);
+	  }
+	  throw new Error("Secure UUID generation is not available in this runtime");
 	}
 
 	/* ---- Direct Upload (fallback) ---- */
@@ -10115,35 +12917,6 @@
 
 	var es_array_includes = {};
 
-	var addToUnscopables;
-	var hasRequiredAddToUnscopables;
-
-	function requireAddToUnscopables () {
-		if (hasRequiredAddToUnscopables) return addToUnscopables;
-		hasRequiredAddToUnscopables = 1;
-		var wellKnownSymbol = requireWellKnownSymbol();
-		var create = requireObjectCreate();
-		var defineProperty = requireObjectDefineProperty().f;
-
-		var UNSCOPABLES = wellKnownSymbol('unscopables');
-		var ArrayPrototype = Array.prototype;
-
-		// Array.prototype[@@unscopables]
-		// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-		if (ArrayPrototype[UNSCOPABLES] === undefined) {
-		  defineProperty(ArrayPrototype, UNSCOPABLES, {
-		    configurable: true,
-		    value: create(null)
-		  });
-		}
-
-		// add a key to Array.prototype[@@unscopables]
-		addToUnscopables = function (key) {
-		  ArrayPrototype[UNSCOPABLES][key] = true;
-		};
-		return addToUnscopables;
-	}
-
 	var hasRequiredEs_array_includes;
 
 	function requireEs_array_includes () {
@@ -10180,325 +12953,6 @@
 	}
 
 	requireEs_array_includes();
-
-	var iteratorsCore;
-	var hasRequiredIteratorsCore;
-
-	function requireIteratorsCore () {
-		if (hasRequiredIteratorsCore) return iteratorsCore;
-		hasRequiredIteratorsCore = 1;
-		var fails = requireFails();
-		var isCallable = requireIsCallable();
-		var isObject = requireIsObject();
-		var create = requireObjectCreate();
-		var getPrototypeOf = requireObjectGetPrototypeOf();
-		var defineBuiltIn = requireDefineBuiltIn();
-		var wellKnownSymbol = requireWellKnownSymbol();
-		var IS_PURE = requireIsPure();
-
-		var ITERATOR = wellKnownSymbol('iterator');
-		var BUGGY_SAFARI_ITERATORS = false;
-
-		// `%IteratorPrototype%` object
-		// https://tc39.es/ecma262/#sec-%iteratorprototype%-object
-		var IteratorPrototype, PrototypeOfArrayIteratorPrototype, arrayIterator;
-
-		/* eslint-disable es/no-array-prototype-keys -- safe */
-		if ([].keys) {
-		  arrayIterator = [].keys();
-		  // Safari 8 has buggy iterators w/o `next`
-		  if (!('next' in arrayIterator)) BUGGY_SAFARI_ITERATORS = true;
-		  else {
-		    PrototypeOfArrayIteratorPrototype = getPrototypeOf(getPrototypeOf(arrayIterator));
-		    if (PrototypeOfArrayIteratorPrototype !== Object.prototype) IteratorPrototype = PrototypeOfArrayIteratorPrototype;
-		  }
-		}
-
-		var NEW_ITERATOR_PROTOTYPE = !isObject(IteratorPrototype) || fails(function () {
-		  var test = {};
-		  // FF44- legacy iterators case
-		  return IteratorPrototype[ITERATOR].call(test) !== test;
-		});
-
-		if (NEW_ITERATOR_PROTOTYPE) IteratorPrototype = {};
-		else if (IS_PURE) IteratorPrototype = create(IteratorPrototype);
-
-		// `%IteratorPrototype%[@@iterator]()` method
-		// https://tc39.es/ecma262/#sec-%iteratorprototype%-@@iterator
-		if (!isCallable(IteratorPrototype[ITERATOR])) {
-		  defineBuiltIn(IteratorPrototype, ITERATOR, function () {
-		    return this;
-		  });
-		}
-
-		iteratorsCore = {
-		  IteratorPrototype: IteratorPrototype,
-		  BUGGY_SAFARI_ITERATORS: BUGGY_SAFARI_ITERATORS
-		};
-		return iteratorsCore;
-	}
-
-	var iteratorCreateConstructor;
-	var hasRequiredIteratorCreateConstructor;
-
-	function requireIteratorCreateConstructor () {
-		if (hasRequiredIteratorCreateConstructor) return iteratorCreateConstructor;
-		hasRequiredIteratorCreateConstructor = 1;
-		var IteratorPrototype = requireIteratorsCore().IteratorPrototype;
-		var create = requireObjectCreate();
-		var createPropertyDescriptor = requireCreatePropertyDescriptor();
-		var setToStringTag = requireSetToStringTag();
-		var Iterators = requireIterators();
-
-		var returnThis = function () { return this; };
-
-		iteratorCreateConstructor = function (IteratorConstructor, NAME, next, ENUMERABLE_NEXT) {
-		  var TO_STRING_TAG = NAME + ' Iterator';
-		  IteratorConstructor.prototype = create(IteratorPrototype, { next: createPropertyDescriptor(+!ENUMERABLE_NEXT, next) });
-		  setToStringTag(IteratorConstructor, TO_STRING_TAG, false, true);
-		  Iterators[TO_STRING_TAG] = returnThis;
-		  return IteratorConstructor;
-		};
-		return iteratorCreateConstructor;
-	}
-
-	var iteratorDefine;
-	var hasRequiredIteratorDefine;
-
-	function requireIteratorDefine () {
-		if (hasRequiredIteratorDefine) return iteratorDefine;
-		hasRequiredIteratorDefine = 1;
-		var $ = require_export();
-		var call = requireFunctionCall();
-		var IS_PURE = requireIsPure();
-		var FunctionName = requireFunctionName();
-		var isCallable = requireIsCallable();
-		var createIteratorConstructor = requireIteratorCreateConstructor();
-		var getPrototypeOf = requireObjectGetPrototypeOf();
-		var setPrototypeOf = requireObjectSetPrototypeOf();
-		var setToStringTag = requireSetToStringTag();
-		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
-		var defineBuiltIn = requireDefineBuiltIn();
-		var wellKnownSymbol = requireWellKnownSymbol();
-		var Iterators = requireIterators();
-		var IteratorsCore = requireIteratorsCore();
-
-		var PROPER_FUNCTION_NAME = FunctionName.PROPER;
-		var CONFIGURABLE_FUNCTION_NAME = FunctionName.CONFIGURABLE;
-		var IteratorPrototype = IteratorsCore.IteratorPrototype;
-		var BUGGY_SAFARI_ITERATORS = IteratorsCore.BUGGY_SAFARI_ITERATORS;
-		var ITERATOR = wellKnownSymbol('iterator');
-		var KEYS = 'keys';
-		var VALUES = 'values';
-		var ENTRIES = 'entries';
-
-		var returnThis = function () { return this; };
-
-		iteratorDefine = function (Iterable, NAME, IteratorConstructor, next, DEFAULT, IS_SET, FORCED) {
-		  createIteratorConstructor(IteratorConstructor, NAME, next);
-
-		  var getIterationMethod = function (KIND) {
-		    if (KIND === DEFAULT && defaultIterator) return defaultIterator;
-		    if (!BUGGY_SAFARI_ITERATORS && KIND && KIND in IterablePrototype) return IterablePrototype[KIND];
-
-		    switch (KIND) {
-		      case KEYS: return function keys() { return new IteratorConstructor(this, KIND); };
-		      case VALUES: return function values() { return new IteratorConstructor(this, KIND); };
-		      case ENTRIES: return function entries() { return new IteratorConstructor(this, KIND); };
-		    }
-
-		    return function () { return new IteratorConstructor(this); };
-		  };
-
-		  var TO_STRING_TAG = NAME + ' Iterator';
-		  var INCORRECT_VALUES_NAME = false;
-		  var IterablePrototype = Iterable.prototype;
-		  var nativeIterator = IterablePrototype[ITERATOR]
-		    || IterablePrototype['@@iterator']
-		    || DEFAULT && IterablePrototype[DEFAULT];
-		  var defaultIterator = !BUGGY_SAFARI_ITERATORS && nativeIterator || getIterationMethod(DEFAULT);
-		  var anyNativeIterator = NAME === 'Array' ? IterablePrototype.entries || nativeIterator : nativeIterator;
-		  var CurrentIteratorPrototype, methods, KEY;
-
-		  // fix native
-		  if (anyNativeIterator) {
-		    CurrentIteratorPrototype = getPrototypeOf(anyNativeIterator.call(new Iterable()));
-		    if (CurrentIteratorPrototype !== Object.prototype && CurrentIteratorPrototype.next) {
-		      if (!IS_PURE && getPrototypeOf(CurrentIteratorPrototype) !== IteratorPrototype) {
-		        if (setPrototypeOf) {
-		          setPrototypeOf(CurrentIteratorPrototype, IteratorPrototype);
-		        } else if (!isCallable(CurrentIteratorPrototype[ITERATOR])) {
-		          defineBuiltIn(CurrentIteratorPrototype, ITERATOR, returnThis);
-		        }
-		      }
-		      // Set @@toStringTag to native iterators
-		      setToStringTag(CurrentIteratorPrototype, TO_STRING_TAG, true, true);
-		      if (IS_PURE) Iterators[TO_STRING_TAG] = returnThis;
-		    }
-		  }
-
-		  // fix Array.prototype.{ values, @@iterator }.name in V8 / FF
-		  if (PROPER_FUNCTION_NAME && DEFAULT === VALUES && nativeIterator && nativeIterator.name !== VALUES) {
-		    if (!IS_PURE && CONFIGURABLE_FUNCTION_NAME) {
-		      createNonEnumerableProperty(IterablePrototype, 'name', VALUES);
-		    } else {
-		      INCORRECT_VALUES_NAME = true;
-		      defaultIterator = function values() { return call(nativeIterator, this); };
-		    }
-		  }
-
-		  // export additional methods
-		  if (DEFAULT) {
-		    methods = {
-		      values: getIterationMethod(VALUES),
-		      keys: IS_SET ? defaultIterator : getIterationMethod(KEYS),
-		      entries: getIterationMethod(ENTRIES)
-		    };
-		    if (FORCED) for (KEY in methods) {
-		      if (BUGGY_SAFARI_ITERATORS || INCORRECT_VALUES_NAME || !(KEY in IterablePrototype)) {
-		        defineBuiltIn(IterablePrototype, KEY, methods[KEY]);
-		      }
-		    } else $({ target: NAME, proto: true, forced: BUGGY_SAFARI_ITERATORS || INCORRECT_VALUES_NAME }, methods);
-		  }
-
-		  // define iterator
-		  if ((!IS_PURE || FORCED) && IterablePrototype[ITERATOR] !== defaultIterator) {
-		    defineBuiltIn(IterablePrototype, ITERATOR, defaultIterator, { name: DEFAULT });
-		  }
-		  Iterators[NAME] = defaultIterator;
-
-		  return methods;
-		};
-		return iteratorDefine;
-	}
-
-	var createIterResultObject;
-	var hasRequiredCreateIterResultObject;
-
-	function requireCreateIterResultObject () {
-		if (hasRequiredCreateIterResultObject) return createIterResultObject;
-		hasRequiredCreateIterResultObject = 1;
-		// `CreateIterResultObject` abstract operation
-		// https://tc39.es/ecma262/#sec-createiterresultobject
-		createIterResultObject = function (value, done) {
-		  return { value: value, done: done };
-		};
-		return createIterResultObject;
-	}
-
-	var es_array_iterator;
-	var hasRequiredEs_array_iterator;
-
-	function requireEs_array_iterator () {
-		if (hasRequiredEs_array_iterator) return es_array_iterator;
-		hasRequiredEs_array_iterator = 1;
-		var toIndexedObject = requireToIndexedObject();
-		var addToUnscopables = requireAddToUnscopables();
-		var Iterators = requireIterators();
-		var InternalStateModule = requireInternalState();
-		var defineProperty = requireObjectDefineProperty().f;
-		var defineIterator = requireIteratorDefine();
-		var createIterResultObject = requireCreateIterResultObject();
-		var IS_PURE = requireIsPure();
-		var DESCRIPTORS = requireDescriptors();
-
-		var ARRAY_ITERATOR = 'Array Iterator';
-		var setInternalState = InternalStateModule.set;
-		var getInternalState = InternalStateModule.getterFor(ARRAY_ITERATOR);
-
-		// `Array.prototype.entries` method
-		// https://tc39.es/ecma262/#sec-array.prototype.entries
-		// `Array.prototype.keys` method
-		// https://tc39.es/ecma262/#sec-array.prototype.keys
-		// `Array.prototype.values` method
-		// https://tc39.es/ecma262/#sec-array.prototype.values
-		// `Array.prototype[@@iterator]` method
-		// https://tc39.es/ecma262/#sec-array.prototype-@@iterator
-		// `CreateArrayIterator` internal method
-		// https://tc39.es/ecma262/#sec-createarrayiterator
-		es_array_iterator = defineIterator(Array, 'Array', function (iterated, kind) {
-		  setInternalState(this, {
-		    type: ARRAY_ITERATOR,
-		    target: toIndexedObject(iterated), // target
-		    index: 0,                          // next index
-		    kind: kind                         // kind
-		  });
-		// `%ArrayIteratorPrototype%.next` method
-		// https://tc39.es/ecma262/#sec-%arrayiteratorprototype%.next
-		}, function () {
-		  var state = getInternalState(this);
-		  var target = state.target;
-		  var index = state.index++;
-		  if (!target || index >= target.length) {
-		    state.target = null;
-		    return createIterResultObject(undefined, true);
-		  }
-		  switch (state.kind) {
-		    case 'keys': return createIterResultObject(index, false);
-		    case 'values': return createIterResultObject(target[index], false);
-		  } return createIterResultObject([index, target[index]], false);
-		}, 'values');
-
-		// argumentsList[@@iterator] is %ArrayProto_values%
-		// https://tc39.es/ecma262/#sec-createunmappedargumentsobject
-		// https://tc39.es/ecma262/#sec-createmappedargumentsobject
-		var values = Iterators.Arguments = Iterators.Array;
-
-		// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-		addToUnscopables('keys');
-		addToUnscopables('values');
-		addToUnscopables('entries');
-
-		// V8 ~ Chrome 45- bug
-		if (!IS_PURE && DESCRIPTORS && values.name !== 'values') try {
-		  defineProperty(values, 'name', { value: 'values' });
-		} catch (error) { /* empty */ }
-		return es_array_iterator;
-	}
-
-	requireEs_array_iterator();
-
-	var es_string_iterator = {};
-
-	var hasRequiredEs_string_iterator;
-
-	function requireEs_string_iterator () {
-		if (hasRequiredEs_string_iterator) return es_string_iterator;
-		hasRequiredEs_string_iterator = 1;
-		var charAt = requireStringMultibyte().charAt;
-		var toString = requireToString();
-		var InternalStateModule = requireInternalState();
-		var defineIterator = requireIteratorDefine();
-		var createIterResultObject = requireCreateIterResultObject();
-
-		var STRING_ITERATOR = 'String Iterator';
-		var setInternalState = InternalStateModule.set;
-		var getInternalState = InternalStateModule.getterFor(STRING_ITERATOR);
-
-		// `String.prototype[@@iterator]` method
-		// https://tc39.es/ecma262/#sec-string.prototype-@@iterator
-		defineIterator(String, 'String', function (iterated) {
-		  setInternalState(this, {
-		    type: STRING_ITERATOR,
-		    string: toString(iterated),
-		    index: 0
-		  });
-		// `%StringIteratorPrototype%.next` method
-		// https://tc39.es/ecma262/#sec-%stringiteratorprototype%.next
-		}, function next() {
-		  var state = getInternalState(this);
-		  var string = state.string;
-		  var index = state.index;
-		  var point;
-		  if (index >= string.length) return createIterResultObject(undefined, true);
-		  point = charAt(string, index);
-		  state.index += point.length;
-		  return createIterResultObject(point, false);
-		});
-		return es_string_iterator;
-	}
-
-	requireEs_string_iterator();
 
 	var web_domCollections_iterator = {};
 
@@ -10600,86 +13054,6 @@
 		    || new URL('https://x', undefined).host !== 'x';
 		});
 		return urlConstructorDetection;
-	}
-
-	var callWithSafeIterationClosing;
-	var hasRequiredCallWithSafeIterationClosing;
-
-	function requireCallWithSafeIterationClosing () {
-		if (hasRequiredCallWithSafeIterationClosing) return callWithSafeIterationClosing;
-		hasRequiredCallWithSafeIterationClosing = 1;
-		var anObject = requireAnObject();
-		var iteratorClose = requireIteratorClose();
-
-		// call something on iterator step with safe closing on error
-		callWithSafeIterationClosing = function (iterator, fn, value, ENTRIES) {
-		  try {
-		    return ENTRIES ? fn(anObject(value)[0], value[1]) : fn(value);
-		  } catch (error) {
-		    iteratorClose(iterator, 'throw', error);
-		  }
-		};
-		return callWithSafeIterationClosing;
-	}
-
-	var arrayFrom;
-	var hasRequiredArrayFrom;
-
-	function requireArrayFrom () {
-		if (hasRequiredArrayFrom) return arrayFrom;
-		hasRequiredArrayFrom = 1;
-		var bind = requireFunctionBindContext();
-		var call = requireFunctionCall();
-		var toObject = requireToObject();
-		var callWithSafeIterationClosing = requireCallWithSafeIterationClosing();
-		var isArrayIteratorMethod = requireIsArrayIteratorMethod();
-		var isConstructor = requireIsConstructor();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-		var createProperty = requireCreateProperty();
-		var setArrayLength = requireArraySetLength();
-		var getIterator = requireGetIterator();
-		var getIteratorMethod = requireGetIteratorMethod();
-		var iteratorClose = requireIteratorClose();
-
-		var $Array = Array;
-
-		// `Array.from` method implementation
-		// https://tc39.es/ecma262/#sec-array.from
-		arrayFrom = function from(arrayLike /* , mapfn = undefined, thisArg = undefined */) {
-		  var IS_CONSTRUCTOR = isConstructor(this);
-		  var argumentsLength = arguments.length;
-		  var mapfn = argumentsLength > 1 ? arguments[1] : undefined;
-		  var mapping = mapfn !== undefined;
-		  if (mapping) mapfn = bind(mapfn, argumentsLength > 2 ? arguments[2] : undefined);
-		  var O = toObject(arrayLike);
-		  var iteratorMethod = getIteratorMethod(O);
-		  var index = 0;
-		  var length, result, step, iterator, next, value;
-		  // if the target is not iterable or it's an array with the default iterator - use a simple case
-		  if (iteratorMethod && !(this === $Array && isArrayIteratorMethod(iteratorMethod))) {
-		    result = IS_CONSTRUCTOR ? new this() : [];
-		    iterator = getIterator(O, iteratorMethod);
-		    next = iterator.next;
-		    for (;!(step = call(next, iterator)).done; index++) {
-		      value = mapping ? callWithSafeIterationClosing(iterator, mapfn, [step.value, index], true) : step.value;
-		      try {
-		        createProperty(result, index, value);
-		      } catch (error) {
-		        iteratorClose(iterator, 'throw', error);
-		      }
-		    }
-		  } else {
-		    length = lengthOfArrayLike(O);
-		    result = IS_CONSTRUCTOR ? new this(length) : $Array(length);
-		    for (;length > index; index++) {
-		      value = mapping ? mapfn(O[index], index) : O[index];
-		      createProperty(result, index, value);
-		    }
-		  }
-		  setArrayLength(result, index);
-		  return result;
-		};
-		return arrayFrom;
 	}
 
 	var stringPunycodeToAscii;
@@ -10910,71 +13284,6 @@
 		  }
 		});
 		return es_string_fromCodePoint;
-	}
-
-	var defineBuiltIns;
-	var hasRequiredDefineBuiltIns;
-
-	function requireDefineBuiltIns () {
-		if (hasRequiredDefineBuiltIns) return defineBuiltIns;
-		hasRequiredDefineBuiltIns = 1;
-		var defineBuiltIn = requireDefineBuiltIn();
-
-		defineBuiltIns = function (target, src, options) {
-		  for (var key in src) defineBuiltIn(target, key, src[key], options);
-		  return target;
-		};
-		return defineBuiltIns;
-	}
-
-	var arraySort;
-	var hasRequiredArraySort;
-
-	function requireArraySort () {
-		if (hasRequiredArraySort) return arraySort;
-		hasRequiredArraySort = 1;
-		var arraySlice = requireArraySlice();
-
-		var floor = Math.floor;
-
-		var sort = function (array, comparefn) {
-		  var length = array.length;
-
-		  if (length < 8) {
-		    // insertion sort
-		    var i = 1;
-		    var element, j;
-
-		    while (i < length) {
-		      j = i;
-		      element = array[i];
-		      while (j && comparefn(array[j - 1], element) > 0) {
-		        array[j] = array[--j];
-		      }
-		      if (j !== i++) array[j] = element;
-		    }
-		  } else {
-		    // merge sort
-		    var middle = floor(length / 2);
-		    var left = sort(arraySlice(array, 0, middle), comparefn);
-		    var right = sort(arraySlice(array, middle), comparefn);
-		    var llength = left.length;
-		    var rlength = right.length;
-		    var lindex = 0;
-		    var rindex = 0;
-
-		    while (lindex < llength || rindex < rlength) {
-		      array[lindex + rindex] = (lindex < llength && rindex < rlength)
-		        ? comparefn(left[lindex], right[rindex]) <= 0 ? left[lindex++] : right[rindex++]
-		        : lindex < llength ? left[lindex++] : right[rindex++];
-		    }
-		  }
-
-		  return array;
-		};
-
-		arraySort = sort;
-		return arraySort;
 	}
 
 	var web_urlSearchParams_constructor;
@@ -13105,600 +15414,6 @@
 	  return unsubscribe;
 	}
 
-	var es_arrayBuffer_slice = {};
-
-	var arrayBufferBasicDetection;
-	var hasRequiredArrayBufferBasicDetection;
-
-	function requireArrayBufferBasicDetection () {
-		if (hasRequiredArrayBufferBasicDetection) return arrayBufferBasicDetection;
-		hasRequiredArrayBufferBasicDetection = 1;
-		// eslint-disable-next-line es/no-typed-arrays -- safe
-		arrayBufferBasicDetection = typeof ArrayBuffer != 'undefined' && typeof DataView != 'undefined';
-		return arrayBufferBasicDetection;
-	}
-
-	var toIndex;
-	var hasRequiredToIndex;
-
-	function requireToIndex () {
-		if (hasRequiredToIndex) return toIndex;
-		hasRequiredToIndex = 1;
-		var toIntegerOrInfinity = requireToIntegerOrInfinity();
-		var toLength = requireToLength();
-
-		var $RangeError = RangeError;
-
-		// `ToIndex` abstract operation
-		// https://tc39.es/ecma262/#sec-toindex
-		toIndex = function (it) {
-		  if (it === undefined) return 0;
-		  var number = toIntegerOrInfinity(it);
-		  var length = toLength(number);
-		  if (number !== length) throw new $RangeError('Wrong length or index');
-		  return length;
-		};
-		return toIndex;
-	}
-
-	var mathSign;
-	var hasRequiredMathSign;
-
-	function requireMathSign () {
-		if (hasRequiredMathSign) return mathSign;
-		hasRequiredMathSign = 1;
-		// `Math.sign` method implementation
-		// https://tc39.es/ecma262/#sec-math.sign
-		// eslint-disable-next-line es/no-math-sign -- safe
-		mathSign = Math.sign || function sign(x) {
-		  var n = +x;
-		  // eslint-disable-next-line no-self-compare -- NaN check
-		  return n === 0 || n !== n ? n : n < 0 ? -1 : 1;
-		};
-		return mathSign;
-	}
-
-	var mathRoundTiesToEven;
-	var hasRequiredMathRoundTiesToEven;
-
-	function requireMathRoundTiesToEven () {
-		if (hasRequiredMathRoundTiesToEven) return mathRoundTiesToEven;
-		hasRequiredMathRoundTiesToEven = 1;
-		var EPSILON = 2.220446049250313e-16; // Number.EPSILON
-		var INVERSE_EPSILON = 1 / EPSILON;
-
-		mathRoundTiesToEven = function (n) {
-		  return n + INVERSE_EPSILON - INVERSE_EPSILON;
-		};
-		return mathRoundTiesToEven;
-	}
-
-	var mathFloatRound;
-	var hasRequiredMathFloatRound;
-
-	function requireMathFloatRound () {
-		if (hasRequiredMathFloatRound) return mathFloatRound;
-		hasRequiredMathFloatRound = 1;
-		var sign = requireMathSign();
-		var roundTiesToEven = requireMathRoundTiesToEven();
-
-		var abs = Math.abs;
-
-		var EPSILON = 2.220446049250313e-16; // Number.EPSILON
-
-		mathFloatRound = function (x, FLOAT_EPSILON, FLOAT_MAX_VALUE, FLOAT_MIN_VALUE) {
-		  var n = +x;
-		  var absolute = abs(n);
-		  var s = sign(n);
-		  if (absolute < FLOAT_MIN_VALUE) return s * roundTiesToEven(absolute / FLOAT_MIN_VALUE / FLOAT_EPSILON) * FLOAT_MIN_VALUE * FLOAT_EPSILON;
-		  var a = (1 + FLOAT_EPSILON / EPSILON) * absolute;
-		  var result = a - (a - absolute);
-		  // eslint-disable-next-line no-self-compare -- NaN check
-		  if (result > FLOAT_MAX_VALUE || result !== result) return s * Infinity;
-		  return s * result;
-		};
-		return mathFloatRound;
-	}
-
-	var mathFround;
-	var hasRequiredMathFround;
-
-	function requireMathFround () {
-		if (hasRequiredMathFround) return mathFround;
-		hasRequiredMathFround = 1;
-		var floatRound = requireMathFloatRound();
-
-		var FLOAT32_EPSILON = 1.1920928955078125e-7; // 2 ** -23;
-		var FLOAT32_MAX_VALUE = 3.4028234663852886e+38; // 2 ** 128 - 2 ** 104
-		var FLOAT32_MIN_VALUE = 1.1754943508222875e-38; // 2 ** -126;
-
-		// `Math.fround` method implementation
-		// https://tc39.es/ecma262/#sec-math.fround
-		// eslint-disable-next-line es/no-math-fround -- safe
-		mathFround = Math.fround || function fround(x) {
-		  return floatRound(x, FLOAT32_EPSILON, FLOAT32_MAX_VALUE, FLOAT32_MIN_VALUE);
-		};
-		return mathFround;
-	}
-
-	var ieee754;
-	var hasRequiredIeee754;
-
-	function requireIeee754 () {
-		if (hasRequiredIeee754) return ieee754;
-		hasRequiredIeee754 = 1;
-		// IEEE754 conversions based on https://github.com/feross/ieee754
-		var $Array = Array;
-		var abs = Math.abs;
-		var pow = Math.pow;
-		var floor = Math.floor;
-		var log = Math.log;
-		var LN2 = Math.LN2;
-
-		var pack = function (number, mantissaLength, bytes) {
-		  var buffer = $Array(bytes);
-		  var exponentLength = bytes * 8 - mantissaLength - 1;
-		  var eMax = (1 << exponentLength) - 1;
-		  var eBias = eMax >> 1;
-		  var rt = mantissaLength === 23 ? pow(2, -24) - pow(2, -77) : 0;
-		  var sign = number < 0 || number === 0 && 1 / number < 0 ? 1 : 0;
-		  var index = 0;
-		  var exponent, mantissa, c;
-		  number = abs(number);
-		  // eslint-disable-next-line no-self-compare -- NaN check
-		  if (number !== number || number === Infinity) {
-		    // eslint-disable-next-line no-self-compare -- NaN check
-		    mantissa = number !== number ? 1 : 0;
-		    exponent = eMax;
-		  } else {
-		    exponent = floor(log(number) / LN2);
-		    c = pow(2, -exponent);
-		    if (number * c < 1) {
-		      exponent--;
-		      c *= 2;
-		    }
-		    if (exponent + eBias >= 1) {
-		      number += rt / c;
-		    } else {
-		      number += rt * pow(2, 1 - eBias);
-		    }
-		    if (number * c >= 2) {
-		      exponent++;
-		      c /= 2;
-		    }
-		    if (exponent + eBias >= eMax) {
-		      mantissa = 0;
-		      exponent = eMax;
-		    } else if (exponent + eBias >= 1) {
-		      mantissa = (number * c - 1) * pow(2, mantissaLength);
-		      exponent += eBias;
-		    } else {
-		      mantissa = number * pow(2, eBias - 1) * pow(2, mantissaLength);
-		      exponent = 0;
-		    }
-		  }
-		  while (mantissaLength >= 8) {
-		    buffer[index++] = mantissa & 255;
-		    mantissa /= 256;
-		    mantissaLength -= 8;
-		  }
-		  exponent = exponent << mantissaLength | mantissa;
-		  exponentLength += mantissaLength;
-		  while (exponentLength > 0) {
-		    buffer[index++] = exponent & 255;
-		    exponent /= 256;
-		    exponentLength -= 8;
-		  }
-		  buffer[index - 1] |= sign * 128;
-		  return buffer;
-		};
-
-		var unpack = function (buffer, mantissaLength) {
-		  var bytes = buffer.length;
-		  var exponentLength = bytes * 8 - mantissaLength - 1;
-		  var eMax = (1 << exponentLength) - 1;
-		  var eBias = eMax >> 1;
-		  var nBits = exponentLength - 7;
-		  var index = bytes - 1;
-		  var sign = buffer[index--];
-		  var exponent = sign & 127;
-		  var mantissa;
-		  sign >>= 7;
-		  while (nBits > 0) {
-		    exponent = exponent * 256 + buffer[index--];
-		    nBits -= 8;
-		  }
-		  mantissa = exponent & (1 << -nBits) - 1;
-		  exponent >>= -nBits;
-		  nBits += mantissaLength;
-		  while (nBits > 0) {
-		    mantissa = mantissa * 256 + buffer[index--];
-		    nBits -= 8;
-		  }
-		  if (exponent === 0) {
-		    exponent = 1 - eBias;
-		  } else if (exponent === eMax) {
-		    return mantissa ? NaN : sign ? -Infinity : Infinity;
-		  } else {
-		    mantissa += pow(2, mantissaLength);
-		    exponent -= eBias;
-		  } return (sign ? -1 : 1) * mantissa * pow(2, exponent - mantissaLength);
-		};
-
-		ieee754 = {
-		  pack: pack,
-		  unpack: unpack
-		};
-		return ieee754;
-	}
-
-	var arrayFill;
-	var hasRequiredArrayFill;
-
-	function requireArrayFill () {
-		if (hasRequiredArrayFill) return arrayFill;
-		hasRequiredArrayFill = 1;
-		var toObject = requireToObject();
-		var toAbsoluteIndex = requireToAbsoluteIndex();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-
-		// `Array.prototype.fill` method implementation
-		// https://tc39.es/ecma262/#sec-array.prototype.fill
-		arrayFill = function fill(value /* , start = 0, end = @length */) {
-		  var O = toObject(this);
-		  var length = lengthOfArrayLike(O);
-		  var argumentsLength = arguments.length;
-		  var index = toAbsoluteIndex(argumentsLength > 1 ? arguments[1] : undefined, length);
-		  var end = argumentsLength > 2 ? arguments[2] : undefined;
-		  var endPos = end === undefined ? length : toAbsoluteIndex(end, length);
-		  while (endPos > index) O[index++] = value;
-		  return O;
-		};
-		return arrayFill;
-	}
-
-	var inheritIfRequired;
-	var hasRequiredInheritIfRequired;
-
-	function requireInheritIfRequired () {
-		if (hasRequiredInheritIfRequired) return inheritIfRequired;
-		hasRequiredInheritIfRequired = 1;
-		var isCallable = requireIsCallable();
-		var isObject = requireIsObject();
-		var setPrototypeOf = requireObjectSetPrototypeOf();
-
-		// makes subclassing work correct for wrapped built-ins
-		inheritIfRequired = function ($this, dummy, Wrapper) {
-		  var NewTarget, NewTargetPrototype;
-		  if (
-		    // it can work only with native `setPrototypeOf`
-		    setPrototypeOf &&
-		    // we haven't completely correct pre-ES6 way for getting `new.target`, so use this
-		    isCallable(NewTarget = dummy.constructor) &&
-		    NewTarget !== Wrapper &&
-		    isObject(NewTargetPrototype = NewTarget.prototype) &&
-		    NewTargetPrototype !== Wrapper.prototype
-		  ) setPrototypeOf($this, NewTargetPrototype);
-		  return $this;
-		};
-		return inheritIfRequired;
-	}
-
-	var arrayBuffer;
-	var hasRequiredArrayBuffer;
-
-	function requireArrayBuffer () {
-		if (hasRequiredArrayBuffer) return arrayBuffer;
-		hasRequiredArrayBuffer = 1;
-		var globalThis = requireGlobalThis();
-		var uncurryThis = requireFunctionUncurryThis();
-		var DESCRIPTORS = requireDescriptors();
-		var NATIVE_ARRAY_BUFFER = requireArrayBufferBasicDetection();
-		var FunctionName = requireFunctionName();
-		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
-		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-		var defineBuiltIns = requireDefineBuiltIns();
-		var fails = requireFails();
-		var anInstance = requireAnInstance();
-		var toIntegerOrInfinity = requireToIntegerOrInfinity();
-		var toIndex = requireToIndex();
-		var fround = requireMathFround();
-		var IEEE754 = requireIeee754();
-		var getPrototypeOf = requireObjectGetPrototypeOf();
-		var setPrototypeOf = requireObjectSetPrototypeOf();
-		var arrayFill = requireArrayFill();
-		var arraySlice = requireArraySlice();
-		var inheritIfRequired = requireInheritIfRequired();
-		var copyConstructorProperties = requireCopyConstructorProperties();
-		var setToStringTag = requireSetToStringTag();
-		var InternalStateModule = requireInternalState();
-
-		var PROPER_FUNCTION_NAME = FunctionName.PROPER;
-		var CONFIGURABLE_FUNCTION_NAME = FunctionName.CONFIGURABLE;
-		var ARRAY_BUFFER = 'ArrayBuffer';
-		var DATA_VIEW = 'DataView';
-		var PROTOTYPE = 'prototype';
-		var WRONG_LENGTH = 'Wrong length';
-		var WRONG_INDEX = 'Wrong index';
-		var getInternalArrayBufferState = InternalStateModule.getterFor(ARRAY_BUFFER);
-		var getInternalDataViewState = InternalStateModule.getterFor(DATA_VIEW);
-		var setInternalState = InternalStateModule.set;
-		var NativeArrayBuffer = globalThis[ARRAY_BUFFER];
-		var $ArrayBuffer = NativeArrayBuffer;
-		var ArrayBufferPrototype = $ArrayBuffer && $ArrayBuffer[PROTOTYPE];
-		var $DataView = globalThis[DATA_VIEW];
-		var DataViewPrototype = $DataView && $DataView[PROTOTYPE];
-		var ObjectPrototype = Object.prototype;
-		var Array = globalThis.Array;
-		var RangeError = globalThis.RangeError;
-		var fill = uncurryThis(arrayFill);
-		var reverse = uncurryThis([].reverse);
-
-		var packIEEE754 = IEEE754.pack;
-		var unpackIEEE754 = IEEE754.unpack;
-
-		var packInt8 = function (number) {
-		  return [number & 0xFF];
-		};
-
-		var packInt16 = function (number) {
-		  return [number & 0xFF, number >> 8 & 0xFF];
-		};
-
-		var packInt32 = function (number) {
-		  return [number & 0xFF, number >> 8 & 0xFF, number >> 16 & 0xFF, number >> 24 & 0xFF];
-		};
-
-		var unpackInt32 = function (buffer) {
-		  return buffer[3] << 24 | buffer[2] << 16 | buffer[1] << 8 | buffer[0];
-		};
-
-		var packFloat32 = function (number) {
-		  return packIEEE754(fround(number), 23, 4);
-		};
-
-		var packFloat64 = function (number) {
-		  return packIEEE754(number, 52, 8);
-		};
-
-		var addGetter = function (Constructor, key, getInternalState) {
-		  defineBuiltInAccessor(Constructor[PROTOTYPE], key, {
-		    configurable: true,
-		    get: function () {
-		      return getInternalState(this)[key];
-		    }
-		  });
-		};
-
-		var get = function (view, count, index, isLittleEndian) {
-		  var store = getInternalDataViewState(view);
-		  var intIndex = toIndex(index);
-		  var boolIsLittleEndian = !!isLittleEndian;
-		  if (intIndex + count > store.byteLength) throw new RangeError(WRONG_INDEX);
-		  var bytes = store.bytes;
-		  var start = intIndex + store.byteOffset;
-		  var pack = arraySlice(bytes, start, start + count);
-		  return boolIsLittleEndian ? pack : reverse(pack);
-		};
-
-		var set = function (view, count, index, conversion, value, isLittleEndian) {
-		  var store = getInternalDataViewState(view);
-		  var intIndex = toIndex(index);
-		  var pack = conversion(+value);
-		  var boolIsLittleEndian = !!isLittleEndian;
-		  if (intIndex + count > store.byteLength) throw new RangeError(WRONG_INDEX);
-		  var bytes = store.bytes;
-		  var start = intIndex + store.byteOffset;
-		  for (var i = 0; i < count; i++) bytes[start + i] = pack[boolIsLittleEndian ? i : count - i - 1];
-		};
-
-		if (!NATIVE_ARRAY_BUFFER) {
-		  $ArrayBuffer = function ArrayBuffer(length) {
-		    anInstance(this, ArrayBufferPrototype);
-		    var byteLength = toIndex(length);
-		    setInternalState(this, {
-		      type: ARRAY_BUFFER,
-		      bytes: fill(Array(byteLength), 0),
-		      byteLength: byteLength
-		    });
-		    if (!DESCRIPTORS) {
-		      this.byteLength = byteLength;
-		      this.detached = false;
-		    }
-		  };
-
-		  ArrayBufferPrototype = $ArrayBuffer[PROTOTYPE];
-
-		  $DataView = function DataView(buffer, byteOffset, byteLength) {
-		    anInstance(this, DataViewPrototype);
-		    anInstance(buffer, ArrayBufferPrototype);
-		    var bufferState = getInternalArrayBufferState(buffer);
-		    var bufferLength = bufferState.byteLength;
-		    var offset = toIntegerOrInfinity(byteOffset);
-		    if (offset < 0 || offset > bufferLength) throw new RangeError('Wrong offset');
-		    byteLength = byteLength === undefined ? bufferLength - offset : toIndex(byteLength);
-		    if (offset + byteLength > bufferLength) throw new RangeError(WRONG_LENGTH);
-		    setInternalState(this, {
-		      type: DATA_VIEW,
-		      buffer: buffer,
-		      byteLength: byteLength,
-		      byteOffset: offset,
-		      bytes: bufferState.bytes
-		    });
-		    if (!DESCRIPTORS) {
-		      this.buffer = buffer;
-		      this.byteLength = byteLength;
-		      this.byteOffset = offset;
-		    }
-		  };
-
-		  DataViewPrototype = $DataView[PROTOTYPE];
-
-		  if (DESCRIPTORS) {
-		    addGetter($ArrayBuffer, 'byteLength', getInternalArrayBufferState);
-		    addGetter($DataView, 'buffer', getInternalDataViewState);
-		    addGetter($DataView, 'byteLength', getInternalDataViewState);
-		    addGetter($DataView, 'byteOffset', getInternalDataViewState);
-		  }
-
-		  defineBuiltIns(DataViewPrototype, {
-		    getInt8: function getInt8(byteOffset) {
-		      return get(this, 1, byteOffset)[0] << 24 >> 24;
-		    },
-		    getUint8: function getUint8(byteOffset) {
-		      return get(this, 1, byteOffset)[0];
-		    },
-		    getInt16: function getInt16(byteOffset /* , littleEndian */) {
-		      var bytes = get(this, 2, byteOffset, arguments.length > 1 ? arguments[1] : false);
-		      return (bytes[1] << 8 | bytes[0]) << 16 >> 16;
-		    },
-		    getUint16: function getUint16(byteOffset /* , littleEndian */) {
-		      var bytes = get(this, 2, byteOffset, arguments.length > 1 ? arguments[1] : false);
-		      return bytes[1] << 8 | bytes[0];
-		    },
-		    getInt32: function getInt32(byteOffset /* , littleEndian */) {
-		      return unpackInt32(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false));
-		    },
-		    getUint32: function getUint32(byteOffset /* , littleEndian */) {
-		      return unpackInt32(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false)) >>> 0;
-		    },
-		    getFloat32: function getFloat32(byteOffset /* , littleEndian */) {
-		      return unpackIEEE754(get(this, 4, byteOffset, arguments.length > 1 ? arguments[1] : false), 23);
-		    },
-		    getFloat64: function getFloat64(byteOffset /* , littleEndian */) {
-		      return unpackIEEE754(get(this, 8, byteOffset, arguments.length > 1 ? arguments[1] : false), 52);
-		    },
-		    setInt8: function setInt8(byteOffset, value) {
-		      set(this, 1, byteOffset, packInt8, value);
-		    },
-		    setUint8: function setUint8(byteOffset, value) {
-		      set(this, 1, byteOffset, packInt8, value);
-		    },
-		    setInt16: function setInt16(byteOffset, value /* , littleEndian */) {
-		      set(this, 2, byteOffset, packInt16, value, arguments.length > 2 ? arguments[2] : false);
-		    },
-		    setUint16: function setUint16(byteOffset, value /* , littleEndian */) {
-		      set(this, 2, byteOffset, packInt16, value, arguments.length > 2 ? arguments[2] : false);
-		    },
-		    setInt32: function setInt32(byteOffset, value /* , littleEndian */) {
-		      set(this, 4, byteOffset, packInt32, value, arguments.length > 2 ? arguments[2] : false);
-		    },
-		    setUint32: function setUint32(byteOffset, value /* , littleEndian */) {
-		      set(this, 4, byteOffset, packInt32, value, arguments.length > 2 ? arguments[2] : false);
-		    },
-		    setFloat32: function setFloat32(byteOffset, value /* , littleEndian */) {
-		      set(this, 4, byteOffset, packFloat32, value, arguments.length > 2 ? arguments[2] : false);
-		    },
-		    setFloat64: function setFloat64(byteOffset, value /* , littleEndian */) {
-		      set(this, 8, byteOffset, packFloat64, value, arguments.length > 2 ? arguments[2] : false);
-		    }
-		  });
-		} else {
-		  var INCORRECT_ARRAY_BUFFER_NAME = PROPER_FUNCTION_NAME && NativeArrayBuffer.name !== ARRAY_BUFFER;
-		  /* eslint-disable no-new, sonarjs/inconsistent-function-call -- required for testing */
-		  if (!fails(function () {
-		    NativeArrayBuffer(1);
-		  }) || !fails(function () {
-		    new NativeArrayBuffer(-1);
-		  }) || fails(function () {
-		    new NativeArrayBuffer();
-		    new NativeArrayBuffer(1.5);
-		    new NativeArrayBuffer(NaN);
-		    return NativeArrayBuffer.length !== 1 || INCORRECT_ARRAY_BUFFER_NAME && !CONFIGURABLE_FUNCTION_NAME;
-		  })) {
-		    /* eslint-enable no-new, sonarjs/inconsistent-function-call -- required for testing */
-		    $ArrayBuffer = function ArrayBuffer(length) {
-		      anInstance(this, ArrayBufferPrototype);
-		      return inheritIfRequired(new NativeArrayBuffer(toIndex(length)), this, $ArrayBuffer);
-		    };
-
-		    $ArrayBuffer[PROTOTYPE] = ArrayBufferPrototype;
-
-		    ArrayBufferPrototype.constructor = $ArrayBuffer;
-
-		    copyConstructorProperties($ArrayBuffer, NativeArrayBuffer);
-		  } else if (INCORRECT_ARRAY_BUFFER_NAME && CONFIGURABLE_FUNCTION_NAME) {
-		    createNonEnumerableProperty(NativeArrayBuffer, 'name', ARRAY_BUFFER);
-		  }
-
-		  // WebKit bug - the same parent prototype for typed arrays and data view
-		  if (setPrototypeOf && getPrototypeOf(DataViewPrototype) !== ObjectPrototype) {
-		    setPrototypeOf(DataViewPrototype, ObjectPrototype);
-		  }
-
-		  // iOS Safari 7.x bug
-		  var testView = new $DataView(new $ArrayBuffer(2));
-		  var $setInt8 = uncurryThis(DataViewPrototype.setInt8);
-		  testView.setInt8(0, 2147483648);
-		  testView.setInt8(1, 2147483649);
-		  if (testView.getInt8(0) || !testView.getInt8(1)) defineBuiltIns(DataViewPrototype, {
-		    setInt8: function setInt8(byteOffset, value) {
-		      $setInt8(this, byteOffset, value << 24 >> 24);
-		    },
-		    setUint8: function setUint8(byteOffset, value) {
-		      $setInt8(this, byteOffset, value << 24 >> 24);
-		    }
-		  }, { unsafe: true });
-		}
-
-		setToStringTag($ArrayBuffer, ARRAY_BUFFER);
-		setToStringTag($DataView, DATA_VIEW);
-
-		arrayBuffer = {
-		  ArrayBuffer: $ArrayBuffer,
-		  DataView: $DataView
-		};
-		return arrayBuffer;
-	}
-
-	var hasRequiredEs_arrayBuffer_slice;
-
-	function requireEs_arrayBuffer_slice () {
-		if (hasRequiredEs_arrayBuffer_slice) return es_arrayBuffer_slice;
-		hasRequiredEs_arrayBuffer_slice = 1;
-		var $ = require_export();
-		var uncurryThis = requireFunctionUncurryThisClause();
-		var fails = requireFails();
-		var ArrayBufferModule = requireArrayBuffer();
-		var anObject = requireAnObject();
-		var toAbsoluteIndex = requireToAbsoluteIndex();
-		var toLength = requireToLength();
-
-		var ArrayBuffer = ArrayBufferModule.ArrayBuffer;
-		var DataView = ArrayBufferModule.DataView;
-		var DataViewPrototype = DataView.prototype;
-		var nativeArrayBufferSlice = uncurryThis(ArrayBuffer.prototype.slice);
-		var getUint8 = uncurryThis(DataViewPrototype.getUint8);
-		var setUint8 = uncurryThis(DataViewPrototype.setUint8);
-
-		var INCORRECT_SLICE = fails(function () {
-		  return !new ArrayBuffer(2).slice(1, undefined).byteLength;
-		});
-
-		// `ArrayBuffer.prototype.slice` method
-		// https://tc39.es/ecma262/#sec-arraybuffer.prototype.slice
-		$({ target: 'ArrayBuffer', proto: true, unsafe: true, forced: INCORRECT_SLICE }, {
-		  slice: function slice(start, end) {
-		    if (nativeArrayBufferSlice && end === undefined) {
-		      return nativeArrayBufferSlice(anObject(this), start); // FF fix
-		    }
-		    var length = anObject(this).byteLength;
-		    var first = toAbsoluteIndex(start, length);
-		    var fin = toAbsoluteIndex(end === undefined ? length : end, length);
-		    var result = new ArrayBuffer(toLength(fin - first));
-		    var viewSource = new DataView(this);
-		    var viewTarget = new DataView(result);
-		    var index = 0;
-		    while (first < fin) {
-		      setUint8(viewTarget, index++, getUint8(viewSource, first++));
-		    } return result;
-		  }
-		});
-		return es_arrayBuffer_slice;
-	}
-
-	requireEs_arrayBuffer_slice();
-
 	var es_map = {};
 
 	var es_map_constructor = {};
@@ -14250,1581 +15965,6 @@
 	}
 
 	requireEs_map();
-
-	var es_typedArray_uint8Array = {};
-
-	var typedArrayConstructor = {exports: {}};
-
-	var arrayBufferViewCore;
-	var hasRequiredArrayBufferViewCore;
-
-	function requireArrayBufferViewCore () {
-		if (hasRequiredArrayBufferViewCore) return arrayBufferViewCore;
-		hasRequiredArrayBufferViewCore = 1;
-		var NATIVE_ARRAY_BUFFER = requireArrayBufferBasicDetection();
-		var DESCRIPTORS = requireDescriptors();
-		var globalThis = requireGlobalThis();
-		var isCallable = requireIsCallable();
-		var isObject = requireIsObject();
-		var hasOwn = requireHasOwnProperty();
-		var classof = requireClassof();
-		var tryToString = requireTryToString();
-		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
-		var defineBuiltIn = requireDefineBuiltIn();
-		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-		var isPrototypeOf = requireObjectIsPrototypeOf();
-		var getPrototypeOf = requireObjectGetPrototypeOf();
-		var setPrototypeOf = requireObjectSetPrototypeOf();
-		var wellKnownSymbol = requireWellKnownSymbol();
-		var uid = requireUid();
-		var InternalStateModule = requireInternalState();
-
-		var enforceInternalState = InternalStateModule.enforce;
-		var getInternalState = InternalStateModule.get;
-		var Int8Array = globalThis.Int8Array;
-		var Int8ArrayPrototype = Int8Array && Int8Array.prototype;
-		var Uint8ClampedArray = globalThis.Uint8ClampedArray;
-		var Uint8ClampedArrayPrototype = Uint8ClampedArray && Uint8ClampedArray.prototype;
-		var TypedArray = Int8Array && getPrototypeOf(Int8Array);
-		var TypedArrayPrototype = Int8ArrayPrototype && getPrototypeOf(Int8ArrayPrototype);
-		var ObjectPrototype = Object.prototype;
-		var TypeError = globalThis.TypeError;
-
-		var TO_STRING_TAG = wellKnownSymbol('toStringTag');
-		var TYPED_ARRAY_TAG = uid('TYPED_ARRAY_TAG');
-		var TYPED_ARRAY_CONSTRUCTOR = 'TypedArrayConstructor';
-		// Fixing native typed arrays in Opera Presto crashes the browser, see #595
-		var NATIVE_ARRAY_BUFFER_VIEWS = NATIVE_ARRAY_BUFFER && !!setPrototypeOf && classof(globalThis.opera) !== 'Opera';
-		var TYPED_ARRAY_TAG_REQUIRED = false;
-		var NAME, Constructor, Prototype;
-
-		var TypedArrayConstructorsList = {
-		  Int8Array: 1,
-		  Uint8Array: 1,
-		  Uint8ClampedArray: 1,
-		  Int16Array: 2,
-		  Uint16Array: 2,
-		  Int32Array: 4,
-		  Uint32Array: 4,
-		  Float32Array: 4,
-		  Float64Array: 8
-		};
-
-		var BigIntArrayConstructorsList = {
-		  BigInt64Array: 8,
-		  BigUint64Array: 8
-		};
-
-		var isView = function isView(it) {
-		  if (!isObject(it)) return false;
-		  var klass = classof(it);
-		  return klass === 'DataView'
-		    || hasOwn(TypedArrayConstructorsList, klass)
-		    || hasOwn(BigIntArrayConstructorsList, klass);
-		};
-
-		var getTypedArrayConstructor = function (it) {
-		  var proto = getPrototypeOf(it);
-		  if (!isObject(proto)) return;
-		  var state = getInternalState(proto);
-		  return (state && hasOwn(state, TYPED_ARRAY_CONSTRUCTOR)) ? state[TYPED_ARRAY_CONSTRUCTOR] : getTypedArrayConstructor(proto);
-		};
-
-		var isTypedArray = function (it) {
-		  if (!isObject(it)) return false;
-		  var klass = classof(it);
-		  return hasOwn(TypedArrayConstructorsList, klass)
-		    || hasOwn(BigIntArrayConstructorsList, klass);
-		};
-
-		var aTypedArray = function (it) {
-		  if (isTypedArray(it)) return it;
-		  throw new TypeError('Target is not a typed array');
-		};
-
-		var aTypedArrayConstructor = function (C) {
-		  if (isCallable(C) && (!setPrototypeOf || isPrototypeOf(TypedArray, C))) return C;
-		  throw new TypeError(tryToString(C) + ' is not a typed array constructor');
-		};
-
-		var exportTypedArrayMethod = function (KEY, property, forced, options) {
-		  if (!DESCRIPTORS) return;
-		  if (forced) for (var ARRAY in TypedArrayConstructorsList) {
-		    var TypedArrayConstructor = globalThis[ARRAY];
-		    if (TypedArrayConstructor && hasOwn(TypedArrayConstructor.prototype, KEY)) try {
-		      delete TypedArrayConstructor.prototype[KEY];
-		    } catch (error) {
-		      // old WebKit bug - some methods are non-configurable
-		      try {
-		        TypedArrayConstructor.prototype[KEY] = property;
-		      } catch (error2) { /* empty */ }
-		    }
-		  }
-		  if (!TypedArrayPrototype[KEY] || forced) {
-		    defineBuiltIn(TypedArrayPrototype, KEY, forced ? property
-		      : NATIVE_ARRAY_BUFFER_VIEWS && Int8ArrayPrototype[KEY] || property, options);
-		  }
-		};
-
-		var exportTypedArrayStaticMethod = function (KEY, property, forced) {
-		  var ARRAY, TypedArrayConstructor;
-		  if (!DESCRIPTORS) return;
-		  if (setPrototypeOf) {
-		    if (forced) for (ARRAY in TypedArrayConstructorsList) {
-		      TypedArrayConstructor = globalThis[ARRAY];
-		      if (TypedArrayConstructor && hasOwn(TypedArrayConstructor, KEY)) try {
-		        delete TypedArrayConstructor[KEY];
-		      } catch (error) { /* empty */ }
-		    }
-		    if (!TypedArray[KEY] || forced) {
-		      // V8 ~ Chrome 49-50 `%TypedArray%` methods are non-writable non-configurable
-		      try {
-		        return defineBuiltIn(TypedArray, KEY, forced ? property : NATIVE_ARRAY_BUFFER_VIEWS && TypedArray[KEY] || property);
-		      } catch (error) { /* empty */ }
-		    } else return;
-		  }
-		  for (ARRAY in TypedArrayConstructorsList) {
-		    TypedArrayConstructor = globalThis[ARRAY];
-		    if (TypedArrayConstructor && (!TypedArrayConstructor[KEY] || forced)) {
-		      defineBuiltIn(TypedArrayConstructor, KEY, property);
-		    }
-		  }
-		};
-
-		for (NAME in TypedArrayConstructorsList) {
-		  Constructor = globalThis[NAME];
-		  Prototype = Constructor && Constructor.prototype;
-		  if (Prototype) enforceInternalState(Prototype)[TYPED_ARRAY_CONSTRUCTOR] = Constructor;
-		  else NATIVE_ARRAY_BUFFER_VIEWS = false;
-		}
-
-		for (NAME in BigIntArrayConstructorsList) {
-		  Constructor = globalThis[NAME];
-		  Prototype = Constructor && Constructor.prototype;
-		  if (Prototype) enforceInternalState(Prototype)[TYPED_ARRAY_CONSTRUCTOR] = Constructor;
-		}
-
-		// WebKit bug - typed arrays constructors prototype is Object.prototype
-		if (!NATIVE_ARRAY_BUFFER_VIEWS || !isCallable(TypedArray) || TypedArray === Function.prototype) {
-		  // eslint-disable-next-line no-shadow -- safe
-		  TypedArray = function TypedArray() {
-		    throw new TypeError('Incorrect invocation');
-		  };
-		  if (NATIVE_ARRAY_BUFFER_VIEWS) for (NAME in TypedArrayConstructorsList) {
-		    if (globalThis[NAME]) setPrototypeOf(globalThis[NAME], TypedArray);
-		  }
-		}
-
-		if (!NATIVE_ARRAY_BUFFER_VIEWS || !TypedArrayPrototype || TypedArrayPrototype === ObjectPrototype) {
-		  TypedArrayPrototype = TypedArray.prototype;
-		  if (NATIVE_ARRAY_BUFFER_VIEWS) for (NAME in TypedArrayConstructorsList) {
-		    if (globalThis[NAME]) setPrototypeOf(globalThis[NAME].prototype, TypedArrayPrototype);
-		  }
-		}
-
-		// WebKit bug - one more object in Uint8ClampedArray prototype chain
-		if (NATIVE_ARRAY_BUFFER_VIEWS && getPrototypeOf(Uint8ClampedArrayPrototype) !== TypedArrayPrototype) {
-		  setPrototypeOf(Uint8ClampedArrayPrototype, TypedArrayPrototype);
-		}
-
-		if (DESCRIPTORS && !hasOwn(TypedArrayPrototype, TO_STRING_TAG)) {
-		  TYPED_ARRAY_TAG_REQUIRED = true;
-		  defineBuiltInAccessor(TypedArrayPrototype, TO_STRING_TAG, {
-		    configurable: true,
-		    get: function () {
-		      return isObject(this) ? this[TYPED_ARRAY_TAG] : undefined;
-		    }
-		  });
-		  for (NAME in TypedArrayConstructorsList) if (globalThis[NAME]) {
-		    createNonEnumerableProperty(globalThis[NAME].prototype, TYPED_ARRAY_TAG, NAME);
-		  }
-		}
-
-		arrayBufferViewCore = {
-		  NATIVE_ARRAY_BUFFER_VIEWS: NATIVE_ARRAY_BUFFER_VIEWS,
-		  TYPED_ARRAY_TAG: TYPED_ARRAY_TAG_REQUIRED && TYPED_ARRAY_TAG,
-		  aTypedArray: aTypedArray,
-		  aTypedArrayConstructor: aTypedArrayConstructor,
-		  exportTypedArrayMethod: exportTypedArrayMethod,
-		  exportTypedArrayStaticMethod: exportTypedArrayStaticMethod,
-		  getTypedArrayConstructor: getTypedArrayConstructor,
-		  isView: isView,
-		  isTypedArray: isTypedArray,
-		  TypedArray: TypedArray,
-		  TypedArrayPrototype: TypedArrayPrototype
-		};
-		return arrayBufferViewCore;
-	}
-
-	var typedArrayConstructorsRequireWrappers;
-	var hasRequiredTypedArrayConstructorsRequireWrappers;
-
-	function requireTypedArrayConstructorsRequireWrappers () {
-		if (hasRequiredTypedArrayConstructorsRequireWrappers) return typedArrayConstructorsRequireWrappers;
-		hasRequiredTypedArrayConstructorsRequireWrappers = 1;
-		/* eslint-disable no-new, sonarjs/inconsistent-function-call -- required for testing */
-		var globalThis = requireGlobalThis();
-		var fails = requireFails();
-		var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
-		var NATIVE_ARRAY_BUFFER_VIEWS = requireArrayBufferViewCore().NATIVE_ARRAY_BUFFER_VIEWS;
-
-		var ArrayBuffer = globalThis.ArrayBuffer;
-		var Int8Array = globalThis.Int8Array;
-
-		typedArrayConstructorsRequireWrappers = !NATIVE_ARRAY_BUFFER_VIEWS || !fails(function () {
-		  Int8Array(1);
-		}) || !fails(function () {
-		  new Int8Array(-1);
-		}) || !checkCorrectnessOfIteration(function (iterable) {
-		  new Int8Array();
-		  new Int8Array(null);
-		  new Int8Array(1.5);
-		  new Int8Array(iterable);
-		}, true) || fails(function () {
-		  // Safari (11+) bug - a reason why even Safari 13 should load a typed array polyfill
-		  return new Int8Array(new ArrayBuffer(2), 1, undefined).length !== 1;
-		});
-		return typedArrayConstructorsRequireWrappers;
-	}
-
-	var isIntegralNumber;
-	var hasRequiredIsIntegralNumber;
-
-	function requireIsIntegralNumber () {
-		if (hasRequiredIsIntegralNumber) return isIntegralNumber;
-		hasRequiredIsIntegralNumber = 1;
-		var isObject = requireIsObject();
-
-		var floor = Math.floor;
-
-		// `IsIntegralNumber` abstract operation
-		// https://tc39.es/ecma262/#sec-isintegralnumber
-		// eslint-disable-next-line es/no-number-isinteger -- safe
-		isIntegralNumber = Number.isInteger || function isInteger(it) {
-		  return !isObject(it) && isFinite(it) && floor(it) === it;
-		};
-		return isIntegralNumber;
-	}
-
-	var toPositiveInteger;
-	var hasRequiredToPositiveInteger;
-
-	function requireToPositiveInteger () {
-		if (hasRequiredToPositiveInteger) return toPositiveInteger;
-		hasRequiredToPositiveInteger = 1;
-		var toIntegerOrInfinity = requireToIntegerOrInfinity();
-
-		var $RangeError = RangeError;
-
-		toPositiveInteger = function (it) {
-		  var result = toIntegerOrInfinity(it);
-		  if (result < 0) throw new $RangeError("The argument can't be less than 0");
-		  return result;
-		};
-		return toPositiveInteger;
-	}
-
-	var toOffset;
-	var hasRequiredToOffset;
-
-	function requireToOffset () {
-		if (hasRequiredToOffset) return toOffset;
-		hasRequiredToOffset = 1;
-		var toPositiveInteger = requireToPositiveInteger();
-
-		var $RangeError = RangeError;
-
-		toOffset = function (it, BYTES) {
-		  var offset = toPositiveInteger(it);
-		  if (offset % BYTES) throw new $RangeError('Wrong offset');
-		  return offset;
-		};
-		return toOffset;
-	}
-
-	var toUint8Clamped;
-	var hasRequiredToUint8Clamped;
-
-	function requireToUint8Clamped () {
-		if (hasRequiredToUint8Clamped) return toUint8Clamped;
-		hasRequiredToUint8Clamped = 1;
-		var floor = Math.floor;
-
-		// https://tc39.es/ecma262/#sec-touint8clamp
-		toUint8Clamped = function (it) {
-		  var number = +it;
-		  // eslint-disable-next-line no-self-compare -- NaN check
-		  if (number !== number || number <= 0) return 0;
-		  if (number >= 0xFF) return 0xFF;
-		  var f = floor(number);
-		  if (f + 0.5 < number) return f + 1;
-		  if (number < f + 0.5) return f;
-		  // round-half-to-even (banker's rounding)
-		  return f % 2 === 0 ? f : f + 1;
-		};
-		return toUint8Clamped;
-	}
-
-	var isBigIntArray;
-	var hasRequiredIsBigIntArray;
-
-	function requireIsBigIntArray () {
-		if (hasRequiredIsBigIntArray) return isBigIntArray;
-		hasRequiredIsBigIntArray = 1;
-		var classof = requireClassof();
-
-		isBigIntArray = function (it) {
-		  var klass = classof(it);
-		  return klass === 'BigInt64Array' || klass === 'BigUint64Array';
-		};
-		return isBigIntArray;
-	}
-
-	var toBigInt;
-	var hasRequiredToBigInt;
-
-	function requireToBigInt () {
-		if (hasRequiredToBigInt) return toBigInt;
-		hasRequiredToBigInt = 1;
-		var toPrimitive = requireToPrimitive();
-
-		var $TypeError = TypeError;
-
-		// `ToBigInt` abstract operation
-		// https://tc39.es/ecma262/#sec-tobigint
-		toBigInt = function (argument) {
-		  var prim = toPrimitive(argument, 'number');
-		  if (typeof prim == 'number') throw new $TypeError("Can't convert number to bigint");
-		  // eslint-disable-next-line es/no-bigint -- safe
-		  return BigInt(prim);
-		};
-		return toBigInt;
-	}
-
-	var typedArrayFrom;
-	var hasRequiredTypedArrayFrom;
-
-	function requireTypedArrayFrom () {
-		if (hasRequiredTypedArrayFrom) return typedArrayFrom;
-		hasRequiredTypedArrayFrom = 1;
-		var bind = requireFunctionBindContext();
-		var call = requireFunctionCall();
-		var aCallable = requireACallable();
-		var aConstructor = requireAConstructor();
-		var toObject = requireToObject();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-		var getIterator = requireGetIterator();
-		var getIteratorMethod = requireGetIteratorMethod();
-		var isArrayIteratorMethod = requireIsArrayIteratorMethod();
-		var isBigIntArray = requireIsBigIntArray();
-		var aTypedArrayConstructor = requireArrayBufferViewCore().aTypedArrayConstructor;
-		var toBigInt = requireToBigInt();
-
-		typedArrayFrom = function from(source /* , mapfn, thisArg */) {
-		  var C = aConstructor(this);
-		  var argumentsLength = arguments.length;
-		  var mapfn = argumentsLength > 1 ? arguments[1] : undefined;
-		  var mapping = mapfn !== undefined;
-		  if (mapping) aCallable(mapfn);
-		  var O = toObject(source);
-		  var iteratorMethod = getIteratorMethod(O);
-		  var i, length, result, thisIsBigIntArray, value, step, iterator, next;
-		  if (iteratorMethod && !isArrayIteratorMethod(iteratorMethod)) {
-		    iterator = getIterator(O, iteratorMethod);
-		    next = iterator.next;
-		    O = [];
-		    while (!(step = call(next, iterator)).done) {
-		      O.push(step.value);
-		    }
-		  }
-		  if (mapping && argumentsLength > 2) {
-		    mapfn = bind(mapfn, arguments[2]);
-		  }
-		  length = lengthOfArrayLike(O);
-		  result = new (aTypedArrayConstructor(C))(length);
-		  thisIsBigIntArray = isBigIntArray(result);
-		  for (i = 0; length > i; i++) {
-		    value = mapping ? mapfn(O[i], i) : O[i];
-		    // FF30- typed arrays doesn't properly convert objects to typed array values
-		    result[i] = thisIsBigIntArray ? toBigInt(value) : +value;
-		  }
-		  return result;
-		};
-		return typedArrayFrom;
-	}
-
-	var arrayFromConstructorAndList;
-	var hasRequiredArrayFromConstructorAndList;
-
-	function requireArrayFromConstructorAndList () {
-		if (hasRequiredArrayFromConstructorAndList) return arrayFromConstructorAndList;
-		hasRequiredArrayFromConstructorAndList = 1;
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-
-		arrayFromConstructorAndList = function (Constructor, list, $length) {
-		  var index = 0;
-		  var length = arguments.length > 2 ? $length : lengthOfArrayLike(list);
-		  var result = new Constructor(length);
-		  while (length > index) result[index] = list[index++];
-		  return result;
-		};
-		return arrayFromConstructorAndList;
-	}
-
-	var hasRequiredTypedArrayConstructor;
-
-	function requireTypedArrayConstructor () {
-		if (hasRequiredTypedArrayConstructor) return typedArrayConstructor.exports;
-		hasRequiredTypedArrayConstructor = 1;
-		var $ = require_export();
-		var globalThis = requireGlobalThis();
-		var call = requireFunctionCall();
-		var DESCRIPTORS = requireDescriptors();
-		var TYPED_ARRAYS_CONSTRUCTORS_REQUIRES_WRAPPERS = requireTypedArrayConstructorsRequireWrappers();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var ArrayBufferModule = requireArrayBuffer();
-		var anInstance = requireAnInstance();
-		var createPropertyDescriptor = requireCreatePropertyDescriptor();
-		var createNonEnumerableProperty = requireCreateNonEnumerableProperty();
-		var isIntegralNumber = requireIsIntegralNumber();
-		var toIndex = requireToIndex();
-		var toOffset = requireToOffset();
-		var toUint8Clamped = requireToUint8Clamped();
-		var toPropertyKey = requireToPropertyKey();
-		var hasOwn = requireHasOwnProperty();
-		var classof = requireClassof();
-		var isObject = requireIsObject();
-		var isSymbol = requireIsSymbol();
-		var create = requireObjectCreate();
-		var isPrototypeOf = requireObjectIsPrototypeOf();
-		var setPrototypeOf = requireObjectSetPrototypeOf();
-		var getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
-		var typedArrayFrom = requireTypedArrayFrom();
-		var forEach = requireArrayIteration().forEach;
-		var setSpecies = requireSetSpecies();
-		var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-		var definePropertyModule = requireObjectDefineProperty();
-		var getOwnPropertyDescriptorModule = requireObjectGetOwnPropertyDescriptor();
-		var arrayFromConstructorAndList = requireArrayFromConstructorAndList();
-		var InternalStateModule = requireInternalState();
-		var inheritIfRequired = requireInheritIfRequired();
-
-		var getInternalState = InternalStateModule.get;
-		var setInternalState = InternalStateModule.set;
-		var enforceInternalState = InternalStateModule.enforce;
-		var nativeDefineProperty = definePropertyModule.f;
-		var nativeGetOwnPropertyDescriptor = getOwnPropertyDescriptorModule.f;
-		var RangeError = globalThis.RangeError;
-		var ArrayBuffer = ArrayBufferModule.ArrayBuffer;
-		var ArrayBufferPrototype = ArrayBuffer.prototype;
-		var DataView = ArrayBufferModule.DataView;
-		var NATIVE_ARRAY_BUFFER_VIEWS = ArrayBufferViewCore.NATIVE_ARRAY_BUFFER_VIEWS;
-		var TYPED_ARRAY_TAG = ArrayBufferViewCore.TYPED_ARRAY_TAG;
-		var TypedArray = ArrayBufferViewCore.TypedArray;
-		var TypedArrayPrototype = ArrayBufferViewCore.TypedArrayPrototype;
-		var isTypedArray = ArrayBufferViewCore.isTypedArray;
-		var BYTES_PER_ELEMENT = 'BYTES_PER_ELEMENT';
-		var WRONG_LENGTH = 'Wrong length';
-
-		var addGetter = function (it, key) {
-		  defineBuiltInAccessor(it, key, {
-		    configurable: true,
-		    get: function () {
-		      return getInternalState(this)[key];
-		    }
-		  });
-		};
-
-		var isArrayBuffer = function (it) {
-		  var klass;
-		  return isPrototypeOf(ArrayBufferPrototype, it) || (klass = classof(it)) === 'ArrayBuffer' || klass === 'SharedArrayBuffer';
-		};
-
-		var isTypedArrayIndex = function (target, key) {
-		  return isTypedArray(target)
-		    && !isSymbol(key)
-		    && key in target
-		    && isIntegralNumber(+key)
-		    && key >= 0;
-		};
-
-		var wrappedGetOwnPropertyDescriptor = function getOwnPropertyDescriptor(target, key) {
-		  key = toPropertyKey(key);
-		  return isTypedArrayIndex(target, key)
-		    ? createPropertyDescriptor(2, target[key])
-		    : nativeGetOwnPropertyDescriptor(target, key);
-		};
-
-		var wrappedDefineProperty = function defineProperty(target, key, descriptor) {
-		  key = toPropertyKey(key);
-		  if (isTypedArrayIndex(target, key)
-		    && isObject(descriptor)
-		    && hasOwn(descriptor, 'value')
-		    && !hasOwn(descriptor, 'get')
-		    && !hasOwn(descriptor, 'set')
-		    // TODO: add validation descriptor w/o calling accessors
-		    && !descriptor.configurable
-		    && (!hasOwn(descriptor, 'writable') || descriptor.writable)
-		    && (!hasOwn(descriptor, 'enumerable') || descriptor.enumerable)
-		  ) {
-		    target[key] = descriptor.value;
-		    return target;
-		  } return nativeDefineProperty(target, key, descriptor);
-		};
-
-		if (DESCRIPTORS) {
-		  if (!NATIVE_ARRAY_BUFFER_VIEWS) {
-		    getOwnPropertyDescriptorModule.f = wrappedGetOwnPropertyDescriptor;
-		    definePropertyModule.f = wrappedDefineProperty;
-		    addGetter(TypedArrayPrototype, 'buffer');
-		    addGetter(TypedArrayPrototype, 'byteOffset');
-		    addGetter(TypedArrayPrototype, 'byteLength');
-		    addGetter(TypedArrayPrototype, 'length');
-		  }
-
-		  $({ target: 'Object', stat: true, forced: !NATIVE_ARRAY_BUFFER_VIEWS }, {
-		    getOwnPropertyDescriptor: wrappedGetOwnPropertyDescriptor,
-		    defineProperty: wrappedDefineProperty
-		  });
-
-		  typedArrayConstructor.exports = function (TYPE, wrapper, CLAMPED) {
-		    var BYTES = TYPE.match(/\d+/)[0] / 8;
-		    var CONSTRUCTOR_NAME = TYPE + (CLAMPED ? 'Clamped' : '') + 'Array';
-		    var GETTER = 'get' + TYPE;
-		    var SETTER = 'set' + TYPE;
-		    var NativeTypedArrayConstructor = globalThis[CONSTRUCTOR_NAME];
-		    var TypedArrayConstructor = NativeTypedArrayConstructor;
-		    var TypedArrayConstructorPrototype = TypedArrayConstructor && TypedArrayConstructor.prototype;
-		    var exported = {};
-
-		    var getter = function (that, index) {
-		      var data = getInternalState(that);
-		      return data.view[GETTER](index * BYTES + data.byteOffset, true);
-		    };
-
-		    var setter = function (that, index, value) {
-		      var data = getInternalState(that);
-		      data.view[SETTER](index * BYTES + data.byteOffset, CLAMPED ? toUint8Clamped(value) : value, true);
-		    };
-
-		    var addElement = function (that, index) {
-		      nativeDefineProperty(that, index, {
-		        get: function () {
-		          return getter(this, index);
-		        },
-		        set: function (value) {
-		          return setter(this, index, value);
-		        },
-		        enumerable: true
-		      });
-		    };
-
-		    if (!NATIVE_ARRAY_BUFFER_VIEWS) {
-		      TypedArrayConstructor = wrapper(function (that, data, offset, $length) {
-		        anInstance(that, TypedArrayConstructorPrototype);
-		        var index = 0;
-		        var byteOffset = 0;
-		        var buffer, byteLength, length;
-		        if (!isObject(data)) {
-		          length = toIndex(data);
-		          byteLength = length * BYTES;
-		          buffer = new ArrayBuffer(byteLength);
-		        } else if (isArrayBuffer(data)) {
-		          buffer = data;
-		          byteOffset = toOffset(offset, BYTES);
-		          var $len = data.byteLength;
-		          if ($length === undefined) {
-		            if ($len % BYTES) throw new RangeError(WRONG_LENGTH);
-		            byteLength = $len - byteOffset;
-		            if (byteLength < 0) throw new RangeError(WRONG_LENGTH);
-		          } else {
-		            byteLength = toIndex($length) * BYTES;
-		            if (byteLength + byteOffset > $len) throw new RangeError(WRONG_LENGTH);
-		          }
-		          length = byteLength / BYTES;
-		        } else if (isTypedArray(data)) {
-		          return arrayFromConstructorAndList(TypedArrayConstructor, data);
-		        } else {
-		          return call(typedArrayFrom, TypedArrayConstructor, data);
-		        }
-		        setInternalState(that, {
-		          buffer: buffer,
-		          byteOffset: byteOffset,
-		          byteLength: byteLength,
-		          length: length,
-		          view: new DataView(buffer)
-		        });
-		        while (index < length) addElement(that, index++);
-		      });
-
-		      if (setPrototypeOf) setPrototypeOf(TypedArrayConstructor, TypedArray);
-		      TypedArrayConstructorPrototype = TypedArrayConstructor.prototype = create(TypedArrayPrototype);
-		    } else if (TYPED_ARRAYS_CONSTRUCTORS_REQUIRES_WRAPPERS) {
-		      TypedArrayConstructor = wrapper(function (dummy, data, typedArrayOffset, $length) {
-		        anInstance(dummy, TypedArrayConstructorPrototype);
-		        return inheritIfRequired(function () {
-		          if (!isObject(data)) return new NativeTypedArrayConstructor(toIndex(data));
-		          if (isArrayBuffer(data)) return $length !== undefined
-		            ? new NativeTypedArrayConstructor(data, toOffset(typedArrayOffset, BYTES), $length)
-		            : typedArrayOffset !== undefined
-		              ? new NativeTypedArrayConstructor(data, toOffset(typedArrayOffset, BYTES))
-		              : new NativeTypedArrayConstructor(data);
-		          if (isTypedArray(data)) return arrayFromConstructorAndList(TypedArrayConstructor, data);
-		          return call(typedArrayFrom, TypedArrayConstructor, data);
-		        }(), dummy, TypedArrayConstructor);
-		      });
-
-		      if (setPrototypeOf) setPrototypeOf(TypedArrayConstructor, TypedArray);
-		      forEach(getOwnPropertyNames(NativeTypedArrayConstructor), function (key) {
-		        if (!(key in TypedArrayConstructor)) {
-		          createNonEnumerableProperty(TypedArrayConstructor, key, NativeTypedArrayConstructor[key]);
-		        }
-		      });
-		      TypedArrayConstructor.prototype = TypedArrayConstructorPrototype;
-		    }
-
-		    if (TypedArrayConstructorPrototype.constructor !== TypedArrayConstructor) {
-		      createNonEnumerableProperty(TypedArrayConstructorPrototype, 'constructor', TypedArrayConstructor);
-		    }
-
-		    enforceInternalState(TypedArrayConstructorPrototype).TypedArrayConstructor = TypedArrayConstructor;
-
-		    if (TYPED_ARRAY_TAG) {
-		      createNonEnumerableProperty(TypedArrayConstructorPrototype, TYPED_ARRAY_TAG, CONSTRUCTOR_NAME);
-		    }
-
-		    var FORCED = TypedArrayConstructor !== NativeTypedArrayConstructor;
-
-		    exported[CONSTRUCTOR_NAME] = TypedArrayConstructor;
-
-		    $({ global: true, constructor: true, forced: FORCED, sham: !NATIVE_ARRAY_BUFFER_VIEWS }, exported);
-
-		    if (!(BYTES_PER_ELEMENT in TypedArrayConstructor)) {
-		      createNonEnumerableProperty(TypedArrayConstructor, BYTES_PER_ELEMENT, BYTES);
-		    }
-
-		    if (!(BYTES_PER_ELEMENT in TypedArrayConstructorPrototype)) {
-		      createNonEnumerableProperty(TypedArrayConstructorPrototype, BYTES_PER_ELEMENT, BYTES);
-		    }
-
-		    setSpecies(CONSTRUCTOR_NAME);
-		  };
-		} else typedArrayConstructor.exports = function () { /* empty */ };
-		return typedArrayConstructor.exports;
-	}
-
-	var hasRequiredEs_typedArray_uint8Array;
-
-	function requireEs_typedArray_uint8Array () {
-		if (hasRequiredEs_typedArray_uint8Array) return es_typedArray_uint8Array;
-		hasRequiredEs_typedArray_uint8Array = 1;
-		var createTypedArrayConstructor = requireTypedArrayConstructor();
-
-		// `Uint8Array` constructor
-		// https://tc39.es/ecma262/#sec-typedarray-objects
-		createTypedArrayConstructor('Uint8', function (init) {
-		  return function Uint8Array(data, byteOffset, length) {
-		    return init(this, data, byteOffset, length);
-		  };
-		});
-		return es_typedArray_uint8Array;
-	}
-
-	requireEs_typedArray_uint8Array();
-
-	var es_typedArray_copyWithin = {};
-
-	var arrayCopyWithin;
-	var hasRequiredArrayCopyWithin;
-
-	function requireArrayCopyWithin () {
-		if (hasRequiredArrayCopyWithin) return arrayCopyWithin;
-		hasRequiredArrayCopyWithin = 1;
-		var toObject = requireToObject();
-		var toAbsoluteIndex = requireToAbsoluteIndex();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-		var deletePropertyOrThrow = requireDeletePropertyOrThrow();
-
-		var min = Math.min;
-
-		// `Array.prototype.copyWithin` method implementation
-		// https://tc39.es/ecma262/#sec-array.prototype.copywithin
-		// eslint-disable-next-line es/no-array-prototype-copywithin -- safe
-		arrayCopyWithin = [].copyWithin || function copyWithin(target /* = 0 */, start /* = 0, end = @length */) {
-		  var O = toObject(this);
-		  var len = lengthOfArrayLike(O);
-		  var to = toAbsoluteIndex(target, len);
-		  var from = toAbsoluteIndex(start, len);
-		  var end = arguments.length > 2 ? arguments[2] : undefined;
-		  var count = min((end === undefined ? len : toAbsoluteIndex(end, len)) - from, len - to);
-		  var inc = 1;
-		  if (from < to && to < from + count) {
-		    inc = -1;
-		    from += count - 1;
-		    to += count - 1;
-		  }
-		  while (count-- > 0) {
-		    if (from in O) O[to] = O[from];
-		    else deletePropertyOrThrow(O, to);
-		    to += inc;
-		    from += inc;
-		  } return O;
-		};
-		return arrayCopyWithin;
-	}
-
-	var hasRequiredEs_typedArray_copyWithin;
-
-	function requireEs_typedArray_copyWithin () {
-		if (hasRequiredEs_typedArray_copyWithin) return es_typedArray_copyWithin;
-		hasRequiredEs_typedArray_copyWithin = 1;
-		var uncurryThis = requireFunctionUncurryThis();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $ArrayCopyWithin = requireArrayCopyWithin();
-
-		var u$ArrayCopyWithin = uncurryThis($ArrayCopyWithin);
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.copyWithin` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.copywithin
-		exportTypedArrayMethod('copyWithin', function copyWithin(target, start /* , end */) {
-		  return u$ArrayCopyWithin(aTypedArray(this), target, start, arguments.length > 2 ? arguments[2] : undefined);
-		});
-		return es_typedArray_copyWithin;
-	}
-
-	requireEs_typedArray_copyWithin();
-
-	var es_typedArray_every = {};
-
-	var hasRequiredEs_typedArray_every;
-
-	function requireEs_typedArray_every () {
-		if (hasRequiredEs_typedArray_every) return es_typedArray_every;
-		hasRequiredEs_typedArray_every = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $every = requireArrayIteration().every;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.every` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.every
-		exportTypedArrayMethod('every', function every(callbackfn /* , thisArg */) {
-		  return $every(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_every;
-	}
-
-	requireEs_typedArray_every();
-
-	var es_typedArray_fill = {};
-
-	var hasRequiredEs_typedArray_fill;
-
-	function requireEs_typedArray_fill () {
-		if (hasRequiredEs_typedArray_fill) return es_typedArray_fill;
-		hasRequiredEs_typedArray_fill = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $fill = requireArrayFill();
-		var toBigInt = requireToBigInt();
-		var classof = requireClassof();
-		var call = requireFunctionCall();
-		var uncurryThis = requireFunctionUncurryThis();
-		var fails = requireFails();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var slice = uncurryThis(''.slice);
-
-		// V8 ~ Chrome < 59, Safari < 14.1, FF < 55, Edge <=18
-		var CONVERSION_BUG = fails(function () {
-		  var count = 0;
-		  // eslint-disable-next-line es/no-typed-arrays -- safe
-		  new Int8Array(2).fill({ valueOf: function () { return count++; } });
-		  return count !== 1;
-		});
-
-		// `%TypedArray%.prototype.fill` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.fill
-		exportTypedArrayMethod('fill', function fill(value /* , start, end */) {
-		  var length = arguments.length;
-		  aTypedArray(this);
-		  var actualValue = slice(classof(this), 0, 3) === 'Big' ? toBigInt(value) : +value;
-		  return call($fill, this, actualValue, length > 1 ? arguments[1] : undefined, length > 2 ? arguments[2] : undefined);
-		}, CONVERSION_BUG);
-		return es_typedArray_fill;
-	}
-
-	requireEs_typedArray_fill();
-
-	var es_typedArray_filter = {};
-
-	var typedArrayFromSameTypeAndList;
-	var hasRequiredTypedArrayFromSameTypeAndList;
-
-	function requireTypedArrayFromSameTypeAndList () {
-		if (hasRequiredTypedArrayFromSameTypeAndList) return typedArrayFromSameTypeAndList;
-		hasRequiredTypedArrayFromSameTypeAndList = 1;
-		var arrayFromConstructorAndList = requireArrayFromConstructorAndList();
-		var getTypedArrayConstructor = requireArrayBufferViewCore().getTypedArrayConstructor;
-
-		typedArrayFromSameTypeAndList = function (instance, list) {
-		  return arrayFromConstructorAndList(getTypedArrayConstructor(instance), list);
-		};
-		return typedArrayFromSameTypeAndList;
-	}
-
-	var hasRequiredEs_typedArray_filter;
-
-	function requireEs_typedArray_filter () {
-		if (hasRequiredEs_typedArray_filter) return es_typedArray_filter;
-		hasRequiredEs_typedArray_filter = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $filter = requireArrayIteration().filter;
-		var fromSameTypeAndList = requireTypedArrayFromSameTypeAndList();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.filter` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.filter
-		exportTypedArrayMethod('filter', function filter(callbackfn /* , thisArg */) {
-		  var list = $filter(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-		  return fromSameTypeAndList(this, list);
-		});
-		return es_typedArray_filter;
-	}
-
-	requireEs_typedArray_filter();
-
-	var es_typedArray_find = {};
-
-	var hasRequiredEs_typedArray_find;
-
-	function requireEs_typedArray_find () {
-		if (hasRequiredEs_typedArray_find) return es_typedArray_find;
-		hasRequiredEs_typedArray_find = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $find = requireArrayIteration().find;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.find` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.find
-		exportTypedArrayMethod('find', function find(predicate /* , thisArg */) {
-		  return $find(aTypedArray(this), predicate, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_find;
-	}
-
-	requireEs_typedArray_find();
-
-	var es_typedArray_findIndex = {};
-
-	var hasRequiredEs_typedArray_findIndex;
-
-	function requireEs_typedArray_findIndex () {
-		if (hasRequiredEs_typedArray_findIndex) return es_typedArray_findIndex;
-		hasRequiredEs_typedArray_findIndex = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $findIndex = requireArrayIteration().findIndex;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.findIndex` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.findindex
-		exportTypedArrayMethod('findIndex', function findIndex(predicate /* , thisArg */) {
-		  return $findIndex(aTypedArray(this), predicate, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_findIndex;
-	}
-
-	requireEs_typedArray_findIndex();
-
-	var es_typedArray_forEach = {};
-
-	var hasRequiredEs_typedArray_forEach;
-
-	function requireEs_typedArray_forEach () {
-		if (hasRequiredEs_typedArray_forEach) return es_typedArray_forEach;
-		hasRequiredEs_typedArray_forEach = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $forEach = requireArrayIteration().forEach;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.forEach` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.foreach
-		exportTypedArrayMethod('forEach', function forEach(callbackfn /* , thisArg */) {
-		  $forEach(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_forEach;
-	}
-
-	requireEs_typedArray_forEach();
-
-	var es_typedArray_includes = {};
-
-	var hasRequiredEs_typedArray_includes;
-
-	function requireEs_typedArray_includes () {
-		if (hasRequiredEs_typedArray_includes) return es_typedArray_includes;
-		hasRequiredEs_typedArray_includes = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $includes = requireArrayIncludes().includes;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.includes` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.includes
-		exportTypedArrayMethod('includes', function includes(searchElement /* , fromIndex */) {
-		  return $includes(aTypedArray(this), searchElement, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_includes;
-	}
-
-	requireEs_typedArray_includes();
-
-	var es_typedArray_indexOf = {};
-
-	var hasRequiredEs_typedArray_indexOf;
-
-	function requireEs_typedArray_indexOf () {
-		if (hasRequiredEs_typedArray_indexOf) return es_typedArray_indexOf;
-		hasRequiredEs_typedArray_indexOf = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $indexOf = requireArrayIncludes().indexOf;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.indexOf` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.indexof
-		exportTypedArrayMethod('indexOf', function indexOf(searchElement /* , fromIndex */) {
-		  return $indexOf(aTypedArray(this), searchElement, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_indexOf;
-	}
-
-	requireEs_typedArray_indexOf();
-
-	var es_typedArray_iterator = {};
-
-	var hasRequiredEs_typedArray_iterator;
-
-	function requireEs_typedArray_iterator () {
-		if (hasRequiredEs_typedArray_iterator) return es_typedArray_iterator;
-		hasRequiredEs_typedArray_iterator = 1;
-		var globalThis = requireGlobalThis();
-		var fails = requireFails();
-		var uncurryThis = requireFunctionUncurryThis();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var ArrayIterators = requireEs_array_iterator();
-		var wellKnownSymbol = requireWellKnownSymbol();
-
-		var ITERATOR = wellKnownSymbol('iterator');
-		var Uint8Array = globalThis.Uint8Array;
-		var arrayValues = uncurryThis(ArrayIterators.values);
-		var arrayKeys = uncurryThis(ArrayIterators.keys);
-		var arrayEntries = uncurryThis(ArrayIterators.entries);
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var TypedArrayPrototype = Uint8Array && Uint8Array.prototype;
-
-		var GENERIC = !fails(function () {
-		  TypedArrayPrototype[ITERATOR].call([1]);
-		});
-
-		var ITERATOR_IS_VALUES = !!TypedArrayPrototype
-		  && TypedArrayPrototype.values
-		  && TypedArrayPrototype[ITERATOR] === TypedArrayPrototype.values
-		  && TypedArrayPrototype.values.name === 'values';
-
-		var typedArrayValues = function values() {
-		  return arrayValues(aTypedArray(this));
-		};
-
-		// `%TypedArray%.prototype.entries` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.entries
-		exportTypedArrayMethod('entries', function entries() {
-		  return arrayEntries(aTypedArray(this));
-		}, GENERIC);
-		// `%TypedArray%.prototype.keys` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.keys
-		exportTypedArrayMethod('keys', function keys() {
-		  return arrayKeys(aTypedArray(this));
-		}, GENERIC);
-		// `%TypedArray%.prototype.values` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.values
-		exportTypedArrayMethod('values', typedArrayValues, GENERIC || !ITERATOR_IS_VALUES, { name: 'values' });
-		// `%TypedArray%.prototype[@@iterator]` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype-@@iterator
-		exportTypedArrayMethod(ITERATOR, typedArrayValues, GENERIC || !ITERATOR_IS_VALUES, { name: 'values' });
-		return es_typedArray_iterator;
-	}
-
-	requireEs_typedArray_iterator();
-
-	var es_typedArray_join = {};
-
-	var hasRequiredEs_typedArray_join;
-
-	function requireEs_typedArray_join () {
-		if (hasRequiredEs_typedArray_join) return es_typedArray_join;
-		hasRequiredEs_typedArray_join = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var uncurryThis = requireFunctionUncurryThis();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var $join = uncurryThis([].join);
-
-		// `%TypedArray%.prototype.join` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.join
-		exportTypedArrayMethod('join', function join(separator) {
-		  return $join(aTypedArray(this), separator);
-		});
-		return es_typedArray_join;
-	}
-
-	requireEs_typedArray_join();
-
-	var es_typedArray_lastIndexOf = {};
-
-	var arrayLastIndexOf;
-	var hasRequiredArrayLastIndexOf;
-
-	function requireArrayLastIndexOf () {
-		if (hasRequiredArrayLastIndexOf) return arrayLastIndexOf;
-		hasRequiredArrayLastIndexOf = 1;
-		/* eslint-disable es/no-array-prototype-lastindexof -- safe */
-		var apply = requireFunctionApply();
-		var toIndexedObject = requireToIndexedObject();
-		var toIntegerOrInfinity = requireToIntegerOrInfinity();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-		var arrayMethodIsStrict = requireArrayMethodIsStrict();
-
-		var min = Math.min;
-		var $lastIndexOf = [].lastIndexOf;
-		var NEGATIVE_ZERO = !!$lastIndexOf && 1 / [1].lastIndexOf(1, -0) < 0;
-		var STRICT_METHOD = arrayMethodIsStrict('lastIndexOf');
-		var FORCED = NEGATIVE_ZERO || !STRICT_METHOD;
-
-		// `Array.prototype.lastIndexOf` method implementation
-		// https://tc39.es/ecma262/#sec-array.prototype.lastindexof
-		arrayLastIndexOf = FORCED ? function lastIndexOf(searchElement /* , fromIndex = @[*-1] */) {
-		  // convert -0 to +0
-		  if (NEGATIVE_ZERO) return apply($lastIndexOf, this, arguments) || 0;
-		  var O = toIndexedObject(this);
-		  var length = lengthOfArrayLike(O);
-		  if (length === 0) return -1;
-		  var index = length - 1;
-		  if (arguments.length > 1) index = min(index, toIntegerOrInfinity(arguments[1]));
-		  if (index < 0) index = length + index;
-		  for (;index >= 0; index--) if (index in O && O[index] === searchElement) return index || 0;
-		  return -1;
-		} : $lastIndexOf;
-		return arrayLastIndexOf;
-	}
-
-	var hasRequiredEs_typedArray_lastIndexOf;
-
-	function requireEs_typedArray_lastIndexOf () {
-		if (hasRequiredEs_typedArray_lastIndexOf) return es_typedArray_lastIndexOf;
-		hasRequiredEs_typedArray_lastIndexOf = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var apply = requireFunctionApply();
-		var $lastIndexOf = requireArrayLastIndexOf();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.lastIndexOf` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.lastindexof
-		exportTypedArrayMethod('lastIndexOf', function lastIndexOf(searchElement /* , fromIndex */) {
-		  var length = arguments.length;
-		  return apply($lastIndexOf, aTypedArray(this), length > 1 ? [searchElement, arguments[1]] : [searchElement]);
-		});
-		return es_typedArray_lastIndexOf;
-	}
-
-	requireEs_typedArray_lastIndexOf();
-
-	var es_typedArray_map = {};
-
-	var hasRequiredEs_typedArray_map;
-
-	function requireEs_typedArray_map () {
-		if (hasRequiredEs_typedArray_map) return es_typedArray_map;
-		hasRequiredEs_typedArray_map = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $map = requireArrayIteration().map;
-		var fromSameTypeAndList = requireTypedArrayFromSameTypeAndList();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.map` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.map
-		exportTypedArrayMethod('map', function map(mapfn /* , thisArg */) {
-		  var list = $map(aTypedArray(this), mapfn, arguments.length > 1 ? arguments[1] : undefined);
-		  return fromSameTypeAndList(this, list);
-		});
-		return es_typedArray_map;
-	}
-
-	requireEs_typedArray_map();
-
-	var es_typedArray_reduce = {};
-
-	var arrayReduce;
-	var hasRequiredArrayReduce;
-
-	function requireArrayReduce () {
-		if (hasRequiredArrayReduce) return arrayReduce;
-		hasRequiredArrayReduce = 1;
-		var aCallable = requireACallable();
-		var toObject = requireToObject();
-		var IndexedObject = requireIndexedObject();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-
-		var $TypeError = TypeError;
-
-		var REDUCE_EMPTY = 'Reduce of empty array with no initial value';
-
-		// `Array.prototype.{ reduce, reduceRight }` methods implementation
-		var createMethod = function (IS_RIGHT) {
-		  return function (that, callbackfn, argumentsLength, memo) {
-		    var O = toObject(that);
-		    var self = IndexedObject(O);
-		    var length = lengthOfArrayLike(O);
-		    aCallable(callbackfn);
-		    if (length === 0 && argumentsLength < 2) throw new $TypeError(REDUCE_EMPTY);
-		    var index = IS_RIGHT ? length - 1 : 0;
-		    var i = IS_RIGHT ? -1 : 1;
-		    if (argumentsLength < 2) while (true) {
-		      if (index in self) {
-		        memo = self[index];
-		        index += i;
-		        break;
-		      }
-		      index += i;
-		      if (IS_RIGHT ? index < 0 : length <= index) {
-		        throw new $TypeError(REDUCE_EMPTY);
-		      }
-		    }
-		    for (;IS_RIGHT ? index >= 0 : length > index; index += i) if (index in self) {
-		      memo = callbackfn(memo, self[index], index, O);
-		    }
-		    return memo;
-		  };
-		};
-
-		arrayReduce = {
-		  // `Array.prototype.reduce` method
-		  // https://tc39.es/ecma262/#sec-array.prototype.reduce
-		  left: createMethod(false),
-		  // `Array.prototype.reduceRight` method
-		  // https://tc39.es/ecma262/#sec-array.prototype.reduceright
-		  right: createMethod(true)
-		};
-		return arrayReduce;
-	}
-
-	var hasRequiredEs_typedArray_reduce;
-
-	function requireEs_typedArray_reduce () {
-		if (hasRequiredEs_typedArray_reduce) return es_typedArray_reduce;
-		hasRequiredEs_typedArray_reduce = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $reduce = requireArrayReduce().left;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.reduce` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reduce
-		exportTypedArrayMethod('reduce', function reduce(callbackfn /* , initialValue */) {
-		  var length = arguments.length;
-		  return $reduce(aTypedArray(this), callbackfn, length, length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_reduce;
-	}
-
-	requireEs_typedArray_reduce();
-
-	var es_typedArray_reduceRight = {};
-
-	var hasRequiredEs_typedArray_reduceRight;
-
-	function requireEs_typedArray_reduceRight () {
-		if (hasRequiredEs_typedArray_reduceRight) return es_typedArray_reduceRight;
-		hasRequiredEs_typedArray_reduceRight = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $reduceRight = requireArrayReduce().right;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.reduceRight` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reduceright
-		exportTypedArrayMethod('reduceRight', function reduceRight(callbackfn /* , initialValue */) {
-		  var length = arguments.length;
-		  return $reduceRight(aTypedArray(this), callbackfn, length, length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_reduceRight;
-	}
-
-	requireEs_typedArray_reduceRight();
-
-	var es_typedArray_reverse = {};
-
-	var hasRequiredEs_typedArray_reverse;
-
-	function requireEs_typedArray_reverse () {
-		if (hasRequiredEs_typedArray_reverse) return es_typedArray_reverse;
-		hasRequiredEs_typedArray_reverse = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var floor = Math.floor;
-
-		// `%TypedArray%.prototype.reverse` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.reverse
-		exportTypedArrayMethod('reverse', function reverse() {
-		  var that = this;
-		  var length = aTypedArray(that).length;
-		  var middle = floor(length / 2);
-		  var index = 0;
-		  var value;
-		  while (index < middle) {
-		    value = that[index];
-		    that[index++] = that[--length];
-		    that[length] = value;
-		  } return that;
-		});
-		return es_typedArray_reverse;
-	}
-
-	requireEs_typedArray_reverse();
-
-	var es_typedArray_set = {};
-
-	var hasRequiredEs_typedArray_set;
-
-	function requireEs_typedArray_set () {
-		if (hasRequiredEs_typedArray_set) return es_typedArray_set;
-		hasRequiredEs_typedArray_set = 1;
-		var globalThis = requireGlobalThis();
-		var call = requireFunctionCall();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var lengthOfArrayLike = requireLengthOfArrayLike();
-		var toOffset = requireToOffset();
-		var toIndexedObject = requireToObject();
-		var fails = requireFails();
-
-		var RangeError = globalThis.RangeError;
-		var Int8Array = globalThis.Int8Array;
-		var Int8ArrayPrototype = Int8Array && Int8Array.prototype;
-		var $set = Int8ArrayPrototype && Int8ArrayPrototype.set;
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		var WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS = !fails(function () {
-		  // eslint-disable-next-line es/no-typed-arrays -- required for testing
-		  var array = new Uint8ClampedArray(2);
-		  call($set, array, { length: 1, 0: 3 }, 1);
-		  return array[1] !== 3;
-		});
-
-		// https://bugs.chromium.org/p/v8/issues/detail?id=11294 and other
-		var TO_OBJECT_BUG = WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS && ArrayBufferViewCore.NATIVE_ARRAY_BUFFER_VIEWS && fails(function () {
-		  var array = new Int8Array(2);
-		  array.set(1);
-		  array.set('2', 1);
-		  return array[0] !== 0 || array[1] !== 2;
-		});
-
-		// `%TypedArray%.prototype.set` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.set
-		exportTypedArrayMethod('set', function set(arrayLike /* , offset */) {
-		  aTypedArray(this);
-		  var offset = toOffset(arguments.length > 1 ? arguments[1] : undefined, 1);
-		  var src = toIndexedObject(arrayLike);
-		  if (WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS) return call($set, this, src, offset);
-		  var length = this.length;
-		  var len = lengthOfArrayLike(src);
-		  var index = 0;
-		  if (len + offset > length) throw new RangeError('Wrong length');
-		  while (index < len) this[offset + index] = src[index++];
-		}, !WORKS_WITH_OBJECTS_AND_GENERIC_ON_TYPED_ARRAYS || TO_OBJECT_BUG);
-		return es_typedArray_set;
-	}
-
-	requireEs_typedArray_set();
-
-	var es_typedArray_slice = {};
-
-	var hasRequiredEs_typedArray_slice;
-
-	function requireEs_typedArray_slice () {
-		if (hasRequiredEs_typedArray_slice) return es_typedArray_slice;
-		hasRequiredEs_typedArray_slice = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var fails = requireFails();
-		var arraySlice = requireArraySlice();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var getTypedArrayConstructor = ArrayBufferViewCore.getTypedArrayConstructor;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		var FORCED = fails(function () {
-		  // eslint-disable-next-line es/no-typed-arrays -- required for testing
-		  new Int8Array(1).slice();
-		});
-
-		// `%TypedArray%.prototype.slice` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.slice
-		exportTypedArrayMethod('slice', function slice(start, end) {
-		  var list = arraySlice(aTypedArray(this), start, end);
-		  var C = getTypedArrayConstructor(this);
-		  var index = 0;
-		  var length = list.length;
-		  var result = new C(length);
-		  while (length > index) result[index] = list[index++];
-		  return result;
-		}, FORCED);
-		return es_typedArray_slice;
-	}
-
-	requireEs_typedArray_slice();
-
-	var es_typedArray_some = {};
-
-	var hasRequiredEs_typedArray_some;
-
-	function requireEs_typedArray_some () {
-		if (hasRequiredEs_typedArray_some) return es_typedArray_some;
-		hasRequiredEs_typedArray_some = 1;
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var $some = requireArrayIteration().some;
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-
-		// `%TypedArray%.prototype.some` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.some
-		exportTypedArrayMethod('some', function some(callbackfn /* , thisArg */) {
-		  return $some(aTypedArray(this), callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-		});
-		return es_typedArray_some;
-	}
-
-	requireEs_typedArray_some();
-
-	var es_typedArray_sort = {};
-
-	var environmentFfVersion;
-	var hasRequiredEnvironmentFfVersion;
-
-	function requireEnvironmentFfVersion () {
-		if (hasRequiredEnvironmentFfVersion) return environmentFfVersion;
-		hasRequiredEnvironmentFfVersion = 1;
-		var userAgent = requireEnvironmentUserAgent();
-
-		var firefox = userAgent.match(/firefox\/(\d+)/i);
-
-		environmentFfVersion = !!firefox && +firefox[1];
-		return environmentFfVersion;
-	}
-
-	var environmentIsIeOrEdge;
-	var hasRequiredEnvironmentIsIeOrEdge;
-
-	function requireEnvironmentIsIeOrEdge () {
-		if (hasRequiredEnvironmentIsIeOrEdge) return environmentIsIeOrEdge;
-		hasRequiredEnvironmentIsIeOrEdge = 1;
-		var UA = requireEnvironmentUserAgent();
-
-		environmentIsIeOrEdge = /MSIE|Trident/.test(UA);
-		return environmentIsIeOrEdge;
-	}
-
-	var environmentWebkitVersion;
-	var hasRequiredEnvironmentWebkitVersion;
-
-	function requireEnvironmentWebkitVersion () {
-		if (hasRequiredEnvironmentWebkitVersion) return environmentWebkitVersion;
-		hasRequiredEnvironmentWebkitVersion = 1;
-		var userAgent = requireEnvironmentUserAgent();
-
-		var webkit = userAgent.match(/AppleWebKit\/(\d+)\./);
-
-		environmentWebkitVersion = !!webkit && +webkit[1];
-		return environmentWebkitVersion;
-	}
-
-	var hasRequiredEs_typedArray_sort;
-
-	function requireEs_typedArray_sort () {
-		if (hasRequiredEs_typedArray_sort) return es_typedArray_sort;
-		hasRequiredEs_typedArray_sort = 1;
-		var globalThis = requireGlobalThis();
-		var uncurryThis = requireFunctionUncurryThisClause();
-		var fails = requireFails();
-		var aCallable = requireACallable();
-		var internalSort = requireArraySort();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var FF = requireEnvironmentFfVersion();
-		var IE_OR_EDGE = requireEnvironmentIsIeOrEdge();
-		var V8 = requireEnvironmentV8Version();
-		var WEBKIT = requireEnvironmentWebkitVersion();
-
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var Uint16Array = globalThis.Uint16Array;
-		var nativeSort = Uint16Array && uncurryThis(Uint16Array.prototype.sort);
-
-		// WebKit
-		var ACCEPT_INCORRECT_ARGUMENTS = !!nativeSort && !(fails(function () {
-		  nativeSort(new Uint16Array(2), null);
-		}) && fails(function () {
-		  nativeSort(new Uint16Array(2), {});
-		}));
-
-		var STABLE_SORT = !!nativeSort && !fails(function () {
-		  // feature detection can be too slow, so check engines versions
-		  if (V8) return V8 < 74;
-		  if (FF) return FF < 67;
-		  if (IE_OR_EDGE) return true;
-		  if (WEBKIT) return WEBKIT < 602;
-
-		  var array = new Uint16Array(516);
-		  var expected = Array(516);
-		  var index, mod;
-
-		  for (index = 0; index < 516; index++) {
-		    mod = index % 4;
-		    array[index] = 515 - index;
-		    expected[index] = index - 2 * mod + 3;
-		  }
-
-		  nativeSort(array, function (a, b) {
-		    return (a / 4 | 0) - (b / 4 | 0);
-		  });
-
-		  for (index = 0; index < 516; index++) {
-		    if (array[index] !== expected[index]) return true;
-		  }
-		});
-
-		var getSortCompare = function (comparefn) {
-		  return function (x, y) {
-		    if (comparefn !== undefined) return +comparefn(x, y) || 0;
-		    // eslint-disable-next-line no-self-compare -- NaN check
-		    if (y !== y) return x !== x ? 0 : -1;
-		    // eslint-disable-next-line no-self-compare -- NaN check
-		    if (x !== x) return 1;
-		    if (x === 0 && y === 0) return 1 / x > 0 ? (1 / y > 0 ? 0 : 1) : (1 / y > 0 ? -1 : 0);
-		    return x > y ? 1 : x < y ? -1 : 0;
-		  };
-		};
-
-		// `%TypedArray%.prototype.sort` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.sort
-		exportTypedArrayMethod('sort', function sort(comparefn) {
-		  if (comparefn !== undefined) aCallable(comparefn);
-		  if (STABLE_SORT) return nativeSort(this, comparefn);
-
-		  return internalSort(aTypedArray(this), getSortCompare(comparefn));
-		}, !STABLE_SORT || ACCEPT_INCORRECT_ARGUMENTS);
-		return es_typedArray_sort;
-	}
-
-	requireEs_typedArray_sort();
-
-	var es_typedArray_toLocaleString = {};
-
-	var hasRequiredEs_typedArray_toLocaleString;
-
-	function requireEs_typedArray_toLocaleString () {
-		if (hasRequiredEs_typedArray_toLocaleString) return es_typedArray_toLocaleString;
-		hasRequiredEs_typedArray_toLocaleString = 1;
-		var globalThis = requireGlobalThis();
-		var apply = requireFunctionApply();
-		var ArrayBufferViewCore = requireArrayBufferViewCore();
-		var fails = requireFails();
-		var arraySlice = requireArraySlice();
-
-		var Int8Array = globalThis.Int8Array;
-		var aTypedArray = ArrayBufferViewCore.aTypedArray;
-		var exportTypedArrayMethod = ArrayBufferViewCore.exportTypedArrayMethod;
-		var $toLocaleString = [].toLocaleString;
-
-		// iOS Safari 6.x fails here
-		var TO_LOCALE_STRING_BUG = !!Int8Array && fails(function () {
-		  $toLocaleString.call(new Int8Array(1));
-		});
-
-		var FORCED = fails(function () {
-		  return [1, 2].toLocaleString() !== new Int8Array([1, 2]).toLocaleString();
-		}) || !fails(function () {
-		  Int8Array.prototype.toLocaleString.call([1, 2]);
-		});
-
-		// `%TypedArray%.prototype.toLocaleString` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.tolocalestring
-		exportTypedArrayMethod('toLocaleString', function toLocaleString() {
-		  return apply(
-		    $toLocaleString,
-		    TO_LOCALE_STRING_BUG ? arraySlice(aTypedArray(this)) : aTypedArray(this),
-		    arraySlice(arguments)
-		  );
-		}, FORCED);
-		return es_typedArray_toLocaleString;
-	}
-
-	requireEs_typedArray_toLocaleString();
-
-	var es_typedArray_toString = {};
-
-	var hasRequiredEs_typedArray_toString;
-
-	function requireEs_typedArray_toString () {
-		if (hasRequiredEs_typedArray_toString) return es_typedArray_toString;
-		hasRequiredEs_typedArray_toString = 1;
-		var exportTypedArrayMethod = requireArrayBufferViewCore().exportTypedArrayMethod;
-		var fails = requireFails();
-		var globalThis = requireGlobalThis();
-		var uncurryThis = requireFunctionUncurryThis();
-
-		var Uint8Array = globalThis.Uint8Array;
-		var Uint8ArrayPrototype = Uint8Array && Uint8Array.prototype || {};
-		var arrayToString = [].toString;
-		var join = uncurryThis([].join);
-
-		if (fails(function () { arrayToString.call({}); })) {
-		  arrayToString = function toString() {
-		    return join(this);
-		  };
-		}
-
-		var IS_NOT_ARRAY_METHOD = Uint8ArrayPrototype.toString !== arrayToString;
-
-		// `%TypedArray%.prototype.toString` method
-		// https://tc39.es/ecma262/#sec-%typedarray%.prototype.tostring
-		exportTypedArrayMethod('toString', arrayToString, IS_NOT_ARRAY_METHOD);
-		return es_typedArray_toString;
-	}
-
-	requireEs_typedArray_toString();
 
 	var es_array_reduce = {};
 

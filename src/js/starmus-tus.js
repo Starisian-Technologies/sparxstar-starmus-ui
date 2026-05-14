@@ -126,7 +126,13 @@ function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
         return crypto.randomUUID();
     }
-    return `starmus-upload-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+        const values = new Uint8Array(16);
+        crypto.getRandomValues(values);
+        const suffix = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+        return `starmus-upload-${Date.now()}-${suffix}`;
+    }
+    throw new Error("Secure UUID generation is not available in this runtime");
 }
 
 /* ---- Direct Upload (fallback) ---- */

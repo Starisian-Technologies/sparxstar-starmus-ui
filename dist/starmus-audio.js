@@ -11672,7 +11672,7 @@
 	    var suffix = Array.from(values, function (value) {
 	      return value.toString(16).padStart(2, "0");
 	    }).join("");
-	    return "starmus-upload-".concat(Date.now(), "-").concat(suffix);
+	    return "starmus-upload-".concat(suffix);
 	  }
 	  throw new Error("Secure UUID generation is not available in this runtime");
 	}

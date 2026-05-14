@@ -130,7 +130,7 @@ function createUploadId() {
         const values = new Uint8Array(16);
         crypto.getRandomValues(values);
         const suffix = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
-        return `starmus-upload-${Date.now()}-${suffix}`;
+        return `starmus-upload-${suffix}`;
     }
     throw new Error("Secure UUID generation is not available in this runtime");
 }

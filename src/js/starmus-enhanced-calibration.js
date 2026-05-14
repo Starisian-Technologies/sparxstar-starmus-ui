@@ -21,7 +21,7 @@
 
 "use strict";
 
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /**
  * Tier-based calibration settings.
@@ -33,7 +33,7 @@ const TIER_SETTINGS = {
         phases: 3,
         noiseThreshold: 5,
         speechThreshold: 20,
-        sampleRate: 44100,
+        sampleRate: 16000,
         fftSize: 2048,
         smoothing: 0.8,
         gainRange: [0.5, 2.0],
@@ -44,7 +44,7 @@ const TIER_SETTINGS = {
         phases: 2,
         noiseThreshold: 8,
         speechThreshold: 15,
-        sampleRate: 22050,
+        sampleRate: 16000,
         fftSize: 1024,
         smoothing: 0.6,
         gainRange: [0.7, 1.5],
@@ -387,4 +387,4 @@ class EnhancedCalibration {
     }
 }
 
-export default EnhancedCalibration;
+export { EnhancedCalibration };

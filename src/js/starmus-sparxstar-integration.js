@@ -29,7 +29,7 @@
  *
  * @type {Object}
  */
-const sparxstarIntegration = {
+export const sparxstarIntegration = {
     /**
      * Whether the integration layer is active.
      * @type {boolean}
@@ -133,8 +133,6 @@ const sparxstarIntegration = {
         });
     },
 };
-
-export default sparxstarIntegration;
 
 if (typeof window !== "undefined") {
     window.SparxstarIntegration = sparxstarIntegration;

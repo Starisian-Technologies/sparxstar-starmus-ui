@@ -520,9 +520,3 @@ if (typeof module !== "undefined" && module.exports) {
 // also support ES module export
 // (Note: in bundler context this may be tree‑shaken / replaced)
 export { StarmusTranscript, init };
-
-/**
- * Default export object for ES6 import statements.
- * @default
- */
-export default { StarmusTranscript, init };

@@ -452,15 +452,26 @@ class RhythmEngine {
     }
 
     bindRecorderIntegration() {
+        const getRuntimeStore = () => {
+            if (window.__STARMUS_RUNTIME_INSTANCE__) {
+                return window.__STARMUS_RUNTIME_INSTANCE__;
+            }
+            if (window.StarmusRuntime && window.StarmusRuntime.store) {
+                return window.StarmusRuntime.store;
+            }
+            return null;
+        };
+
         // Poll for the store in case of load order race conditions
         const checkStore = setInterval(() => {
-            if (window.StarmusStore && window.StarmusStore.subscribe) {
+            const runtimeStore = getRuntimeStore();
+            if (runtimeStore && runtimeStore.subscribe) {
                 clearInterval(checkStore);
                 console.log("Starmus Prosody: Connected to Recorder Store");
 
-                let lastStatus = window.StarmusStore.getState().status;
+                let lastStatus = runtimeStore.getState().status;
 
-                window.StarmusStore.subscribe((state) => {
+                runtimeStore.subscribe((state) => {
                     const status = state.status;
 
                     // RECORDER STARTED -> PLAY

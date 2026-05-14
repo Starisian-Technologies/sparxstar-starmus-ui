@@ -33,8 +33,8 @@ test.describe('African Deployment Conditions', () => {
             await setupBtn.click().catch(() => {}); // Fast retry
         }
 
-        // At least some console activity should have occurred
-        expect(errors.length >= 0).toBe(true);
+        // Runtime test should not emit console errors
+        expect(errors).toHaveLength(0);
     });
 
     test('Background tab simulation', async ({ page }) => {
@@ -70,10 +70,9 @@ test.describe('African Deployment Conditions', () => {
             document.dispatchEvent(new Event('visibilitychange'));
         });
 
-        // Should still have stop button (recording continued)
+        // Recorder controls should still be present after visibility transitions
         const stopBtn = page.locator('[data-starmus-action="stop"]');
-        const stopVisible = await stopBtn.isVisible().catch(() => false);
-        expect(stopVisible || true).toBe(true); // Graceful degradation allowed
+        await expect(stopBtn).toHaveCount(1);
     });
 
     test('Permission dialog handling', async ({ context, page }) => {
@@ -90,8 +89,7 @@ test.describe('African Deployment Conditions', () => {
         await setupBtn.click();
         // Timer should appear after mic setup completes
         const timer = page.locator('[data-starmus-timer]');
-        const timerVisible = await timer.isVisible({ timeout: 10000 }).catch(() => false);
-        expect(timerVisible || true).toBe(true);
+        await expect(timer).toHaveCount(1);
     });
 
     test('Network interruption during upload', async ({ page }) => {
@@ -131,8 +129,7 @@ test.describe('African Deployment Conditions', () => {
         // Should indicate queued state (not crash)
         await page.waitForTimeout(3000);
         const modeIndicator = page.locator('[data-starmus-mode]');
-        const modeVisible = await modeIndicator.isVisible().catch(() => false);
-        expect(modeVisible || true).toBe(true);
+        await expect(modeIndicator).toHaveCount(1);
     });
 
     test('Offline banner appears when navigator.onLine is false', async ({ page }) => {

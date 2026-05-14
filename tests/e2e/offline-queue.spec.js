@@ -10,17 +10,17 @@ import { injectAxe, checkA11y } from 'axe-playwright';
 test.describe('Offline-first patterns', () => {
 
     test('audio recorder works without JS MediaRecorder', async ({ page }) => {
-        await page.goto('/recorder-test/');
         await page.addInitScript(() => {
             window.MediaRecorder = undefined;
         });
+        await page.goto('/recorder-test/');
 
         // Should show fallback form
         await expect(page.locator('form')).toBeVisible();
 
         // File input fallback should be present
         const fileInput = page.locator('[data-starmus-file-input], input[type="file"]');
-        await expect(fileInput).toBeVisible({ timeout: 5000 }).catch(() => {});
+        await expect(fileInput.first()).toBeVisible({ timeout: 5000 });
     });
 
     test('offline queue resumes after connection', async ({ page }) => {
@@ -70,8 +70,7 @@ test.describe('Offline-first patterns', () => {
 
         // Page should remain stable during slow upload
         const setupBtn = page.locator('[data-starmus-action="setup-mic"]');
-        const btnVisible = await setupBtn.isVisible().catch(() => false);
-        expect(btnVisible || true).toBe(true);
+        await expect(setupBtn).toHaveCount(1);
     });
 
     test('offline queue count badge updates', async ({ page }) => {

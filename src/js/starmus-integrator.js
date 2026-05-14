@@ -68,10 +68,21 @@ if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) 
  * @param {Object} e.detail.identifiers - Session and visitor identifiers
  */
 // 3. UEC DATA INGESTION (CRITICAL FIX)
+function getRuntimeStore() {
+    if (window.__STARMUS_RUNTIME_INSTANCE__) {
+        return window.__STARMUS_RUNTIME_INSTANCE__;
+    }
+    if (window.StarmusRuntime && window.StarmusRuntime.store) {
+        return window.StarmusRuntime.store;
+    }
+    return null;
+}
+
 window.addEventListener("sparxstar:environment-ready", (e) => {
     console.log("[StarmusIntegrator] 📡 Parsing UEC Payload...");
 
-    if (!window.StarmusStore) {
+    const runtimeStore = getRuntimeStore();
+    if (!runtimeStore) {
         return;
     }
 
@@ -183,7 +194,7 @@ window.addEventListener("sparxstar:environment-ready", (e) => {
     console.log("[StarmusIntegrator] ✅ Normalized Env:", normalizedEnv);
 
     // Dispatch merged environment
-    window.StarmusStore.dispatch({
+    runtimeStore.dispatch({
         type: "starmus/env-update",
         payload: normalizedEnv,
     });

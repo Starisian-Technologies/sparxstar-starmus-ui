@@ -23,7 +23,7 @@
 "use strict";
 
 import * as tus from "tus-js-client";
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /* ---- Circuit Breaker ---- */
 
@@ -83,9 +83,10 @@ function getConfig() {
 
     const defaults = {
         chunkSize: settings.uploadChunkSize || 512 * 1024, // max 512 KB per AGENTS.md
-        retryDelays: [0, 5000, 10000, 30000, 60000, 120000, 300000],
+        retryDelays: [0, 5000, 10000],
         removeFingerprintOnSuccess: true,
-        maxChunkRetries: 10,
+        maxChunkRetries: 3,
+        requestTimeoutMs: 5000,
         endpoint: "",
         nonce: "",
     };
@@ -121,6 +122,13 @@ function normalizeFormFields(fields) {
     return fields && typeof fields === "object" ? fields : {};
 }
 
+function createUploadId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `starmus-upload-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
 /* ---- Direct Upload (fallback) ---- */
 
 /**
@@ -131,7 +139,7 @@ function normalizeFormFields(fields) {
  * @param {string} fileName - File name for the upload
  * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
  * @param {Object} [metadata={}] - Additional metadata
- * @param {string} [_instanceId=''] - Recorder instance ID
+ * @param {string} [instanceId=''] - Recorder instance ID
  * @param {function} [onProgress] - Progress callback (loaded, total)
  * @returns {Promise<Object>} Server response
  */
@@ -140,7 +148,7 @@ export async function uploadDirect(
     fileName,
     formFields = {},
     metadata = {},
-    _instanceId = "",
+    instanceId = "",
     onProgress,
 ) {
     const cfg = getConfig();
@@ -154,28 +162,37 @@ export async function uploadDirect(
         throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
     }
 
+    const fd = new FormData();
+    const uploadId = createUploadId();
+    fd.append("audio_file", blob, fileName);
+    fd.append("upload_uuid", uploadId);
+
+    for (const [key, val] of Object.entries(fields)) {
+        fd.append(key, String(val));
+    }
+
+    if (metadata.transcript) {
+        fd.append("transcription", metadata.transcript);
+    }
+    if (metadata.calibration) {
+        fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
+    }
+    if (metadata.env) {
+        fd.append("_starmus_env", JSON.stringify(metadata.env));
+    }
+    if (metadata.tier) {
+        fd.append("tier", metadata.tier);
+    }
+    if (instanceId) {
+        fd.append("instanceId", instanceId);
+    }
+
     return new Promise((resolve, reject) => {
-        const fd = new FormData();
-        fd.append("audio_file", blob, fileName);
-
-        for (const [key, val] of Object.entries(fields)) {
-            fd.append(key, String(val));
-        }
-
-        if (metadata.transcript) {
-            fd.append("transcription", metadata.transcript);
-        }
-        if (metadata.calibration) {
-            fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-        }
-        if (metadata.env) {
-            fd.append("_starmus_env", JSON.stringify(metadata.env));
-        }
-        if (metadata.tier) {
-            fd.append("tier", metadata.tier);
-        }
-
         const xhr = new XMLHttpRequest();
+        const timeout = setTimeout(() => {
+            xhr.abort();
+            reject(new Error(`Direct upload timed out after ${cfg.requestTimeoutMs}ms`));
+        }, cfg.requestTimeoutMs);
 
         xhr.upload.addEventListener("progress", (e) => {
             if (onProgress && e.lengthComputable) {
@@ -184,21 +201,26 @@ export async function uploadDirect(
         });
 
         xhr.addEventListener("load", () => {
+            clearTimeout(timeout);
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
                     resolve(JSON.parse(xhr.responseText));
-                } catch (_e) {
+                } catch {
                     resolve({ success: true, raw: xhr.responseText });
                 }
             } else {
-                reject(
-                    new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`),
-                );
+                reject(new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`));
             }
         });
 
-        xhr.addEventListener("error", () => reject(new Error("Direct upload network error")));
-        xhr.addEventListener("abort", () => reject(new Error("Direct upload aborted")));
+        xhr.addEventListener("error", () => {
+            clearTimeout(timeout);
+            reject(new Error("Direct upload network error"));
+        });
+        xhr.addEventListener("abort", () => {
+            clearTimeout(timeout);
+            reject(new Error("Direct upload aborted"));
+        });
 
         xhr.open("POST", endpoint);
         if (nonce) {
@@ -236,9 +258,11 @@ export async function uploadTus(
         cfg.endpoints?.tus ||
         "/wp-json/star-starmus-audio-recorder/v1/tus";
     const fields = normalizeFormFields(formFields);
+    const uploadId = createUploadId();
 
     // Flatten all metadata into TUS metadata (strings only)
     const tusMetadata = {
+        upload_uuid: sanitizeMetadata(uploadId),
         filename: sanitizeMetadata(fileName),
         filetype: sanitizeMetadata(blob.type),
         instanceId: sanitizeMetadata(instanceId),
@@ -264,6 +288,7 @@ export async function uploadTus(
             chunkSize: cfg.chunkSize,
             retryDelays: cfg.retryDelays,
             removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
+            checksumAlgorithm: "sha1",
             metadata: tusMetadata,
             headers,
 

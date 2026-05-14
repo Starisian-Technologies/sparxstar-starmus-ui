@@ -32,7 +32,7 @@ import { initInstance as initUI } from "./starmus-ui.js";
 import { initRecorder } from "./starmus-recorder.js";
 import { initOffline, queueSubmission, getOfflineQueue } from "./starmus-offline.js";
 import { initAutoMetadata } from "./starmus-metadata-auto.js";
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 import "./starmus-integrator.js";
 
 /* --- Global error capture (Africa first: surface runtime errors clearly) --- */
@@ -55,7 +55,10 @@ import "./starmus-integrator.js";
 
 /* --- Store --- */
 const store = createStore();
-window.StarmusStore = store;
+window.__STARMUS_RUNTIME_INSTANCE__ = store;
+window.StarmusStoreInstance = store;
+window.StarmusRuntime = window.StarmusRuntime || {};
+window.StarmusRuntime.store = store;
 
 /**
  * Initialises a recorder instance from a form element.

@@ -5347,6 +5347,122 @@
 
 	requireEs_regexp_exec();
 
+	var es_regexp_toString = {};
+
+	var regexpFlagsDetection;
+	var hasRequiredRegexpFlagsDetection;
+
+	function requireRegexpFlagsDetection () {
+		if (hasRequiredRegexpFlagsDetection) return regexpFlagsDetection;
+		hasRequiredRegexpFlagsDetection = 1;
+		var globalThis = requireGlobalThis();
+		var fails = requireFails();
+
+		// babel-minify and Closure Compiler transpiles RegExp('.', 'd') -> /./d and it causes SyntaxError
+		var RegExp = globalThis.RegExp;
+
+		var FLAGS_GETTER_IS_CORRECT = !fails(function () {
+		  var INDICES_SUPPORT = true;
+		  try {
+		    RegExp('.', 'd');
+		  } catch (error) {
+		    INDICES_SUPPORT = false;
+		  }
+
+		  var O = {};
+		  // modern V8 bug
+		  var calls = '';
+		  var expected = INDICES_SUPPORT ? 'dgimsy' : 'gimsy';
+
+		  var addGetter = function (key, chr) {
+		    // eslint-disable-next-line es/no-object-defineproperty -- safe
+		    Object.defineProperty(O, key, { get: function () {
+		      calls += chr;
+		      return true;
+		    } });
+		  };
+
+		  var pairs = {
+		    dotAll: 's',
+		    global: 'g',
+		    ignoreCase: 'i',
+		    multiline: 'm',
+		    sticky: 'y'
+		  };
+
+		  if (INDICES_SUPPORT) pairs.hasIndices = 'd';
+
+		  for (var key in pairs) addGetter(key, pairs[key]);
+
+		  // eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
+		  var result = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(O);
+
+		  return result !== expected || calls !== expected;
+		});
+
+		regexpFlagsDetection = { correct: FLAGS_GETTER_IS_CORRECT };
+		return regexpFlagsDetection;
+	}
+
+	var regexpGetFlags;
+	var hasRequiredRegexpGetFlags;
+
+	function requireRegexpGetFlags () {
+		if (hasRequiredRegexpGetFlags) return regexpGetFlags;
+		hasRequiredRegexpGetFlags = 1;
+		var call = requireFunctionCall();
+		var hasOwn = requireHasOwnProperty();
+		var isPrototypeOf = requireObjectIsPrototypeOf();
+		var regExpFlagsDetection = requireRegexpFlagsDetection();
+		var regExpFlagsGetterImplementation = requireRegexpFlags();
+
+		var RegExpPrototype = RegExp.prototype;
+
+		regexpGetFlags = regExpFlagsDetection.correct ? function (it) {
+		  return it.flags;
+		} : function (it) {
+		  return (!regExpFlagsDetection.correct && isPrototypeOf(RegExpPrototype, it) && !hasOwn(it, 'flags'))
+		    ? call(regExpFlagsGetterImplementation, it)
+		    : it.flags;
+		};
+		return regexpGetFlags;
+	}
+
+	var hasRequiredEs_regexp_toString;
+
+	function requireEs_regexp_toString () {
+		if (hasRequiredEs_regexp_toString) return es_regexp_toString;
+		hasRequiredEs_regexp_toString = 1;
+		var PROPER_FUNCTION_NAME = requireFunctionName().PROPER;
+		var defineBuiltIn = requireDefineBuiltIn();
+		var anObject = requireAnObject();
+		var $toString = requireToString();
+		var fails = requireFails();
+		var getRegExpFlags = requireRegexpGetFlags();
+
+		var TO_STRING = 'toString';
+		var RegExpPrototype = RegExp.prototype;
+		var nativeToString = RegExpPrototype[TO_STRING];
+
+		var NOT_GENERIC = fails(function () { return nativeToString.call({ source: 'a', flags: 'b' }) !== '/a/b'; });
+		// FF44- RegExp#toString has a wrong name
+		var INCORRECT_NAME = PROPER_FUNCTION_NAME && nativeToString.name !== TO_STRING;
+
+		// `RegExp.prototype.toString` method
+		// https://tc39.es/ecma262/#sec-regexp.prototype.tostring
+		if (NOT_GENERIC || INCORRECT_NAME) {
+		  defineBuiltIn(RegExpPrototype, TO_STRING, function toString() {
+		    var R = anObject(this);
+		    var pattern = $toString(R.source);
+		    var flags = $toString(getRegExpFlags(R));
+		    return '/' + pattern + '/' + flags;
+		  }, { unsafe: true });
+		}
+		return es_regexp_toString;
+	}
+
+	requireEs_regexp_toString();
+
 	var es_string_replace = {};
 
 	var fixRegexpWellKnownSymbolLogic;
@@ -5548,85 +5664,6 @@
 		  });
 		};
 		return getSubstitution;
-	}
-
-	var regexpFlagsDetection;
-	var hasRequiredRegexpFlagsDetection;
-
-	function requireRegexpFlagsDetection () {
-		if (hasRequiredRegexpFlagsDetection) return regexpFlagsDetection;
-		hasRequiredRegexpFlagsDetection = 1;
-		var globalThis = requireGlobalThis();
-		var fails = requireFails();
-
-		// babel-minify and Closure Compiler transpiles RegExp('.', 'd') -> /./d and it causes SyntaxError
-		var RegExp = globalThis.RegExp;
-
-		var FLAGS_GETTER_IS_CORRECT = !fails(function () {
-		  var INDICES_SUPPORT = true;
-		  try {
-		    RegExp('.', 'd');
-		  } catch (error) {
-		    INDICES_SUPPORT = false;
-		  }
-
-		  var O = {};
-		  // modern V8 bug
-		  var calls = '';
-		  var expected = INDICES_SUPPORT ? 'dgimsy' : 'gimsy';
-
-		  var addGetter = function (key, chr) {
-		    // eslint-disable-next-line es/no-object-defineproperty -- safe
-		    Object.defineProperty(O, key, { get: function () {
-		      calls += chr;
-		      return true;
-		    } });
-		  };
-
-		  var pairs = {
-		    dotAll: 's',
-		    global: 'g',
-		    ignoreCase: 'i',
-		    multiline: 'm',
-		    sticky: 'y'
-		  };
-
-		  if (INDICES_SUPPORT) pairs.hasIndices = 'd';
-
-		  for (var key in pairs) addGetter(key, pairs[key]);
-
-		  // eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
-		  var result = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(O);
-
-		  return result !== expected || calls !== expected;
-		});
-
-		regexpFlagsDetection = { correct: FLAGS_GETTER_IS_CORRECT };
-		return regexpFlagsDetection;
-	}
-
-	var regexpGetFlags;
-	var hasRequiredRegexpGetFlags;
-
-	function requireRegexpGetFlags () {
-		if (hasRequiredRegexpGetFlags) return regexpGetFlags;
-		hasRequiredRegexpGetFlags = 1;
-		var call = requireFunctionCall();
-		var hasOwn = requireHasOwnProperty();
-		var isPrototypeOf = requireObjectIsPrototypeOf();
-		var regExpFlagsDetection = requireRegexpFlagsDetection();
-		var regExpFlagsGetterImplementation = requireRegexpFlags();
-
-		var RegExpPrototype = RegExp.prototype;
-
-		regexpGetFlags = regExpFlagsDetection.correct ? function (it) {
-		  return it.flags;
-		} : function (it) {
-		  return (!regExpFlagsDetection.correct && isPrototypeOf(RegExpPrototype, it) && !hasOwn(it, 'flags'))
-		    ? call(regExpFlagsGetterImplementation, it)
-		    : it.flags;
-		};
-		return regexpGetFlags;
 	}
 
 	var regexpExecAbstract;
@@ -8797,9 +8834,10 @@
 	  var defaults = {
 	    chunkSize: settings.uploadChunkSize || 512 * 1024,
 	    // max 512 KB per AGENTS.md
-	    retryDelays: [0, 5000, 10000, 30000, 60000, 120000, 300000],
+	    retryDelays: [0, 5000, 10000],
 	    removeFingerprintOnSuccess: true,
-	    maxChunkRetries: 10,
+	    maxChunkRetries: 3,
+	    requestTimeoutMs: 5000,
 	    endpoint: "",
 	    nonce: ""
 	  };
@@ -8830,6 +8868,12 @@
 	function normalizeFormFields(fields) {
 	  return fields && _typeof$9(fields) === "object" ? fields : {};
 	}
+	function createUploadId() {
+	  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+	    return crypto.randomUUID();
+	  }
+	  return "starmus-upload-".concat(Date.now(), "-").concat(Math.random().toString(36).slice(2, 11));
+	}
 
 	/* ---- Direct Upload (fallback) ---- */
 
@@ -8841,7 +8885,7 @@
 	 * @param {string} fileName - File name for the upload
 	 * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
 	 * @param {Object} [metadata={}] - Additional metadata
-	 * @param {string} [_instanceId=''] - Recorder instance ID
+	 * @param {string} [instanceId=''] - Recorder instance ID
 	 * @param {function} [onProgress] - Progress callback (loaded, total)
 	 * @returns {Promise<Object>} Server response
 	 */
@@ -8867,17 +8911,26 @@
 	    var _cfg$endpoints;
 	    var formFields,
 	      metadata,
+	      instanceId,
 	      onProgress,
 	      cfg,
 	      nonce,
 	      endpoint,
 	      fields,
+	      fd,
+	      uploadId,
+	      _i,
+	      _Object$entries,
+	      _Object$entries$_i,
+	      key,
+	      val,
 	      _args2 = arguments;
 	    return _regenerator().w(function (_context2) {
 	      while (1) switch (_context2.n) {
 	        case 0:
 	          formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
 	          metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+	          instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
 	          onProgress = _args2.length > 5 ? _args2[5] : undefined;
 	          cfg = getConfig();
 	          nonce = cfg.nonce || "";
@@ -8889,38 +8942,46 @@
 	          }
 	          throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
 	        case 1:
+	          fd = new FormData();
+	          uploadId = createUploadId();
+	          fd.append("audio_file", blob, fileName);
+	          fd.append("upload_uuid", uploadId);
+	          for (_i = 0, _Object$entries = Object.entries(fields); _i < _Object$entries.length; _i++) {
+	            _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2), key = _Object$entries$_i[0], val = _Object$entries$_i[1];
+	            fd.append(key, String(val));
+	          }
+	          if (metadata.transcript) {
+	            fd.append("transcription", metadata.transcript);
+	          }
+	          if (metadata.calibration) {
+	            fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
+	          }
+	          if (metadata.env) {
+	            fd.append("_starmus_env", JSON.stringify(metadata.env));
+	          }
+	          if (metadata.tier) {
+	            fd.append("tier", metadata.tier);
+	          }
+	          if (instanceId) {
+	            fd.append("instanceId", instanceId);
+	          }
 	          return _context2.a(2, new Promise(function (resolve, reject) {
-	            var fd = new FormData();
-	            fd.append("audio_file", blob, fileName);
-	            for (var _i = 0, _Object$entries = Object.entries(fields); _i < _Object$entries.length; _i++) {
-	              var _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2),
-	                key = _Object$entries$_i[0],
-	                val = _Object$entries$_i[1];
-	              fd.append(key, String(val));
-	            }
-	            if (metadata.transcript) {
-	              fd.append("transcription", metadata.transcript);
-	            }
-	            if (metadata.calibration) {
-	              fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-	            }
-	            if (metadata.env) {
-	              fd.append("_starmus_env", JSON.stringify(metadata.env));
-	            }
-	            if (metadata.tier) {
-	              fd.append("tier", metadata.tier);
-	            }
 	            var xhr = new XMLHttpRequest();
+	            var timeout = setTimeout(function () {
+	              xhr.abort();
+	              reject(new Error("Direct upload timed out after ".concat(cfg.requestTimeoutMs, "ms")));
+	            }, cfg.requestTimeoutMs);
 	            xhr.upload.addEventListener("progress", function (e) {
 	              if (onProgress && e.lengthComputable) {
 	                onProgress(e.loaded, e.total);
 	              }
 	            });
 	            xhr.addEventListener("load", function () {
+	              clearTimeout(timeout);
 	              if (xhr.status >= 200 && xhr.status < 300) {
 	                try {
 	                  resolve(JSON.parse(xhr.responseText));
-	                } catch (_e) {
+	                } catch (_unused) {
 	                  resolve({
 	                    success: true,
 	                    raw: xhr.responseText
@@ -8931,10 +8992,12 @@
 	              }
 	            });
 	            xhr.addEventListener("error", function () {
-	              return reject(new Error("Direct upload network error"));
+	              clearTimeout(timeout);
+	              reject(new Error("Direct upload network error"));
 	            });
 	            xhr.addEventListener("abort", function () {
-	              return reject(new Error("Direct upload aborted"));
+	              clearTimeout(timeout);
+	              reject(new Error("Direct upload aborted"));
 	            });
 	            xhr.open("POST", endpoint);
 	            if (nonce) {
@@ -8977,6 +9040,7 @@
 	      nonce,
 	      tusEndpoint,
 	      fields,
+	      uploadId,
 	      tusMetadata,
 	      _i2,
 	      _Object$entries2,
@@ -8995,8 +9059,10 @@
 	          cfg = getConfig();
 	          nonce = cfg.nonce || "";
 	          tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus) || "/wp-json/star-starmus-audio-recorder/v1/tus";
-	          fields = normalizeFormFields(formFields); // Flatten all metadata into TUS metadata (strings only)
+	          fields = normalizeFormFields(formFields);
+	          uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
 	          tusMetadata = {
+	            upload_uuid: sanitizeMetadata(uploadId),
 	            filename: sanitizeMetadata(fileName),
 	            filetype: sanitizeMetadata(blob.type),
 	            instanceId: sanitizeMetadata(instanceId),
@@ -9019,6 +9085,7 @@
 	              chunkSize: cfg.chunkSize,
 	              retryDelays: cfg.retryDelays,
 	              removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
+	              checksumAlgorithm: "sha1",
 	              metadata: tusMetadata,
 	              headers: headers,
 	              onProgress: function onProgress(bytesUploaded, bytesTotal) {
@@ -9121,43 +9188,6 @@
 
 	requireEs_array_map();
 
-	var es_regexp_toString = {};
-
-	var hasRequiredEs_regexp_toString;
-
-	function requireEs_regexp_toString () {
-		if (hasRequiredEs_regexp_toString) return es_regexp_toString;
-		hasRequiredEs_regexp_toString = 1;
-		var PROPER_FUNCTION_NAME = requireFunctionName().PROPER;
-		var defineBuiltIn = requireDefineBuiltIn();
-		var anObject = requireAnObject();
-		var $toString = requireToString();
-		var fails = requireFails();
-		var getRegExpFlags = requireRegexpGetFlags();
-
-		var TO_STRING = 'toString';
-		var RegExpPrototype = RegExp.prototype;
-		var nativeToString = RegExpPrototype[TO_STRING];
-
-		var NOT_GENERIC = fails(function () { return nativeToString.call({ source: 'a', flags: 'b' }) !== '/a/b'; });
-		// FF44- RegExp#toString has a wrong name
-		var INCORRECT_NAME = PROPER_FUNCTION_NAME && nativeToString.name !== TO_STRING;
-
-		// `RegExp.prototype.toString` method
-		// https://tc39.es/ecma262/#sec-regexp.prototype.tostring
-		if (NOT_GENERIC || INCORRECT_NAME) {
-		  defineBuiltIn(RegExpPrototype, TO_STRING, function toString() {
-		    var R = anObject(this);
-		    var pattern = $toString(R.source);
-		    var flags = $toString(getRegExpFlags(R));
-		    return '/' + pattern + '/' + flags;
-		  }, { unsafe: true });
-		}
-		return es_regexp_toString;
-	}
-
-	requireEs_regexp_toString();
-
 	/**
 	 * Copyright (c) Starisian Technologies. All rights reserved.
 	 *
@@ -9178,8 +9208,8 @@
 	  dbName: "StarmusSubmissions",
 	  storeName: "pendingSubmissions",
 	  dbVersion: 1,
-	  maxRetries: 10,
-	  retryDelays: [0, 5000, 10000, 30000, 60000, 120000, 300000, 600000, 1200000, 1800000],
+	  maxRetries: 3,
+	  retryDelays: [0, 5000, 10000],
 	  maxBlobSizes: {
 	    A: 20 * 1024 * 1024,
 	    // 20 MB — Tier A
@@ -9998,7 +10028,7 @@
 	                      }]);
 	                    }
 	                  }
-	                } catch (_crossOriginErr) {
+	                } catch (_unused) {
 	                  // Cross-origin — silently skip
 	                }
 	              }
@@ -12681,7 +12711,7 @@
 	 * @param {Object} elements - DOM element references
 	 * @returns {void}
 	 */
-	function render(state, elements) {
+	function render(state, elements, i18n) {
 	  if (!elements) {
 	    return;
 	  }
@@ -12739,10 +12769,10 @@
 	    elements.setupContainer.style.display = !isCalibrated || status === "calibrating" ? "block" : "none";
 	    if (elements.setupMicBtn) {
 	      if (status === "calibrating") {
-	        elements.setupMicBtn.textContent = calibration.message || "Adjusting...";
+	        elements.setupMicBtn.textContent = calibration.message || i18n("setupAdjusting", "Adjusting...");
 	        elements.setupMicBtn.disabled = true;
 	      } else {
-	        elements.setupMicBtn.textContent = "Setup Microphone";
+	        elements.setupMicBtn.textContent = i18n("setupMicrophone", "Setup Microphone");
 	        elements.setupMicBtn.disabled = false;
 	      }
 	    }
@@ -12787,13 +12817,13 @@
 	  /* --- Submit button --- */
 	  if (elements.submitBtn) {
 	    if (status === "submitting") {
-	      elements.submitBtn.textContent = "Uploading... ".concat(Math.round((submission.progress || 0) * 100), "%");
+	      elements.submitBtn.textContent = "".concat(i18n("uploading", "Uploading..."), " ").concat(Math.round((submission.progress || 0) * 100), "%");
 	      elements.submitBtn.disabled = true;
 	    } else if (status === "complete") {
-	      elements.submitBtn.textContent = submission.isQueued ? "Queued — uploading when online" : "Submitted!";
+	      elements.submitBtn.textContent = submission.isQueued ? i18n("queuedUploading", "Queued — uploading when online") : i18n("submitted", "Submitted!");
 	      elements.submitBtn.disabled = true;
 	    } else {
-	      elements.submitBtn.textContent = "Submit Recording";
+	      elements.submitBtn.textContent = i18n("submitRecording", "Submit Recording");
 	      elements.submitBtn.disabled = status !== "ready_to_submit";
 	    }
 	  }
@@ -12801,15 +12831,15 @@
 	  /* --- Mode indicator text --- */
 	  if (elements.modeIndicator) {
 	    var modeLabels = {
-	      uninitialized: "Loading…",
-	      idle: "Ready",
-	      calibrating: "Calibrating microphone…",
-	      ready: "Ready to record",
-	      recording: "Recording",
-	      paused: "Paused",
-	      ready_to_submit: "Review your recording",
-	      submitting: "Uploading…",
-	      complete: submission.isQueued ? "Queued for upload" : "Complete"
+	      uninitialized: i18n("modeLoading", "Loading…"),
+	      idle: i18n("modeReady", "Ready"),
+	      calibrating: i18n("modeCalibrating", "Calibrating microphone…"),
+	      ready: i18n("modeReadyToRecord", "Ready to record"),
+	      recording: i18n("modeRecording", "Recording"),
+	      paused: i18n("modePaused", "Paused"),
+	      ready_to_submit: i18n("modeReview", "Review your recording"),
+	      submitting: i18n("modeUploading", "Uploading…"),
+	      complete: submission.isQueued ? i18n("modeQueued", "Queued for upload") : i18n("modeComplete", "Complete")
 	    };
 	    elements.modeIndicator.textContent = modeLabels[status] || status;
 	    elements.modeIndicator.dataset.starmusStatus = status;
@@ -12826,6 +12856,7 @@
 	 * @returns {function} Unsubscribe function
 	 */
 	function initInstance(store, _incomingElements, forcedInstanceId) {
+	  var _window$STARMUS_BOOTS;
 	  var instId = forcedInstanceId || store.getState().instanceId;
 	  var root = document;
 	  if (instId) {
@@ -12835,6 +12866,11 @@
 	    }
 	  }
 	  var BUS = window.CommandBus;
+	  var bootstrapI18n = ((_window$STARMUS_BOOTS = window.STARMUS_BOOTSTRAP) === null || _window$STARMUS_BOOTS === void 0 ? void 0 : _window$STARMUS_BOOTS.i18n) || {};
+	  var i18n = function i18n(key, fallback) {
+	    var value = bootstrapI18n[key];
+	    return typeof value === "string" && value.trim() !== "" ? value : fallback;
+	  };
 	  var el = {
 	    step1: root.querySelector('[data-starmus-step="1"]'),
 	    step2: root.querySelector('[data-starmus-step="2"]'),
@@ -12891,7 +12927,7 @@
 	        type: "starmus/ui/step-continue"
 	      });
 	    } else if (el.messageBox) {
-	      el.messageBox.textContent = "Please fill in all required fields.";
+	      el.messageBox.textContent = i18n("requiredFieldsError", "Please fill in all required fields.");
 	      el.messageBox.style.display = "block";
 	    }
 	  });
@@ -12952,22 +12988,22 @@
 	    if (currentAudio) {
 	      currentAudio.pause();
 	      currentAudio = null;
-	      el.playBtn.textContent = "Play";
+	      el.playBtn.textContent = i18n("play", "Play");
 	      return;
 	    }
 	    var url = URL.createObjectURL(blob);
 	    currentAudio = new Audio(url);
-	    el.playBtn.textContent = "Stop";
+	    el.playBtn.textContent = i18n("stop", "Stop");
 	    currentAudio.addEventListener("ended", function () {
 	      URL.revokeObjectURL(url);
 	      currentAudio = null;
-	      el.playBtn.textContent = "Play";
+	      el.playBtn.textContent = i18n("play", "Play");
 	    });
 	    currentAudio.play().catch(function (err) {
 	      console.error("[UI] Playback error:", err);
 	      URL.revokeObjectURL(url);
 	      currentAudio = null;
-	      el.playBtn.textContent = "Play";
+	      el.playBtn.textContent = i18n("play", "Play");
 	    });
 	  });
 
@@ -13049,10 +13085,10 @@
 
 	  /* --- Online/offline DOM events --- */
 	  window.addEventListener("online", function () {
-	    return render(store.getState(), el);
+	    return render(store.getState(), el, i18n);
 	  });
 	  window.addEventListener("offline", function () {
-	    return render(store.getState(), el);
+	    return render(store.getState(), el, i18n);
 	  });
 
 	  /* --- State subscription --- */
@@ -13063,9 +13099,9 @@
 	    }
 	  });
 	  var unsubscribe = store.subscribe(function (state) {
-	    return render(state, el);
+	    return render(state, el, i18n);
 	  });
-	  render(store.getState(), el);
+	  render(store.getState(), el, i18n);
 	  return unsubscribe;
 	}
 
@@ -15882,7 +15918,7 @@
 	    phases: 3,
 	    noiseThreshold: 5,
 	    speechThreshold: 20,
-	    sampleRate: 44100,
+	    sampleRate: 16000,
 	    fftSize: 2048,
 	    smoothing: 0.8,
 	    gainRange: [0.5, 2.0],
@@ -15893,7 +15929,7 @@
 	    phases: 2,
 	    noiseThreshold: 8,
 	    speechThreshold: 15,
-	    sampleRate: 22050,
+	    sampleRate: 16000,
 	    fftSize: 1024,
 	    smoothing: 0.6,
 	    gainRange: [0.7, 1.5],
@@ -16367,7 +16403,7 @@
 	              audio: {
 	                echoCancellation: true,
 	                noiseSuppression: true,
-	                sampleRate: tier === "A" ? 44100 : tier === "B" ? 22050 : 16000,
+	                sampleRate: 16000,
 	                channelCount: 1
 	              }
 	            });
@@ -16830,114 +16866,188 @@
 	}
 
 	/**
-	 * Copyright (c) Starisian Technologies. All rights reserved.
-	 *
-	 * This file is part of the SPARXSTAR platform and is proprietary and confidential.
-	 * Unauthorized copying, modification, distribution, or use of this file, via any medium,
-	 * is strictly prohibited except as expressly permitted in writing by Starisian Technologies.
-	 *
-	 * License: Business Source License 1.1
-	 * Change Date: January 1, 2036
-	 * Change License: Starisian Community License
-	 *
-	 * See the LICENSE file in the repository root for full license terms.
+	 * @file starmus-integrator.js
+	 * @version 6.5.0-SCHEMA-NORMALIZER
+	 * @description Bridges and NORMALIZES SparxstarUEC data to match Starmus Backend Schema.
 	 */
 
-	function normaliseEnv(raw) {
-	  var _idents$deviceDetails, _idents$deviceDetails2;
-	  var tech = raw.technical || {};
-	  var rawTech = tech.raw || {};
-	  var profile = tech.profile || {};
-	  var idents = raw.identifiers || {};
-	  return {
-	    device: _objectSpread2(_objectSpread2({}, rawTech.device || {}), {}, {
+	window.Starmus = window.Starmus || {
+	  /* intentionally empty */
+	};
+
+	/**
+	 * Current version of the Starmus integration layer.
+	 * @global
+	 * @type {string}
+	 */
+	window.Starmus.version = "6.5.0";
+
+	/**
+	 * Exposes Peaks.js waveform library through the Starmus namespace.
+	 * Creates a bridge between the global Peaks library and Starmus.Peaks.
+	 * Provides a fallback implementation if Peaks.js is not available.
+	 *
+	 * @function
+	 * @exports exposePeaksBridge
+	 * @returns {void}
+	 */
+	// 1. PEAKS BRIDGE
+	function exposePeaksBridge() {
+	  if (window.Peaks && !window.Starmus.Peaks) {
+	    window.Starmus.Peaks = window.Peaks;
+	  } else if (!window.Peaks) {
+	    window.Peaks = {
+	      init: function init() {
+	        return null;
+	      }
+	    };
+	    window.Starmus.Peaks = window.Peaks;
+	  }
+	}
+	exposePeaksBridge();
+
+	/**
+	 * Speech Recognition API compatibility check and polyfill setup.
+	 * Detects browser support for speech recognition and logs availability.
+	 * Sets up webkit prefixed fallback for cross-browser compatibility.
+	 */
+	// 2. SPEECH API CHECK
+	if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) {
+	  console.log("[StarmusIntegrator] Speech API missing (Tier B/C)");
+	} else {
+	  window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+	}
+
+	/**
+	 * Handles SparxstarUEC environment data and normalizes it for Starmus backend.
+	 * Listens for 'sparxstar:environment-ready' events and transforms the payload
+	 * to match the strict schema expected by the Starmus backend.
+	 *
+	 * @listens window~sparxstar:environment-ready
+	 * @param {CustomEvent} e - The environment ready event
+	 * @param {Object} e.detail - Raw UEC environment data
+	 * @param {Object} e.detail.technical - Technical device information
+	 * @param {Object} e.detail.identifiers - Session and visitor identifiers
+	 */
+	// 3. UEC DATA INGESTION (CRITICAL FIX)
+	function getRuntimeStore() {
+	  if (window.__STARMUS_RUNTIME_INSTANCE__) {
+	    return window.__STARMUS_RUNTIME_INSTANCE__;
+	  }
+	  if (window.StarmusRuntime && window.StarmusRuntime.store) {
+	    return window.StarmusRuntime.store;
+	  }
+	  return null;
+	}
+	window.addEventListener("sparxstar:environment-ready", function (e) {
+	  var _raw$identifiers, _raw$identifiers2;
+	  console.log("[StarmusIntegrator] 📡 Parsing UEC Payload...");
+	  var runtimeStore = getRuntimeStore();
+	  if (!runtimeStore) {
+	    return;
+	  }
+	  var raw = e.detail || {
+	    /* intentionally empty */
+	  };
+	  var tech = raw.technical || {
+	    /* intentionally empty */
+	  };
+	  var rawTech = tech.raw || {
+	    /* intentionally empty */
+	  };
+	  var profile = tech.profile || {
+	    /* intentionally empty */
+	  };
+	  var idents = raw.identifiers || {
+	    /* intentionally empty */
+	  }; // Sometimes at root
+	  // Handle case where identifiers might be inside technical or separate (based on logs)
+
+	  /**
+	   * Normalized environment data object matching Starmus backend schema.
+	   * @type {Object}
+	   * @property {Object} device - Device information including class, OS, and user agent
+	   * @property {Object} browser - Browser capabilities and client details
+	   * @property {Object} network - Network information and connection profile
+	   * @property {Object} identifiers - Session, visitor, and IP identifiers
+	   * @property {Object} features - Battery and performance feature detection
+	   * @property {Array} errors - Array of initialization errors
+	   */
+	  // --- NORMALIZE TO STRICT SCHEMA ---
+	  // The server expects keys: 'device', 'browser', 'network', 'errors' at ROOT of _starmus_env
+
+	  var normalizedEnv = {
+	    // 1. Device Info (Merge Detector + Profile)
+	    device: _objectSpread2(_objectSpread2({}, rawTech.device || {
+	      /* intentionally empty */
+	    }), {}, {
 	      class: profile.deviceClass || "unknown",
-	      os: ((_idents$deviceDetails = idents.deviceDetails) === null || _idents$deviceDetails === void 0 ? void 0 : _idents$deviceDetails.os) || {},
+	      os: ((_raw$identifiers = raw.identifiers) === null || _raw$identifiers === void 0 || (_raw$identifiers = _raw$identifiers.deviceDetails) === null || _raw$identifiers === void 0 ? void 0 : _raw$identifiers.os) || {
+	        /* intentionally empty */
+	      },
 	      userAgent: navigator.userAgent
 	    }),
-	    browser: _objectSpread2(_objectSpread2({}, rawTech.browser || {}), ((_idents$deviceDetails2 = idents.deviceDetails) === null || _idents$deviceDetails2 === void 0 ? void 0 : _idents$deviceDetails2.client) || {}),
-	    network: _objectSpread2(_objectSpread2({}, rawTech.network || {}), {}, {
+	    // 2. Browser Info
+	    browser: _objectSpread2(_objectSpread2({}, rawTech.browser || {
+	      /* intentionally empty */
+	    }), ((_raw$identifiers2 = raw.identifiers) === null || _raw$identifiers2 === void 0 || (_raw$identifiers2 = _raw$identifiers2.deviceDetails) === null || _raw$identifiers2 === void 0 ? void 0 : _raw$identifiers2.client) || {
+	      /* intentionally empty */
+	    }),
+	    // 3. Network Info
+	    network: _objectSpread2(_objectSpread2({}, rawTech.network || {
+	      /* intentionally empty */
+	    }), {}, {
 	      profile: profile.networkProfile || "unknown"
 	    }),
+	    // 4. Identifiers (Session/Visitor)
 	    identifiers: {
 	      sessionId: idents.sessionId || raw.sessionId || "unknown",
 	      visitorId: idents.visitorId || raw.visitorId || "unknown",
 	      ip: idents.ipAddress || "0.0.0.0"
 	    },
+	    // 5. Features / Battery / Perf
 	    features: {
-	      battery: rawTech.battery || {},
-	      performance: rawTech.performance || {}
+	      battery: rawTech.battery || {
+	        /* intentionally empty */
+	      },
+	      performance: rawTech.performance || {
+	        /* intentionally empty */
+	      }
 	    },
+	    // 6. Init Error Array (Required by Schema)
 	    errors: [],
+	    // 7. Fingerprint (Explicitly required for Schema)
 	    fingerprint: raw.fingerprint || idents.fingerprint || idents.visitorId || "unknown"
 	  };
-	}
+	  console.log("[StarmusIntegrator] ✅ Normalized Env:", normalizedEnv);
+
+	  // Dispatch merged environment
+	  runtimeStore.dispatch({
+	    type: "starmus/env-update",
+	    payload: normalizedEnv
+	  });
+	});
 
 	/**
-	 * Set up the SpeechRecognition cross-browser shim.
-	 * Logs availability so callers can gate speech-to-text UI.
+	 * Audio Context watchdog for user activation compliance.
+	 * Resumes suspended AudioContext on first user interaction to comply
+	 * with browser autoplay policies. Uses {once: true} to run only once.
 	 *
-	 * @returns {void}
+	 * @listens document~click
 	 */
-	function setupSpeechRecognition() {
-	  if (!("SpeechRecognition" in window) && !("webkitSpeechRecognition" in window)) {
-	    console.log("[StarmusIntegrator] Speech API missing (Tier B/C)");
-	    return;
+	// 4. AUDIO CONTEXT WATCHDOG
+	document.addEventListener("click", function () {
+	  try {
+	    var ctx = window.StarmusAudioContext;
+	    if (ctx && ctx.state === "suspended") {
+	      ctx.resume();
+	    }
+	  } catch (_unused) {
+	    /* intentionally empty */
 	  }
-	  window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-	}
-
-	/**
-	 * Resume a suspended AudioContext on the first user gesture.
-	 * Complies with browser autoplay policies. Runs at most once.
-	 *
-	 * @returns {void}
-	 */
-	function setupAudioContextWatchdog() {
-	  document.addEventListener("click", function () {
-	    try {
-	      var ctx = window.StarmusAudioContext;
-	      if (ctx && ctx.state === "suspended") {
-	        ctx.resume();
-	      }
-	    } catch (_unused) {
-	      /* intentionally empty */
-	    }
-	  }, {
-	    once: true
-	  });
-	}
-
-	/**
-	 * Listen for the Sparxstar UEC environment-ready event, normalise the
-	 * payload, and dispatch it into the Starmus store.
-	 *
-	 * @returns {void}
-	 */
-	function listenForEnvironmentReady() {
-	  window.addEventListener("sparxstar:environment-ready", function (e) {
-	    if (!window.StarmusStore) {
-	      return;
-	    }
-	    var normalised = normaliseEnv(e.detail || {});
-	    window.StarmusStore.dispatch({
-	      type: "starmus/env-update",
-	      payload: normalised
-	    });
-	  });
-	}
-
-	/**
-	 * Initialise the Starmus integrator.
-	 * Must be called once at page load, after the Starmus store is ready.
-	 *
-	 * @returns {void}
-	 */
-	function initIntegrator() {
-	  setupSpeechRecognition();
-	  setupAudioContextWatchdog();
-	  listenForEnvironmentReady();
-	}
+	}, {
+	  once: true
+	});
 
 	/**
 	 * Copyright (c) Starisian Technologies. All rights reserved.
@@ -16974,10 +17084,10 @@
 
 	/* --- Store --- */
 	var store = createStore();
-	window.StarmusStore = store;
-
-	/* --- Integrator: UEC bridge + SpeechRecognition + AudioContext watchdog --- */
-	initIntegrator();
+	window.__STARMUS_RUNTIME_INSTANCE__ = store;
+	window.StarmusStoreInstance = store;
+	window.StarmusRuntime = window.StarmusRuntime || {};
+	window.StarmusRuntime.store = store;
 
 	/**
 	 * Initialises a recorder instance from a form element.

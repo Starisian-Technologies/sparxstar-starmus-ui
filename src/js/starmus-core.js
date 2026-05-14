@@ -24,7 +24,7 @@
 import "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 const subscribe = window.StarmusHooks?.subscribe || function () {};
 
@@ -184,7 +184,7 @@ export function initCore(store, instanceId, env) {
                                 );
                             }
                         }
-                    } catch (_crossOriginErr) {
+                    } catch {
                         // Cross-origin — silently skip
                     }
                 }

@@ -48,10 +48,17 @@ if (fs.existsSync(cssFile)) {
         "--sparxstar-primary",
         "--sparxstar-accent-hex",
         "--sparxstar-text",
+        "--sparxstar-theme-base",
         "--sparxstar-bg",
+        "--sparxstar-inner-bg",
+        "--sparxstar-border-color",
         "--sparxstar-danger",
         "--sparxstar-success",
         "--sparxstar-warning",
+        "--sparxstar-shadow",
+        "--sparxstar-shd",
+        "--sparxstar-shd-onhover",
+        "--sparxstar-shd-onclick",
     ];
     for (const token of requiredTokens) {
         if (!cssContent.includes(token)) {

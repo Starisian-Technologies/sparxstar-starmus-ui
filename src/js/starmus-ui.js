@@ -77,7 +77,7 @@ function safeBind(element, eventName, handler) {
  * @param {Object} elements - DOM element references
  * @returns {void}
  */
-function render(state, elements) {
+function render(state, elements, i18n) {
     if (!elements) {
         return;
     }
@@ -155,10 +155,11 @@ function render(state, elements) {
 
         if (elements.setupMicBtn) {
             if (status === "calibrating") {
-                elements.setupMicBtn.textContent = calibration.message || "Adjusting...";
+                elements.setupMicBtn.textContent =
+                    calibration.message || i18n("setupAdjusting", "Adjusting...");
                 elements.setupMicBtn.disabled = true;
             } else {
-                elements.setupMicBtn.textContent = "Setup Microphone";
+                elements.setupMicBtn.textContent = i18n("setupMicrophone", "Setup Microphone");
                 elements.setupMicBtn.disabled = false;
             }
         }
@@ -209,15 +210,15 @@ function render(state, elements) {
     if (elements.submitBtn) {
         if (status === "submitting") {
             elements.submitBtn.textContent =
-                `Uploading... ${Math.round((submission.progress || 0) * 100)}%`;
+                `${i18n("uploading", "Uploading...")} ${Math.round((submission.progress || 0) * 100)}%`;
             elements.submitBtn.disabled = true;
         } else if (status === "complete") {
             elements.submitBtn.textContent = submission.isQueued
-                ? "Queued — uploading when online"
-                : "Submitted!";
+                ? i18n("queuedUploading", "Queued — uploading when online")
+                : i18n("submitted", "Submitted!");
             elements.submitBtn.disabled = true;
         } else {
-            elements.submitBtn.textContent = "Submit Recording";
+            elements.submitBtn.textContent = i18n("submitRecording", "Submit Recording");
             elements.submitBtn.disabled = status !== "ready_to_submit";
         }
     }
@@ -225,15 +226,17 @@ function render(state, elements) {
     /* --- Mode indicator text --- */
     if (elements.modeIndicator) {
         const modeLabels = {
-            uninitialized: "Loading…",
-            idle: "Ready",
-            calibrating: "Calibrating microphone…",
-            ready: "Ready to record",
-            recording: "Recording",
-            paused: "Paused",
-            ready_to_submit: "Review your recording",
-            submitting: "Uploading…",
-            complete: submission.isQueued ? "Queued for upload" : "Complete",
+            uninitialized: i18n("modeLoading", "Loading…"),
+            idle: i18n("modeReady", "Ready"),
+            calibrating: i18n("modeCalibrating", "Calibrating microphone…"),
+            ready: i18n("modeReadyToRecord", "Ready to record"),
+            recording: i18n("modeRecording", "Recording"),
+            paused: i18n("modePaused", "Paused"),
+            ready_to_submit: i18n("modeReview", "Review your recording"),
+            submitting: i18n("modeUploading", "Uploading…"),
+            complete: submission.isQueued
+                ? i18n("modeQueued", "Queued for upload")
+                : i18n("modeComplete", "Complete"),
         };
         elements.modeIndicator.textContent = modeLabels[status] || status;
         elements.modeIndicator.dataset.starmusStatus = status;
@@ -261,6 +264,11 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
     }
 
     const BUS = window.CommandBus;
+    const bootstrapI18n = window.STARMUS_BOOTSTRAP?.i18n || {};
+    const i18n = (key, fallback) => {
+        const value = bootstrapI18n[key];
+        return typeof value === "string" && value.trim() !== "" ? value : fallback;
+    };
 
     const el = {
         step1: root.querySelector('[data-starmus-step="1"]'),
@@ -310,7 +318,10 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
         if (valid) {
             store.dispatch({ type: "starmus/ui/step-continue" });
         } else if (el.messageBox) {
-            el.messageBox.textContent = "Please fill in all required fields.";
+            el.messageBox.textContent = i18n(
+                "requiredFieldsError",
+                "Please fill in all required fields.",
+            );
             el.messageBox.style.display = "block";
         }
     });
@@ -361,25 +372,25 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
         if (currentAudio) {
             currentAudio.pause();
             currentAudio = null;
-            el.playBtn.textContent = "Play";
+            el.playBtn.textContent = i18n("play", "Play");
             return;
         }
 
         const url = URL.createObjectURL(blob);
         currentAudio = new Audio(url);
-        el.playBtn.textContent = "Stop";
+        el.playBtn.textContent = i18n("stop", "Stop");
 
         currentAudio.addEventListener("ended", () => {
             URL.revokeObjectURL(url);
             currentAudio = null;
-            el.playBtn.textContent = "Play";
+            el.playBtn.textContent = i18n("play", "Play");
         });
 
         currentAudio.play().catch((err) => {
             console.error("[UI] Playback error:", err);
             URL.revokeObjectURL(url);
             currentAudio = null;
-            el.playBtn.textContent = "Play";
+            el.playBtn.textContent = i18n("play", "Play");
         });
     });
 
@@ -442,8 +453,8 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
     }
 
     /* --- Online/offline DOM events --- */
-    window.addEventListener("online", () => render(store.getState(), el));
-    window.addEventListener("offline", () => render(store.getState(), el));
+    window.addEventListener("online", () => render(store.getState(), el, i18n));
+    window.addEventListener("offline", () => render(store.getState(), el, i18n));
 
     /* --- State subscription --- */
     store.dispatch({
@@ -451,8 +462,8 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
         payload: { instanceId: instId },
     });
 
-    const unsubscribe = store.subscribe((state) => render(state, el));
-    render(store.getState(), el);
+    const unsubscribe = store.subscribe((state) => render(state, el, i18n));
+    render(store.getState(), el, i18n);
 
     return unsubscribe;
 }

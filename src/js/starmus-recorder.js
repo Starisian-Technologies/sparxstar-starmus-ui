@@ -23,8 +23,8 @@
 "use strict";
 
 import { CommandBus } from "./starmus-hooks.js";
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
-import EnhancedCalibration from "./starmus-enhanced-calibration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
+import { EnhancedCalibration } from "./starmus-enhanced-calibration.js";
 
 /**
  * Registry of active recorder instances, keyed by instanceId.
@@ -99,7 +99,7 @@ export function initRecorder(store, instanceId) {
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: tier === "A" ? 44100 : tier === "B" ? 22050 : 16000,
+                    sampleRate: 16000,
                     channelCount: 1,
                 },
             });
@@ -227,7 +227,7 @@ export function initRecorder(store, instanceId) {
                 analyser.smoothingTimeConstant = 0.6;
                 source.connect(analyser);
                 analyserData = new Uint8Array(analyser.fftSize);
-            } catch (_analyserErr) {
+            } catch {
                 // Non-critical — amplitude meter is optional
             }
         }

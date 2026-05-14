@@ -24,15 +24,15 @@
 
 import { debugLog } from "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
-import sparxstarIntegration from "./starmus-sparxstar-integration.js";
+import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
 const CONFIG = {
     dbName: "StarmusSubmissions",
     storeName: "pendingSubmissions",
     dbVersion: 1,
-    maxRetries: 10,
-    retryDelays: [0, 5000, 10000, 30000, 60000, 120000, 300000, 600000, 1200000, 1800000],
+    maxRetries: 3,
+    retryDelays: [0, 5000, 10000],
     maxBlobSizes: {
         A: 20 * 1024 * 1024, // 20 MB — Tier A
         B: 10 * 1024 * 1024, // 10 MB — Tier B
@@ -438,8 +438,6 @@ export async function getPendingCount() {
 export function initOffline() {
     return getOfflineQueue();
 }
-
-export default offlineQueue;
 
 if (typeof window !== "undefined") {
     window.initOffline = initOffline;

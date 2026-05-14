@@ -99,7 +99,7 @@ export function initRecorder(store, instanceId) {
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: 16000,
+                    sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz
                     channelCount: 1,
                 },
             });

@@ -129,7 +129,10 @@ function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
         const values = new Uint8Array(16);
         crypto.getRandomValues(values);
-        const suffix = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+        values[6] = (values[6] & 0x0f) | 0x40; // RFC 4122 version 4
+        values[8] = (values[8] & 0x3f) | 0x80; // RFC 4122 variant
+        const hex = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+        const suffix = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
         return `starmus-upload-${suffix}`;
     }
     throw new Error("Secure UUID generation is not available in this runtime");

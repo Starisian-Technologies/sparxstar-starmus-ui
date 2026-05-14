@@ -11669,9 +11669,12 @@
 	  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
 	    var values = new Uint8Array(16);
 	    crypto.getRandomValues(values);
-	    var suffix = Array.from(values, function (value) {
+	    values[6] = values[6] & 0x0f | 0x40; // RFC 4122 version 4
+	    values[8] = values[8] & 0x3f | 0x80; // RFC 4122 variant
+	    var hex = Array.from(values, function (value) {
 	      return value.toString(16).padStart(2, "0");
 	    }).join("");
+	    var suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
 	    return "starmus-upload-".concat(suffix);
 	  }
 	  throw new Error("Secure UUID generation is not available in this runtime");
@@ -16548,6 +16551,7 @@
 	                echoCancellation: true,
 	                noiseSuppression: true,
 	                sampleRate: 16000,
+	                // Runtime policy: cap all tiers to 16kHz
 	                channelCount: 1
 	              }
 	            });

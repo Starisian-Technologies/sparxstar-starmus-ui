@@ -132,13 +132,11 @@ test.describe('African Deployment Conditions', () => {
         await expect(modeIndicator).toHaveCount(1);
     });
 
-    test('Offline banner appears when navigator.onLine is false', async ({ page }) => {
+    test('Offline banner appears when navigator.onLine is false', async ({ page, context }) => {
         await page.goto('/recorder-test/');
 
         // Simulate offline
-        await page.evaluate(() => {
-            window.dispatchEvent(new Event('offline'));
-        });
+        await context.setOffline(true);
 
         await page.waitForTimeout(500);
 
@@ -153,5 +151,7 @@ test.describe('African Deployment Conditions', () => {
             // Either display is set by JS or element simply exists — both valid
             expect(['block', 'flex', 'none'].includes(computedDisplay)).toBe(true);
         }
+
+        await context.setOffline(false);
     });
 });

@@ -80,6 +80,10 @@ const uploadCircuitBreaker = new UploadCircuitBreaker();
 function getConfig() {
     const envData = sparxstarIntegration.getEnvironmentData();
     const settings = envData?.recordingSettings || {};
+    const bootstrap =
+        typeof window !== "undefined" && window.STARMUS_BOOTSTRAP
+            ? window.STARMUS_BOOTSTRAP
+            : {};
 
     const defaults = {
         chunkSize: settings.uploadChunkSize || 512 * 1024, // max 512 KB per AGENTS.md
@@ -87,14 +91,26 @@ function getConfig() {
         removeFingerprintOnSuccess: true,
         maxChunkRetries: 3,
         requestTimeoutMs: 5000,
-        endpoint: "",
-        nonce: "",
+        endpoint: bootstrap.restUrl
+            ? `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`
+            : "",
+        nonce: bootstrap.nonce || "",
+        endpoints: bootstrap.restUrl
+            ? {
+                  tus: `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`,
+                  directUpload: `${bootstrap.restUrl.replace(/\/$/, "")}/upload-fallback`,
+              }
+            : {},
     };
 
     const globalCfg =
         (typeof window !== "undefined" && (window.starmusTus || window.starmusConfig)) || {};
-
-    return Object.assign({}, defaults, globalCfg);
+    const merged = Object.assign({}, defaults, globalCfg);
+    merged.chunkSize = Math.min(
+        Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024,
+        512 * 1024,
+    );
+    return merged;
 }
 
 /* ---- Helpers ---- */
@@ -295,6 +311,8 @@ export async function uploadTus(
     }
 
     return new Promise((resolve, reject) => {
+        let settled = false;
+        let timeoutId = null;
         const upload = new tus.Upload(blob, {
             endpoint: tusEndpoint,
             chunkSize: cfg.chunkSize,
@@ -311,10 +329,18 @@ export async function uploadTus(
             },
 
             onSuccess() {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+                settled = true;
                 resolve({ success: true, url: upload.url });
             },
 
             onError(err) {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+                settled = true;
                 console.error("[TUS] Upload error:", err);
                 sparxstarIntegration.reportError("tus_upload_error", {
                     error: err.message,
@@ -325,6 +351,17 @@ export async function uploadTus(
             },
         });
 
+        const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
+            ? cfg.requestTimeoutMs
+            : 5000;
+        timeoutId = setTimeout(() => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            upload.abort();
+            reject(new Error(`TUS upload timed out after ${requestTimeoutMs}ms`));
+        }, requestTimeoutMs);
         upload.start();
     });
 }

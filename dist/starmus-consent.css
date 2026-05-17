@@ -1,194 +1,259 @@
-.starmus-consent-container{
-    max-width:720px;
-    margin:20px auto;
-    padding:16px;
-    border-radius:12px;
-    background:var(--sparxstar-bg, #fff);
-    border:1px solid var(--sparxstar-border-color, rgba(0,0,0,.1));
-    font-family:Noto Sans,system-ui,sans-serif;
-    color:var(--sparxstar-text, #1a1a2e);
+/**
+ * Copyright (c) Starisian Technologies. All rights reserved.
+ *
+ * This file is part of the SPARXSTAR platform and is proprietary and confidential.
+ * Unauthorized copying, modification, distribution, or use of this file, via any medium,
+ * is strictly prohibited except as expressly permitted in writing by Starisian Technologies.
+ *
+ * License: Business Source License 1.1
+ * Change Date: January 1, 2036
+ * Change License: Starisian Community License
+ *
+ * See the LICENSE file in the repository root for full license terms.
+ */
+
+/**
+ * @file src/css/consent/starmus-consent.css
+ * @version 2.0.0
+ * @description Styles for the Starmus consent form (digital-signature / click-wrap).
+ * Integrates with the --sparxstar-* token system.
+ * Single-column layout. 48px minimum touch targets. No hover-only states.
+ */
+
+/* =============================================================================
+   CONSENT CONTAINER
+   ============================================================================= */
+
+.starmus-consent-container {
+    max-width: 720px;
+    margin: 20px auto;
+    padding: 16px;
+    border-radius: 12px;
+    background: var(--sparxstar-bg, #ffffff);
+    border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 10%));
+    font-family: 'Noto Sans', system-ui, sans-serif;
+    color: var(--sparxstar-text, #1a1a2e);
 }
 
-@supports (backdrop-filter:blur(1px)){
-    .starmus-consent-container{
-        backdrop-filter:blur(4px);
-        background:color-mix(in srgb, var(--sparxstar-bg, #fff) 90%, transparent);
+@supports (backdrop-filter: blur(1px)) {
+    .starmus-consent-container {
+        backdrop-filter: blur(4px);
+        background: color-mix(in srgb, var(--sparxstar-bg, #ffffff) 90%, transparent);
     }
 }
 
-.starmus-form-group{
-    margin-bottom:16px;
+/* =============================================================================
+   FORM GROUPS
+   ============================================================================= */
+
+.starmus-form-group {
+    margin-bottom: 16px;
 }
 
-.starmus-form-group label{
-    display:block;
-    font-weight:600;
-    margin-bottom:6px;
-    font-size:.9375rem;
+.starmus-form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-size: 0.9375rem;
 }
 
-.starmus-form-group input[type=email],.starmus-form-group input[type=text],.starmus-form-group select{
-    width:100%;
-    padding:12px 14px;
-    min-height:48px;
-    border:1px solid var(--sparxstar-border-color, rgba(0,0,0,.2));
-    border-radius:8px;
-    background:var(--sparxstar-inner-bg, #f9f9f9);
-    color:var(--sparxstar-text, #1a1a2e);
-    font-family:Noto Sans,system-ui,sans-serif;
-    font-size:1rem;
-    box-sizing:border-box;
+.starmus-form-group input[type="text"],
+.starmus-form-group input[type="email"],
+.starmus-form-group select {
+    width: 100%;
+    padding: 12px 14px;
+    min-height: 48px; /* touch target */
+    border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 20%));
+    border-radius: 8px;
+    background: var(--sparxstar-inner-bg, #f9f9f9);
+    color: var(--sparxstar-text, #1a1a2e);
+    font-family: 'Noto Sans', system-ui, sans-serif;
+    font-size: 1rem;
+    box-sizing: border-box;
 }
 
-.starmus-form-group input[type=email]:focus,.starmus-form-group input[type=text]:focus,.starmus-form-group select:focus{
-    outline:2px solid var(--sparxstar-accent-hex, #246bf8);
-    outline-offset:2px;
-    border-color:var(--sparxstar-accent-hex, #246bf8);
+.starmus-form-group input[type="text"]:focus,
+.starmus-form-group input[type="email"]:focus,
+.starmus-form-group select:focus {
+    outline: 2px solid var(--sparxstar-accent-hex, #246bf8);
+    outline-offset: 2px;
+    border-color: var(--sparxstar-accent-hex, #246bf8);
 }
 
-.starmus-terms-wrapper{
-    margin:20px 0;
+/* =============================================================================
+   TERMS SCROLL AREA
+   ============================================================================= */
+
+.starmus-terms-wrapper {
+    margin: 20px 0;
 }
 
-.starmus-terms-label{
-    margin-bottom:8px;
-    font-size:.9375rem;
+.starmus-terms-label {
+    margin-bottom: 8px;
+    font-size: 0.9375rem;
 }
 
-.starmus-scroll-box{
-    max-height:220px;
-    overflow-y:auto;
-    border:1px solid var(--sparxstar-border-color, rgba(0,0,0,.15));
-    padding:12px;
-    border-radius:8px;
-    background:var(--sparxstar-inner-bg, #fafafa);
-    font-size:.875rem;
-    line-height:1.6;
+.starmus-scroll-box {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 15%));
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--sparxstar-inner-bg, #fafafa);
+    font-size: 0.875rem;
+    line-height: 1.6;
 }
 
-.starmus-legal-content h3{
-    font-size:1rem;
-    margin-bottom:8px;
+.starmus-legal-content h3 {
+    font-size: 1rem;
+    margin-bottom: 8px;
 }
 
-.starmus-legal-content p{
-    margin-bottom:10px;
-}
-.starmus-notice{
-    margin-top:10px;
-    padding:8px 10px;
-    background:color-mix(in srgb, var(--sparxstar-accent-hex, #246bf8) 10%, transparent);
-    border-radius:6px;
-    font-size:.875rem;
-    color:var(--sparxstar-text, #1a1a2e);
+.starmus-legal-content p {
+    margin-bottom: 10px;
 }
 
-.starmus-notice.is-read{
-    background:color-mix(in srgb, var(--sparxstar-success, #00c96b) 15%, transparent);
+/* Scroll notice */
+.starmus-notice {
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: color-mix(in srgb, var(--sparxstar-accent-hex, #246bf8) 10%, transparent);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    color: var(--sparxstar-text, #1a1a2e);
 }
 
-.starmus-signature-wrapper{
-    margin-top:20px;
+.starmus-notice.is-read {
+    background: color-mix(in srgb, var(--sparxstar-success, #00c96b) 15%, transparent);
 }
 
-.starmus-signature-wrapper>label{
-    display:block;
-    font-weight:600;
-    margin-bottom:8px;
-    font-size:.9375rem;
+/* =============================================================================
+   SIGNATURE WRAPPER
+   ============================================================================= */
+
+.starmus-signature-wrapper {
+    margin-top: 20px;
 }
 
-.starmus-canvas-container{
-    border:1px solid var(--sparxstar-border-color, rgba(0,0,0,.2));
-    border-radius:8px;
-    background:var(--sparxstar-inner-bg, #fff);
-    height:180px;
-    overflow:hidden;
+.starmus-signature-wrapper > label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+    font-size: 0.9375rem;
 }
 
-#starmus-signature-pad{
-    width:100%;
-    height:100%;
-    display:block;
-    touch-action:none;
+.starmus-canvas-container {
+    border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 20%));
+    border-radius: 8px;
+    background: var(--sparxstar-inner-bg, #ffffff);
+    height: 180px;
+    overflow: hidden;
 }
 
-.starmus-sig-controls{
-    display:flex;
-    align-items:center;
-    gap:12px;
-    margin-top:10px;
-    flex-wrap:wrap;
+#starmus-signature-pad {
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none; /* prevent scroll while drawing */
 }
 
-.starmus-sig-status{
-    font-size:.875rem;
-    color:var(--sparxstar-text, #1a1a2e);
-    opacity:.7;
+.starmus-sig-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 10px;
+    flex-wrap: wrap;
 }
 
-.starmus-btn-primary,.starmus-btn-secondary{
-    min-height:48px;
-    padding:12px 18px;
-    border:none;
-    border-radius:8px;
-    font-family:Noto Sans,system-ui,sans-serif;
-    font-size:1rem;
-    font-weight:600;
-    cursor:pointer;
-    text-align:center;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
+.starmus-sig-status {
+    font-size: 0.875rem;
+    color: var(--sparxstar-text, #1a1a2e);
+    opacity: 0.7;
 }
 
-.starmus-btn-primary{
-    background:var(--sparxstar-primary, #1b4c7a);
-    color:#fff;
+/* =============================================================================
+   BUTTONS
+   ============================================================================= */
+
+.starmus-btn-primary,
+.starmus-btn-secondary {
+    min-height: 48px; /* touch target */
+    padding: 12px 18px;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Noto Sans', system-ui, sans-serif;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.starmus-btn-primary:focus-visible{
-    outline:2px solid var(--sparxstar-accent-hex, #246bf8);
-    outline-offset:2px;
+.starmus-btn-primary {
+    background: var(--sparxstar-primary, #1b4c7a);
+    color: #ffffff;
 }
 
-.starmus-btn-primary:disabled{
-    opacity:.6;
-    cursor:not-allowed;
+.starmus-btn-primary:focus-visible {
+    outline: 2px solid var(--sparxstar-accent-hex, #246bf8);
+    outline-offset: 2px;
 }
 
-.starmus-btn-secondary{
-    background:var(--sparxstar-inner-bg, #e7e7e7);
-    color:var(--sparxstar-text, #1a1a2e);
-    border:1px solid var(--sparxstar-border-color, rgba(0,0,0,.15));
+.starmus-btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
-.starmus-btn-secondary:focus-visible{
-    outline:2px solid var(--sparxstar-accent-hex, #246bf8);
-    outline-offset:2px;
+.starmus-btn-secondary {
+    background: var(--sparxstar-inner-bg, #e7e7e7);
+    color: var(--sparxstar-text, #1a1a2e);
+    border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 15%));
 }
 
-.starmus-form-actions{
-    margin-top:20px;
+.starmus-btn-secondary:focus-visible {
+    outline: 2px solid var(--sparxstar-accent-hex, #246bf8);
+    outline-offset: 2px;
 }
 
-@media (prefers-color-scheme:dark){
-    .starmus-consent-container{
-        background:var(--sparxstar-bg, #12121f);
-        border-color:var(--sparxstar-border-color, hsla(0,0%,100%,.12));
+.starmus-form-actions {
+    margin-top: 20px;
+}
+
+/* =============================================================================
+   DARK MODE
+   ============================================================================= */
+
+@media (prefers-color-scheme: dark) {
+    .starmus-consent-container {
+        background: var(--sparxstar-bg, #12121f);
+        border-color: var(--sparxstar-border-color, rgb(255 255 255 / 12%));
     }
 
-    .starmus-form-group input[type=email],.starmus-form-group input[type=text],.starmus-form-group select{
-        background:var(--sparxstar-inner-bg, #1e1e30);
-        color:var(--sparxstar-text, #e8e8f0);
-        border-color:var(--sparxstar-border-color, hsla(0,0%,100%,.15));
+    .starmus-form-group input[type="text"],
+    .starmus-form-group input[type="email"],
+    .starmus-form-group select {
+        background: var(--sparxstar-inner-bg, #1e1e30);
+        color: var(--sparxstar-text, #e8e8f0);
+        border-color: var(--sparxstar-border-color, rgb(255 255 255 / 15%));
     }
 
-    .starmus-btn-secondary,.starmus-canvas-container,.starmus-scroll-box{
-        background:var(--sparxstar-inner-bg, #1e1e30);
+    .starmus-scroll-box {
+        background: var(--sparxstar-inner-bg, #1e1e30);
     }
 
-    .starmus-btn-secondary{
-        color:var(--sparxstar-text, #e8e8f0);
+    .starmus-canvas-container {
+        background: var(--sparxstar-inner-bg, #1e1e30);
+    }
+
+    .starmus-btn-secondary {
+        background: var(--sparxstar-inner-bg, #1e1e30);
+        color: var(--sparxstar-text, #e8e8f0);
     }
 }
+
+/* =============================================================================
+   END — starmus-consent.css
+   © 2023–2025 Starisian Technologies. All Rights Reserved.
+   ============================================================================= */

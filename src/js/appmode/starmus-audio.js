@@ -10,7 +10,7 @@
  * - Memory Safety: Full cleanup via destroy() to prevent leaks in SPAs.
  */
 
-class _SmartAudioPlayer {
+export class SmartAudioPlayer {
     /**
      * @param {Object} config
      * @param {number} config.lowMemoryLimit - GB of RAM to treat as low-end (Default: 4)
@@ -273,3 +273,7 @@ document.getElementById('playBtn').addEventListener('click', () => {
 // Cleanup (e.g., in React useEffect return or Vue unmounted)
 // player.destroy();
 */
+
+if (typeof window !== "undefined") {
+    window.SmartAudioPlayer = SmartAudioPlayer;
+}

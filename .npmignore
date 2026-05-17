@@ -1,5 +1,4 @@
-# Include everything except for node_modules and build artifacts
-dist/
+# Include everything except for node_modules
 node_modules/
 
 # Exclude documentation, tools, and test artifacts

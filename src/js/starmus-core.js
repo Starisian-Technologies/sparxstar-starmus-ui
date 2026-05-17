@@ -200,27 +200,40 @@ export function initCore(store, instanceId, env) {
                 fileSize: audioBlob.size,
             });
 
-            // Offline fallback
-            try {
-                const submissionId = await queueSubmission(
-                    instanceId,
-                    audioBlob,
-                    fileName,
-                    formFields,
-                    metadata,
+            const message = error && error.message ? error.message : String(error);
+            const retryableUploadError =
+                !navigator.onLine ||
+                /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
+                    message,
                 );
-                store.dispatch({ type: "starmus/submit-queued", submissionId });
-                const pending = await getPendingCount();
-                if (window.CommandBus) {
-                    window.CommandBus.dispatch("starmus/offline/queue_updated", {
-                        count: pending,
+
+            if (retryableUploadError) {
+                try {
+                    const submissionId = await queueSubmission(
+                        instanceId,
+                        audioBlob,
+                        fileName,
+                        formFields,
+                        metadata,
+                    );
+                    store.dispatch({ type: "starmus/submit-queued", submissionId });
+                    const pending = await getPendingCount();
+                    if (window.CommandBus) {
+                        window.CommandBus.dispatch("starmus/offline/queue_updated", {
+                            count: pending,
+                        });
+                    }
+                } catch (queueError) {
+                    console.error("[Core] Offline queue failed:", queueError);
+                    store.dispatch({
+                        type: "starmus/error",
+                        error: { message: "Upload failed completely.", retryable: false },
                     });
                 }
-            } catch (queueError) {
-                console.error("[Core] Offline queue failed:", queueError);
+            } else {
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message: "Upload failed completely.", retryable: false },
+                    error: { message, retryable: false },
                 });
             }
         }

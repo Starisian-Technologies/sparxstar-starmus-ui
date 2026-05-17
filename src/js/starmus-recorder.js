@@ -166,8 +166,6 @@ export function initRecorder(store, instanceId) {
      * @returns {Promise<void>}
      */
     async function startRecording() {
-        store.dispatch({ type: "starmus/mic-start" });
-
         let stream;
 
         try {
@@ -202,6 +200,8 @@ export function initRecorder(store, instanceId) {
             stream.getTracks().forEach((t) => t.stop());
             return;
         }
+
+        store.dispatch({ type: "starmus/mic-start" });
 
         const chunks = [];
         let startTime = Date.now();

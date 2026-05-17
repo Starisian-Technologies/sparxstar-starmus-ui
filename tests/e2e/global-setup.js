@@ -65,21 +65,19 @@ async function globalSetup() {
     await verifyWordPressEnvironment(baseURL);
 
     console.log('Configuring test environment...');
-    try {
-        execSync('npx wp-env run tests-cli wp plugin activate sparxstar-starmus-ui 2>/dev/null || true', { stdio: 'inherit' });
+    execSync('npx wp-env run tests-cli wp plugin activate sparxstar-starmus-ui', {
+        stdio: 'inherit',
+    });
 
-        execSync(
-            'npx wp-env run tests-cli wp post create --post_type=page --post_title="Recorder Test" --post_status=publish --post_content="[starmus_audio_recorder]" --post_name="recorder-test" 2>/dev/null || true',
-            { stdio: 'inherit' }
-        );
+    execSync(
+        'npx wp-env run tests-cli wp post create --post_type=page --post_title="Recorder Test" --post_status=publish --post_content="[starmus_audio_recorder]" --post_name="recorder-test"',
+        { stdio: 'inherit' }
+    );
 
-        execSync(
-            `npx wp-env run tests-cli wp eval '$page = get_page_by_path("recorder-test"); if ($page) { $options = get_option("starmus_options", []); $options["recorder_page_id"] = $page->ID; update_option("starmus_options", $options); echo "Recorder page option set to ID: " . $page->ID; } else { echo "recorder-test page not found"; }' 2>/dev/null || true`,
-            { stdio: 'inherit' }
-        );
-    } catch (e) {
-        console.warn("Setup warning (non-fatal):", e.message);
-    }
+    execSync(
+        `npx wp-env run tests-cli wp eval '$page = get_page_by_path("recorder-test"); if (!$page) { throw new Exception("recorder-test page not found"); } $options = get_option("starmus_options", []); $options["recorder_page_id"] = $page->ID; update_option("starmus_options", $options); echo "Recorder page option set to ID: " . $page->ID;'`,
+        { stdio: 'inherit' }
+    );
 
     console.log('Global setup complete');
 }

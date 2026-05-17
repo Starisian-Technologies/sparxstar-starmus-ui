@@ -37,8 +37,8 @@ Audio Settings per Tier
 
 | Tier | Calibration duration | Sample rate | FFT size | Smoothing | Gain range | Auto gain |
 | --- | --- | --- | --- | --- | --- | --- |
-| **A** | 15 s (three phases) | 44.1 kHz | 2048 | 0.8 | 0.5 -- 2.0 | **Enabled** |
-| **B** | 10 s (two phases) | 22.05 kHz | 1024 | 0.6 | 0.7 -- 1.5 | **Enabled** |
+| **A** | 15 s (three phases) | 16 kHz | 2048 | 0.8 | 0.5 -- 2.0 | **Enabled** |
+| **B** | 10 s (two phases) | 16 kHz | 1024 | 0.6 | 0.7 -- 1.5 | **Enabled** |
 | **C** | 5 s (single phase) | 16 kHz | 512 | 0.4 | 0.8 -- 1.2 | **Disabled** |
 
 ### Offline Queue Limits

@@ -96,6 +96,11 @@ test.describe('Recorder Workflow - Offline & Network Conditions', () => {
         // The recorder should still be present
         const form = page.locator('form[data-starmus-instance]');
         await expect(form).toBeVisible({ timeout: 5000 });
+
+        // Persisted recording should still expose submit/playback controls
+        const playBtn = page.locator('[data-starmus-action="play"]');
+        const submitBtn = page.locator('[data-starmus-action="submit"]');
+        await expect(playBtn.or(submitBtn)).toBeVisible({ timeout: 5000 });
     });
 
     test('Submit while offline - queued, not lost', async ({ page }) => {

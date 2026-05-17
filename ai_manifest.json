@@ -17,13 +17,11 @@
         { "symbol": "uploadWithPriority",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "initAutoMetadata",      "type": "function", "owner": "Starisian", "path": "src/js/starmus-metadata-auto.js" },
         { "symbol": "buildMetadataMap",      "type": "function", "owner": "Starisian", "path": "src/js/starmus-metadata-auto.js" },
-        { "symbol": "CalibrationEngine",     "type": "class",    "owner": "Starisian", "path": "src/js/starmus-enhanced-calibration.js" },
+        { "symbol": "EnhancedCalibration",   "type": "class",    "owner": "Starisian", "path": "src/js/starmus-enhanced-calibration.js" },
         { "symbol": "sparxstarIntegration",  "type": "object",   "owner": "Starisian", "path": "src/js/starmus-sparxstar-integration.js" },
-        { "symbol": "normaliseEnv",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
-        { "symbol": "initIntegrator",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
+        { "symbol": "exposePeaksBridge",     "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
         { "symbol": "StarmusTranscript",     "type": "class",    "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
         { "symbol": "init",                  "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
-        { "symbol": "RhythmEngine",          "type": "class",    "owner": "Starisian", "path": "src/js/prosody/starmus-prosody-engine.js" },
         { "symbol": "SmartAudioPlayer",      "type": "class",    "owner": "Starisian", "path": "src/js/appmode/starmus-audio.js" }
     ]
 }

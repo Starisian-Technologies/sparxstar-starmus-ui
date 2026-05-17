@@ -74,8 +74,20 @@ export const sparxstarIntegration = {
             };
         }
 
+        const hasMediaRecorder = typeof MediaRecorder !== "undefined";
+        const hasGetUserMedia =
+            typeof navigator !== "undefined" &&
+            navigator.mediaDevices &&
+            typeof navigator.mediaDevices.getUserMedia === "function";
+        const hasAudioContext =
+            typeof window !== "undefined" &&
+            (typeof window.AudioContext === "function" ||
+                typeof window.webkitAudioContext === "function");
+
+        const fallbackTier = !hasMediaRecorder || !hasGetUserMedia ? "C" : hasAudioContext ? "A" : "B";
+
         return {
-            tier: typeof MediaRecorder !== "undefined" ? "A" : "C",
+            tier: fallbackTier,
             recordingSettings: { uploadChunkSize: 524288 },
             network: { type: "unknown" },
             device: {},

@@ -126,7 +126,11 @@
                     timestamp: Date.now(),
                     severity: errObj.retryable === false ? "hard" : "soft",
                 });
+                const shouldResetStatus =
+                    (state.status === "calibrating" || state.status === "recording") &&
+                    (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
                 return merge(state, {
+                    status: shouldResetStatus ? "ready" : state.status,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });
@@ -283,7 +287,10 @@
             subscribe: function (fn) {
                 listeners.push(fn);
                 return function () {
-                    listeners.splice(listeners.indexOf(fn), 1);
+                    const index = listeners.indexOf(fn);
+                    if (index >= 0) {
+                        listeners.splice(index, 1);
+                    }
                 };
             },
         };

@@ -53,21 +53,15 @@ import "./starmus-integrator.js";
     });
 })();
 
-/* --- Store --- */
-const store = createStore();
-window.__STARMUS_RUNTIME_INSTANCE__ = store;
-window.StarmusStoreInstance = store;
-window.StarmusRuntime = window.StarmusRuntime || {};
-window.StarmusRuntime.store = store;
-
 /**
  * Initialises a recorder instance from a form element.
  *
+ * @param {Object} store - Runtime state store
  * @param {HTMLFormElement} recorderForm - Form with data-starmus-instance attribute
  * @param {string} instanceId - Instance identifier
  * @returns {void}
  */
-function initRecorderInstance(recorderForm, instanceId) {
+function initRecorderInstance(store, recorderForm, instanceId) {
     console.log("[StarmusMain] Booting recorder for ID:", instanceId);
 
     recorderForm.addEventListener("submit", (e) => e.preventDefault());
@@ -78,7 +72,6 @@ function initRecorderInstance(recorderForm, instanceId) {
             initCore(store, instanceId, environmentData);
             initUI(store, {}, instanceId);
             initRecorder(store, instanceId);
-            initOffline();
             initAutoMetadata(store, recorderForm, {});
         })
         .catch((error) => {
@@ -86,29 +79,52 @@ function initRecorderInstance(recorderForm, instanceId) {
             initCore(store, instanceId, {});
             initUI(store, {}, instanceId);
             initRecorder(store, instanceId);
-            initOffline();
             initAutoMetadata(store, recorderForm, {});
         });
 }
 
 /* --- Bootstrap on DOM ready --- */
 document.addEventListener("DOMContentLoaded", () => {
-    try {
-        const recorderForm = document.querySelector("form[data-starmus-instance]");
+    const bootstrap =
+        typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : undefined;
 
-        if (recorderForm) {
-            const instanceId = recorderForm.getAttribute("data-starmus-instance");
-            initRecorderInstance(recorderForm, instanceId);
-        } else {
+    if (!bootstrap || typeof bootstrap !== "object") {
+        console.warn("[StarmusMain] STARMUS_BOOTSTRAP missing. Runtime not initialised.");
+        return;
+    }
+
+    try {
+        const recorderForms = document.querySelectorAll("form[data-starmus-instance]");
+
+        if (!recorderForms.length) {
             console.warn("[StarmusMain] No Starmus recorder form found.");
+            return;
         }
+
+        /* --- Store --- */
+        const store = createStore();
+        window.__STARMUS_RUNTIME_INSTANCE__ = store;
+        window.StarmusStoreInstance = store;
+        window.StarmusRuntime = window.StarmusRuntime || {};
+        window.StarmusRuntime.store = store;
+
+        initOffline().catch((error) => {
+            console.warn("[StarmusMain] Offline queue unavailable, continuing:", error);
+        });
+
+        recorderForms.forEach((recorderForm, index) => {
+            const rawInstanceId = recorderForm.getAttribute("data-starmus-instance");
+            const instanceId = rawInstanceId || `starmus-instance-${index + 1}`;
+            initRecorderInstance(store, recorderForm, instanceId);
+        });
     } catch (e) {
         console.error("[StarmusMain] Boot failed:", e);
     }
 });
 
 /* --- Global API exports --- */
-window.StarmusRecorder = initRecorder;
+window.StarmusRecorder = window.StarmusRecorder || {};
+window.StarmusRecorder.initRecorder = initRecorder;
 window.StarmusTus = { queueSubmission };
 window.StarmusOfflineQueue = getOfflineQueue;
 window.SparxstarIntegration = sparxstarIntegration;

@@ -62,6 +62,22 @@ function getMaxBlobSize(metadata = {}) {
     return CONFIG.defaultMaxBlobSize;
 }
 
+function createOfflineSubmissionId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return `starmus-offline-${crypto.randomUUID()}`;
+    }
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+        const values = new Uint8Array(16);
+        crypto.getRandomValues(values);
+        values[6] = (values[6] & 0x0f) | 0x40;
+        values[8] = (values[8] & 0x3f) | 0x80;
+        const hex = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+        const suffix = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        return `starmus-offline-${suffix}`;
+    }
+    throw new Error("Secure UUID generation is not available in this runtime");
+}
+
 /** @private */
 class OfflineQueue {
     constructor() {
@@ -158,7 +174,7 @@ class OfflineQueue {
         const safeBlob = new Blob([audioBlob], { type: audioBlob.type });
 
         const item = {
-            id: `starmus-offline-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+            id: createOfflineSubmissionId(),
             instanceId,
             fileName,
             timestamp: Date.now(),
@@ -302,8 +318,11 @@ class OfflineQueue {
                 } catch (err) {
                     const msg = err && err.message ? err.message : String(err);
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
-                    if (!nonRetryable) {
-                        await this._updateRetry(id, retryCount + 1, msg);
+                    if (nonRetryable) {
+                        await this.remove(id);
+                    } else {
+                        const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        await this._updateRetry(id, nextRetryCount, msg);
                     }
                 }
             }

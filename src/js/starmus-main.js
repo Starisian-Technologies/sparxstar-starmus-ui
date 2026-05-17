@@ -123,8 +123,12 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 /* --- Global API exports --- */
-window.StarmusRecorder = window.StarmusRecorder || {};
-window.StarmusRecorder.initRecorder = initRecorder;
+const starmusRecorderApi =
+    typeof window.StarmusRecorder === "object" && window.StarmusRecorder !== null
+        ? window.StarmusRecorder
+        : {};
+starmusRecorderApi.initRecorder = initRecorder;
+window.StarmusRecorder = starmusRecorderApi;
 window.StarmusTus = { queueSubmission };
 window.StarmusOfflineQueue = getOfflineQueue;
 window.SparxstarIntegration = sparxstarIntegration;

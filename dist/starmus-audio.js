@@ -17365,8 +17365,9 @@
   });
 
   /* --- Global API exports --- */
-  window.StarmusRecorder = window.StarmusRecorder || {};
-  window.StarmusRecorder.initRecorder = initRecorder;
+  var starmusRecorderApi = _typeof$9(window.StarmusRecorder) === "object" && window.StarmusRecorder !== null ? window.StarmusRecorder : {};
+  starmusRecorderApi.initRecorder = initRecorder;
+  window.StarmusRecorder = starmusRecorderApi;
   window.StarmusTus = {
     queueSubmission: queueSubmission
   };

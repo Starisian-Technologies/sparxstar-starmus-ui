@@ -22,7 +22,7 @@
 "use strict";
 
 import "./starmus-hooks.js";
-import { subscribe, CommandBus } from "./starmus-hooks.js";
+import { CommandBus } from "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
@@ -108,7 +108,15 @@ export function initCore(store, instanceId, env) {
 
             // Tier C gate: block recorder commands — file upload only
             if (tier === "C") {
-                CommandBus.subscribe("starmus/setup-mic", (_p, meta) => {
+                /**
+                 * Dispatches a TIER_C_NO_MIC error when a recorder command
+                 * is received on a Tier C device.
+                 *
+                 * @param {Object} _p - Unused payload
+                 * @param {Object} meta - Command metadata
+                 * @returns {void}
+                 */
+                function blockMicCommand(_p, meta) {
                     if (meta && meta.instanceId === instanceId) {
                         store.dispatch({
                             type: "starmus/error",
@@ -120,20 +128,9 @@ export function initCore(store, instanceId, env) {
                             },
                         });
                     }
-                });
-                CommandBus.subscribe("starmus/mic-start", (_p, meta) => {
-                    if (meta && meta.instanceId === instanceId) {
-                        store.dispatch({
-                            type: "starmus/error",
-                            error: {
-                                code: "TIER_C_NO_MIC",
-                                message:
-                                    "Recording is not available on this device. Please upload a file.",
-                                retryable: false,
-                            },
-                        });
-                    }
-                });
+                }
+                CommandBus.subscribe("starmus/setup-mic", blockMicCommand);
+                CommandBus.subscribe("starmus/mic-start", blockMicCommand);
             }
 
             window.dispatchEvent(
@@ -330,19 +327,19 @@ export function initCore(store, instanceId, env) {
         }
     }
 
-    subscribe("submit", (payload, meta) => {
+    CommandBus.subscribe("submit", (payload, meta) => {
         if (meta && meta.instanceId === instanceId) {
             handleSubmit(payload.formFields || {});
         }
     });
 
-    subscribe("reset", (_p, meta) => {
+    CommandBus.subscribe("reset", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
             store.dispatch({ type: "starmus/reset" });
         }
     });
 
-    subscribe("continue", (_p, meta) => {
+    CommandBus.subscribe("continue", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
             store.dispatch({ type: "starmus/ui/step-continue" });
         }

@@ -1,0 +1,27 @@
+{
+    "repository": "sparxstar-starmus-ui",
+    "version": "1.1.0",
+    "namespace": "Starisian\\Sparxstar\\Starmus",
+    "symbols": [
+        { "symbol": "createStore",           "type": "function", "owner": "Starisian", "path": "src/js/starmus-state-store.js" },
+        { "symbol": "DEFAULT_INITIAL_STATE", "type": "constant", "owner": "Starisian", "path": "src/js/starmus-state-store.js" },
+        { "symbol": "StarmusHooks",          "type": "class",    "owner": "Starisian", "path": "src/js/starmus-hooks.js" },
+        { "symbol": "initCore",              "type": "function", "owner": "Starisian", "path": "src/js/starmus-core.js" },
+        { "symbol": "initInstance",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-ui.js" },
+        { "symbol": "initRecorder",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-recorder.js" },
+        { "symbol": "initOffline",           "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "queueSubmission",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "getOfflineQueue",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "uploadDirect",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
+        { "symbol": "uploadTus",             "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
+        { "symbol": "uploadWithPriority",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
+        { "symbol": "initAutoMetadata",      "type": "function", "owner": "Starisian", "path": "src/js/starmus-metadata-auto.js" },
+        { "symbol": "buildMetadataMap",      "type": "function", "owner": "Starisian", "path": "src/js/starmus-metadata-auto.js" },
+        { "symbol": "EnhancedCalibration",   "type": "class",    "owner": "Starisian", "path": "src/js/starmus-enhanced-calibration.js" },
+        { "symbol": "sparxstarIntegration",  "type": "object",   "owner": "Starisian", "path": "src/js/starmus-sparxstar-integration.js" },
+        { "symbol": "exposePeaksBridge",     "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
+        { "symbol": "StarmusTranscript",     "type": "class",    "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
+        { "symbol": "init",                  "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
+        { "symbol": "SmartAudioPlayer",      "type": "class",    "owner": "Starisian", "path": "src/js/appmode/starmus-audio.js" }
+    ]
+}

@@ -30,7 +30,7 @@ Every `.js` and `.py` source file (excluding `__init__.py`) must begin with the 
  * engineering of this material is strictly forbidden unless prior
  * written permission is obtained from Starisian Technologies.
  ************************************************************************/
-```
+```text
 
 ---
 
@@ -53,9 +53,7 @@ Use in secondary or supporting files (e.g., utility helpers, config files, templ
 ## JavaScript / Node.js Header
 
 
-javascript
-
-```
+```javascript
 /**
  * Copyright (c) Starisian Technologies. All rights reserved.
  *
@@ -76,9 +74,7 @@ javascript
 ## Python Header
 
 
-python
-
-```
+```python
 # Copyright (c) Starisian Technologies. All rights reserved.
 #
 # This file is part of the SPARXSTAR platform and is proprietary and confidential.

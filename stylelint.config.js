@@ -1,0 +1,19 @@
+export default {
+  extends: ['stylelint-config-standard'],
+  ignoreFiles: ['node_modules/**', 'dist/**'],
+  rules: {
+    'color-function-notation': 'modern',
+    'color-no-invalid-hex': true,
+    'block-no-empty': true,
+    'no-empty-source': true,
+    'no-duplicate-selectors': true,
+    'length-zero-no-unit': true,
+    'property-no-deprecated': true,
+    'declaration-block-no-duplicate-properties': true,
+    'selector-class-pattern': null,
+    'keyframes-name-pattern': null,
+    'custom-property-pattern': null,
+    'no-descending-specificity': null,
+  },
+  cache: true,
+};

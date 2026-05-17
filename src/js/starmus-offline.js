@@ -79,6 +79,15 @@ function createOfflineSubmissionId() {
 }
 
 /** @private */
+/**
+ * Offline recording queue.
+ *
+ * Eviction policy: LRU, 20 MB maximum total size.
+ * Entries older than 7 days are eligible for automatic eviction.
+ * Eviction runs on queue initialization and after each successful upload.
+ *
+ * Storage: IndexedDB via 'starmus-offline' database, 'recordings' table.
+ */
 class OfflineQueue {
     constructor() {
         /** @type {IDBDatabase|null} */

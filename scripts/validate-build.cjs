@@ -102,6 +102,36 @@ if (fs.existsSync(mainFile)) {
     }
 }
 
+// ---- CHECK TUS CONSTRAINTS ----
+const tusFile = "src/js/starmus-tus.js";
+if (fs.existsSync(tusFile)) {
+    const tusContent = fs.readFileSync(tusFile, "utf8");
+
+    // Verify chunk size is capped at 512 KB (512 * 1024)
+    if (!tusContent.includes("512 * 1024")) {
+        console.log("❌ starmus-tus.js: Missing 512 KB chunk size cap (512 * 1024)");
+        ok = false;
+    } else {
+        console.log("✅ TUS chunk size cap (512 KB) present");
+    }
+
+    // Verify TUS chunked upload function is the primary upload path
+    if (!tusContent.includes("uploadTus")) {
+        console.log("❌ starmus-tus.js: Missing uploadTus (TUS chunked upload) function");
+        ok = false;
+    } else {
+        console.log("✅ TUS chunked upload (uploadTus) is present");
+    }
+
+    // Verify SHA-256 checksum is configured (not SHA-1)
+    if (!tusContent.includes("sha256")) {
+        console.log("❌ starmus-tus.js: checksumAlgorithm must be sha256, not sha1");
+        ok = false;
+    } else {
+        console.log("✅ TUS checksum algorithm is sha256");
+    }
+}
+
 // ---- FINAL EXIT ----
 if (!ok) {
     console.log("\n⚠️  Validation failed. Fix the issues above before bundling.");

@@ -22,11 +22,26 @@
 "use strict";
 
 import "./starmus-hooks.js";
+import { subscribe, CommandBus } from "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
-const subscribe = window.StarmusHooks?.subscribe || function () {};
+/**
+ * Mutable capability flags populated after tier resolution.
+ * Sirus will overwrite these values at runtime in Phase 3.
+ * Do not hardcode feature logic outside of this object.
+ *
+ * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean, allowProsody: boolean }}
+ */
+export const starmusCapabilities = {
+    tier: "A",
+    allowRecording: true,
+    allowCalibration: true,
+    allowCanvas: true,
+    allowLiveTranscript: true,
+    allowProsody: true,
+};
 
 /**
  * Detects browser capability tier.
@@ -73,6 +88,14 @@ export function initCore(store, instanceId, env) {
                 sparxstar_available: sparxstarIntegration.isAvailable,
             };
 
+            // Populate mutable capabilities — Sirus will overwrite these in Phase 3
+            starmusCapabilities.tier = tier;
+            starmusCapabilities.allowRecording = tier !== "C";
+            starmusCapabilities.allowCalibration = tier !== "C";
+            starmusCapabilities.allowCanvas = tier !== "C";
+            starmusCapabilities.allowLiveTranscript = tier !== "C";
+            starmusCapabilities.allowProsody = tier !== "C";
+
             store.dispatch({
                 type: "starmus/tier-ready",
                 payload: { tier },
@@ -82,6 +105,36 @@ export function initCore(store, instanceId, env) {
                 type: "starmus/env-update",
                 payload: enhancedEnv,
             });
+
+            // Tier C gate: block recorder commands — file upload only
+            if (tier === "C") {
+                CommandBus.subscribe("starmus/setup-mic", (_p, meta) => {
+                    if (meta && meta.instanceId === instanceId) {
+                        store.dispatch({
+                            type: "starmus/error",
+                            error: {
+                                code: "TIER_C_NO_MIC",
+                                message:
+                                    "Recording is not available on this device. Please upload a file.",
+                                retryable: false,
+                            },
+                        });
+                    }
+                });
+                CommandBus.subscribe("starmus/mic-start", (_p, meta) => {
+                    if (meta && meta.instanceId === instanceId) {
+                        store.dispatch({
+                            type: "starmus/error",
+                            error: {
+                                code: "TIER_C_NO_MIC",
+                                message:
+                                    "Recording is not available on this device. Please upload a file.",
+                                retryable: false,
+                            },
+                        });
+                    }
+                });
+            }
 
             window.dispatchEvent(
                 new CustomEvent("starmus-ready", {
@@ -163,8 +216,46 @@ export function initCore(store, instanceId, env) {
 
             store.dispatch({ type: "starmus/submit-complete", payload: result });
 
-            // Fire redirect if server provided one
+            // Emit starmus:complete — boundary between recording and server-side processing.
+            // Nothing downstream triggers until this event fires.
             if (result && result.success) {
+                const completedState = store.getState();
+                const completedSource = completedState.source || {};
+                const completedCalibration = completedState.calibration || {};
+                const mimeType = completedSource.metadata?.mimeType || audioBlob.type || "";
+                const format = /aac/i.test(mimeType) ? "aac-lc" : "opus";
+                const contributorConsent = (() => {
+                    try {
+                        const raw =
+                            typeof localStorage !== "undefined"
+                                ? localStorage.getItem("starmus_contributor_consent")
+                                : null;
+                        return raw ? JSON.parse(raw) : null;
+                    } catch {
+                        return null;
+                    }
+                })();
+
+                document.dispatchEvent(
+                    new CustomEvent("starmus:complete", {
+                        detail: {
+                            sessionId: instanceId,
+                            uploadId: result.uploadId || "",
+                            durationMs: Math.round(
+                                (completedSource.metadata?.duration || 0) * 1000,
+                            ),
+                            sampleRate: 16000,
+                            channels: 1,
+                            format,
+                            language: completedSource.language || "",
+                            contributorId:
+                                completedState.env?.identifiers?.visitorId || "",
+                            consentGranted: !!(contributorConsent && contributorConsent.granted),
+                            calibrationApplied: !!(completedCalibration.complete),
+                        },
+                    }),
+                );
+
                 const redirect = result.data?.redirect_url || result.redirect_url;
                 if (redirect) {
                     setTimeout(() => {

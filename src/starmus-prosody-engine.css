@@ -31,7 +31,7 @@
 
 :root {
     --prosody-bg: var(--sparxstar-bg, #f2f2f2);
-    --prosody-surface: var(--sparxstar-inner-bg, #ffffff);
+    --prosody-surface: var(--sparxstar-inner-bg, #fff);
     --prosody-text: var(--sparxstar-text, #1a1a2e);
     --prosody-text-dim: color-mix(in srgb, var(--sparxstar-text, #1a1a2e) 55%, transparent);
     --prosody-text-lit: var(--sparxstar-text, #1a1a2e);
@@ -64,7 +64,7 @@
         --prosody-surface: var(--sparxstar-inner-bg, #1e1e30);
         --prosody-text: var(--sparxstar-text, #e8e8f0);
         --prosody-text-dim: color-mix(in srgb, var(--sparxstar-text, #e8e8f0) 45%, transparent);
-        --prosody-text-lit: #ffffff;
+        --prosody-text-lit: #fff;
     }
 }
 
@@ -255,7 +255,7 @@
 
 .neutral-btn.active {
     background: var(--prosody-accent);
-    color: #ffffff;
+    color: #fff;
     border-color: var(--prosody-accent);
 }
 

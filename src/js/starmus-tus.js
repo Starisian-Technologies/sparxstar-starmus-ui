@@ -318,7 +318,7 @@ export async function uploadTus(
             chunkSize: cfg.chunkSize,
             retryDelays: cfg.retryDelays,
             removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
-            checksumAlgorithm: "sha1",
+            checksumAlgorithm: "sha256",
             metadata: tusMetadata,
             headers,
 
@@ -333,7 +333,7 @@ export async function uploadTus(
                     clearTimeout(timeoutId);
                 }
                 settled = true;
-                resolve({ success: true, url: upload.url });
+                resolve({ success: true, url: upload.url, uploadId });
             },
 
             onError(err) {

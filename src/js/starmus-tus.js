@@ -232,9 +232,12 @@ export async function uploadDirect(
             clearTimeout(timeout);
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
-                    resolve(JSON.parse(xhr.responseText));
+                    const parsed = JSON.parse(xhr.responseText);
+                    // Merge local uploadId so starmus:complete always has one,
+                    // preferring any uploadId the server returns.
+                    resolve({ uploadId, ...parsed });
                 } catch {
-                    resolve({ success: true, raw: xhr.responseText });
+                    resolve({ success: true, uploadId, raw: xhr.responseText });
                 }
             } else {
                 reject(new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`));

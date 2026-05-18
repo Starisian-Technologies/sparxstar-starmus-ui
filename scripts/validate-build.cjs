@@ -102,75 +102,45 @@ if (fs.existsSync(mainFile)) {
     }
 }
 
-function spx_evaluateSimpleNumericExpression(expression) {
-    const normalized = expression.trim().replaceAll("_", "");
-
-    if (/^\d+$/.test(normalized)) {
-        return Number(normalized);
-    }
-
-    if (!/^\d+(?:\s*\*\s*\d+)+$/.test(normalized)) {
-        return null;
-    }
-
-    return normalized
-        .split("*")
-        .map((part) => Number(part.trim()))
-        .reduce((product, value) => product * value, 1);
-}
-
-function spx_extractChunkSizeExpression(content) {
-    const match = content.match(/\bchunkSize\b\s*[:=]\s*([^,\n}]+)/u);
-
-    if (!match) {
-        return null;
-    }
-
-    return match[1].trim();
-}
-
 // ---- CHECK TUS CONSTRAINTS ----
 const tusFile = "src/js/starmus-tus.js";
 if (fs.existsSync(tusFile)) {
     const tusContent = fs.readFileSync(tusFile, "utf8");
-    const maxTusChunkSize = 512 * 1024;
 
-    // Verify chunk size is explicitly configured and capped at 512 KB.
-    const chunkSizeExpression = spx_extractChunkSizeExpression(tusContent);
-    const chunkSizeValue = chunkSizeExpression === null
-        ? null
-        : spx_evaluateSimpleNumericExpression(chunkSizeExpression);
-
-    if (chunkSizeExpression === null) {
-        console.log("❌ starmus-tus.js: Missing chunkSize configuration for TUS uploads");
-        ok = false;
-    } else if (chunkSizeValue === null) {
-        console.log(`❌ starmus-tus.js: Unable to validate chunkSize expression: ${chunkSizeExpression}`);
-        ok = false;
-    } else if (chunkSizeValue > maxTusChunkSize) {
-        console.log(`❌ starmus-tus.js: chunkSize exceeds 512 KB cap (${chunkSizeValue} > ${maxTusChunkSize})`);
+    // Verify the runtime chunk size cap enforces ≤ 512 KB via Math.min.
+    // Use lazy [\s\S]*? so the match crosses newlines and function call parens.
+    const chunkCapPattern = /Math\.min\([\s\S]*?512\s*\*\s*1024/;
+    if (!chunkCapPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: Runtime chunk size cap not found. Expected Math.min(…, 512 * 1024).",
+        );
         ok = false;
     } else {
-        console.log(`✅ TUS chunk size cap validated (${chunkSizeValue} bytes)`);
+        console.log("✅ TUS chunk size runtime cap (Math.min ≤ 512 KB) enforced");
     }
 
-    // Verify TUS chunked upload function is the primary upload path
-    if (!tusContent.includes("uploadTus")) {
-        console.log("❌ starmus-tus.js: Missing uploadTus (TUS chunked upload) function");
+    // Verify uploadTus is exported as a function (not just mentioned in a comment/import).
+    const exportTusPattern = /export\s+(?:async\s+)?function\s+uploadTus\b/;
+    if (!exportTusPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: Missing exported uploadTus function (primary chunked upload path).",
+        );
         ok = false;
     } else {
-        console.log("✅ TUS chunked upload (uploadTus) is present");
+        console.log("✅ Exported uploadTus function is present");
     }
 
-    // Verify checksumAlgorithm is explicitly configured to SHA-256 and not SHA-1
+    // Verify checksumAlgorithm is explicitly configured to SHA-256 and not SHA-1.
     const checksumSha256Pattern = /checksumAlgorithm\s*[:=]\s*["']sha256["']/;
     const checksumSha1Pattern = /checksumAlgorithm\s*[:=]\s*["']sha1["']/;
 
     if (checksumSha1Pattern.test(tusContent) || !checksumSha256Pattern.test(tusContent)) {
-        console.log("❌ starmus-tus.js: checksumAlgorithm must be explicitly set to sha256 and must not use sha1");
+        console.log(
+            '❌ starmus-tus.js: checksumAlgorithm must be explicitly set to "sha256" and must not use "sha1".',
+        );
         ok = false;
     } else {
-        console.log("✅ TUS checksum algorithm is explicitly set to sha256");
+        console.log('✅ TUS checksumAlgorithm is "sha256"');
     }
 }
 

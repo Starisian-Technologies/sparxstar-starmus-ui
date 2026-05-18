@@ -106,33 +106,6 @@ export function initCore(store, instanceId, env) {
                 payload: enhancedEnv,
             });
 
-            // Tier C gate: block recorder commands — file upload only
-            if (tier === "C") {
-                /**
-                 * Dispatches a TIER_C_NO_MIC error when a recorder command
-                 * is received on a Tier C device.
-                 *
-                 * @param {Object} _p - Unused payload
-                 * @param {Object} meta - Command metadata
-                 * @returns {void}
-                 */
-                function blockMicCommand(_p, meta) {
-                    if (meta && meta.instanceId === instanceId) {
-                        store.dispatch({
-                            type: "starmus/error",
-                            error: {
-                                code: "TIER_C_NO_MIC",
-                                message:
-                                    "Recording is not available on this device. Please upload a file.",
-                                retryable: false,
-                            },
-                        });
-                    }
-                }
-                CommandBus.subscribe("starmus/setup-mic", blockMicCommand);
-                CommandBus.subscribe("starmus/mic-start", blockMicCommand);
-            }
-
             window.dispatchEvent(
                 new CustomEvent("starmus-ready", {
                     detail: { instanceId, tier, environment: enhancedEnv },
@@ -237,29 +210,27 @@ export function initCore(store, instanceId, env) {
                     result.upload_id,
                     result.data?.uploadId,
                     result.data?.upload_id,
-                ].find((value) => typeof value === "string" && value.trim() !== "");
+                ].find((value) => typeof value === "string" && value.trim() !== "") || "";
 
-                if (resolvedUploadId) {
-                    document.dispatchEvent(
-                        new CustomEvent("starmus:complete", {
-                            detail: {
-                                sessionId: instanceId,
-                                uploadId: resolvedUploadId,
-                                durationMs: Math.round(
-                                    (completedSource.metadata?.duration || 0) * 1000,
-                                ),
-                                sampleRate: 16000,
-                                channels: 1,
-                                format,
-                                language: completedSource.language || "",
-                                contributorId:
-                                    completedState.env?.identifiers?.visitorId || "",
-                                consentGranted: !!(contributorConsent && contributorConsent.granted),
-                                calibrationApplied: !!(completedCalibration.complete),
-                            },
-                        }),
-                    );
-                }
+                document.dispatchEvent(
+                    new CustomEvent("starmus:complete", {
+                        detail: {
+                            sessionId: instanceId,
+                            uploadId: resolvedUploadId,
+                            durationMs: Math.round(
+                                (completedSource.metadata?.duration || 0) * 1000,
+                            ),
+                            sampleRate: 16000,
+                            channels: 1,
+                            format,
+                            language: completedSource.language || "",
+                            contributorId:
+                                completedState.env?.identifiers?.visitorId || "",
+                            consentGranted: !!(contributorConsent && contributorConsent.granted),
+                            calibrationApplied: !!(completedCalibration.complete),
+                        },
+                    }),
+                );
 
                 const redirect = result.data?.redirect_url || result.redirect_url;
                 if (redirect) {

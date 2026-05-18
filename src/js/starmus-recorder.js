@@ -367,12 +367,38 @@ export function initRecorder(store, instanceId) {
     // Subscribe to setup-mic and record commands
     CommandBus.subscribe("starmus/setup-mic", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
+            // Tier C: file upload only — block microphone commands at the source
+            if (store.getState().tier === "C") {
+                store.dispatch({
+                    type: "starmus/error",
+                    error: {
+                        code: "TIER_C_NO_MIC",
+                        message:
+                            "Recording is not available on this device. Please upload a file.",
+                        retryable: false,
+                    },
+                });
+                return;
+            }
             startCalibration();
         }
     });
 
     CommandBus.subscribe("starmus/mic-start", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
+            // Tier C: file upload only — block microphone commands at the source
+            if (store.getState().tier === "C") {
+                store.dispatch({
+                    type: "starmus/error",
+                    error: {
+                        code: "TIER_C_NO_MIC",
+                        message:
+                            "Recording is not available on this device. Please upload a file.",
+                        retryable: false,
+                    },
+                });
+                return;
+            }
             startRecording();
         }
     });

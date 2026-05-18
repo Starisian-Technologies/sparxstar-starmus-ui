@@ -82,9 +82,17 @@ function createOfflineSubmissionId() {
 /**
  * Offline submission queue backed by IndexedDB.
  *
- * Stores pending submissions for later retry when connectivity is available.
+ * Eviction policy (currently implemented):
+ * - Entries are removed on successful upload.
+ * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
+ *   next processQueue run (they are not left orphaned indefinitely).
  *
- * Storage: IndexedDB via "StarmusSubmissions" database, "pendingSubmissions" object store.
+ * Target eviction policy (Phase 3 — not yet implemented):
+ * - LRU, 20 MB maximum total queue size.
+ * - Entries older than 7 days are eligible for automatic eviction.
+ * - Eviction will run on queue initialization and after each successful upload.
+ *
+ * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
  */
 class OfflineQueue {
     constructor() {
@@ -302,6 +310,8 @@ class OfflineQueue {
                     item;
 
                 if (retryCount >= CONFIG.maxRetries) {
+                    // Remove exhausted items so they do not accumulate indefinitely.
+                    await this.remove(id);
                     continue;
                 }
 

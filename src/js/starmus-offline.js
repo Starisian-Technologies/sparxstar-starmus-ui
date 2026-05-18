@@ -80,13 +80,11 @@ function createOfflineSubmissionId() {
 
 /** @private */
 /**
- * Offline recording queue.
+ * Offline submission queue backed by IndexedDB.
  *
- * Eviction policy: LRU, 20 MB maximum total size.
- * Entries older than 7 days are eligible for automatic eviction.
- * Eviction runs on queue initialization and after each successful upload.
+ * Stores pending submissions for later retry when connectivity is available.
  *
- * Storage: IndexedDB via 'starmus-offline' database, 'recordings' table.
+ * Storage: IndexedDB via "StarmusSubmissions" database, "pendingSubmissions" object store.
  */
 class OfflineQueue {
     constructor() {

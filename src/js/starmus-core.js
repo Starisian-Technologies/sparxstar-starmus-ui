@@ -193,7 +193,13 @@ export function initCore(store, instanceId, env) {
                 const completedSource = completedState.source || {};
                 const completedCalibration = completedState.calibration || {};
                 const mimeType = completedSource.metadata?.mimeType || audioBlob.type || "";
-                const format = /aac/i.test(mimeType) ? "aac-lc" : "opus";
+                const normalizedMimeType = String(mimeType).toLowerCase();
+                const isAacContainer =
+                    normalizedMimeType.includes("audio/mp4") ||
+                    normalizedMimeType.includes("audio/x-m4a") ||
+                    normalizedMimeType.includes("aac") ||
+                    normalizedMimeType.includes("mp4a");
+                const format = isAacContainer ? "aac-lc" : "opus";
                 const contributorConsent = (() => {
                     try {
                         const raw =

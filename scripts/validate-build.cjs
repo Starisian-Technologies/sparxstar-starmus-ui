@@ -123,12 +123,15 @@ if (fs.existsSync(tusFile)) {
         console.log("✅ TUS chunked upload (uploadTus) is present");
     }
 
-    // Verify SHA-256 checksum is configured (not SHA-1)
-    if (!tusContent.includes("sha256")) {
-        console.log("❌ starmus-tus.js: checksumAlgorithm must be sha256, not sha1");
+    // Verify checksumAlgorithm is explicitly configured to SHA-256 and not SHA-1
+    const checksumSha256Pattern = /checksumAlgorithm\s*[:=]\s*["']sha256["']/;
+    const checksumSha1Pattern = /checksumAlgorithm\s*[:=]\s*["']sha1["']/;
+
+    if (checksumSha1Pattern.test(tusContent) || !checksumSha256Pattern.test(tusContent)) {
+        console.log("❌ starmus-tus.js: checksumAlgorithm must be explicitly set to sha256 and must not use sha1");
         ok = false;
     } else {
-        console.log("✅ TUS checksum algorithm is sha256");
+        console.log("✅ TUS checksum algorithm is explicitly set to sha256");
     }
 }
 

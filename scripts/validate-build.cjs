@@ -102,17 +102,56 @@ if (fs.existsSync(mainFile)) {
     }
 }
 
+function spx_evaluateSimpleNumericExpression(expression) {
+    const normalized = expression.trim().replaceAll("_", "");
+
+    if (/^\d+$/.test(normalized)) {
+        return Number(normalized);
+    }
+
+    if (!/^\d+(?:\s*\*\s*\d+)+$/.test(normalized)) {
+        return null;
+    }
+
+    return normalized
+        .split("*")
+        .map((part) => Number(part.trim()))
+        .reduce((product, value) => product * value, 1);
+}
+
+function spx_extractChunkSizeExpression(content) {
+    const match = content.match(/\bchunkSize\b\s*[:=]\s*([^,\n}]+)/u);
+
+    if (!match) {
+        return null;
+    }
+
+    return match[1].trim();
+}
+
 // ---- CHECK TUS CONSTRAINTS ----
 const tusFile = "src/js/starmus-tus.js";
 if (fs.existsSync(tusFile)) {
     const tusContent = fs.readFileSync(tusFile, "utf8");
+    const maxTusChunkSize = 512 * 1024;
 
-    // Verify chunk size is capped at 512 KB (512 * 1024)
-    if (!tusContent.includes("512 * 1024")) {
-        console.log("❌ starmus-tus.js: Missing 512 KB chunk size cap (512 * 1024)");
+    // Verify chunk size is explicitly configured and capped at 512 KB.
+    const chunkSizeExpression = spx_extractChunkSizeExpression(tusContent);
+    const chunkSizeValue = chunkSizeExpression === null
+        ? null
+        : spx_evaluateSimpleNumericExpression(chunkSizeExpression);
+
+    if (chunkSizeExpression === null) {
+        console.log("❌ starmus-tus.js: Missing chunkSize configuration for TUS uploads");
+        ok = false;
+    } else if (chunkSizeValue === null) {
+        console.log(`❌ starmus-tus.js: Unable to validate chunkSize expression: ${chunkSizeExpression}`);
+        ok = false;
+    } else if (chunkSizeValue > maxTusChunkSize) {
+        console.log(`❌ starmus-tus.js: chunkSize exceeds 512 KB cap (${chunkSizeValue} > ${maxTusChunkSize})`);
         ok = false;
     } else {
-        console.log("✅ TUS chunk size cap (512 KB) present");
+        console.log(`✅ TUS chunk size cap validated (${chunkSizeValue} bytes)`);
     }
 
     // Verify TUS chunked upload function is the primary upload path

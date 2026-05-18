@@ -168,7 +168,7 @@ function createUploadId() {
  * @param {function} [onProgress] - Progress callback (loaded, total)
  * @returns {Promise<Object>} Server response
  */
-export async function uploadDirect(
+async function uploadDirect(
     blob,
     fileName,
     formFields = {},

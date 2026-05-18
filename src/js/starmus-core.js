@@ -121,6 +121,16 @@ export function initCore(store, instanceId, env) {
         .catch((error) => {
             console.error("[Core] Environment initialisation failed:", error);
             const tier = detectTier();
+
+            // Populate mutable capabilities on the error path so consumers
+            // never observe stale Tier A defaults when init() rejects.
+            starmusCapabilities.tier = tier;
+            starmusCapabilities.allowRecording = tier !== "C";
+            starmusCapabilities.allowCalibration = tier !== "C";
+            starmusCapabilities.allowCanvas = tier !== "C";
+            starmusCapabilities.allowLiveTranscript = tier !== "C";
+            starmusCapabilities.allowProsody = tier !== "C";
+
             store.dispatch({ type: "starmus/tier-ready", payload: { tier } });
             window.dispatchEvent(
                 new CustomEvent("starmus-ready", { detail: { instanceId, tier } }),

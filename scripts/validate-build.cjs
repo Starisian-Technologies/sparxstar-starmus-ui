@@ -142,6 +142,19 @@ if (fs.existsSync(tusFile)) {
     } else {
         console.log('✅ TUS checksumAlgorithm is "sha256"');
     }
+
+    // Verify uploadDirect is NOT exported (full-file uploads violate chunked-only constraint).
+    // The function may remain as a module-private internal fallback, but it must never
+    // be part of the public API surface that external callers can invoke directly.
+    const exportDirectPattern = /export\s+(?:async\s+)?function\s+uploadDirect\b/;
+    if (exportDirectPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: uploadDirect must not be exported. Full-file upload violates the chunked-only constraint (AGENTS.md: 'Full-file upload endpoint present' is a FAIL).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ No exported full-file upload endpoint (chunked-only constraint satisfied)");
+    }
 }
 
 // ---- FINAL EXIT ----

@@ -232,26 +232,34 @@ export function initCore(store, instanceId, env) {
                         return null;
                     }
                 })();
+                const resolvedUploadId = [
+                    result.uploadId,
+                    result.upload_id,
+                    result.data?.uploadId,
+                    result.data?.upload_id,
+                ].find((value) => typeof value === "string" && value.trim() !== "");
 
-                document.dispatchEvent(
-                    new CustomEvent("starmus:complete", {
-                        detail: {
-                            sessionId: instanceId,
-                            uploadId: result.uploadId || "",
-                            durationMs: Math.round(
-                                (completedSource.metadata?.duration || 0) * 1000,
-                            ),
-                            sampleRate: 16000,
-                            channels: 1,
-                            format,
-                            language: completedSource.language || "",
-                            contributorId:
-                                completedState.env?.identifiers?.visitorId || "",
-                            consentGranted: !!(contributorConsent && contributorConsent.granted),
-                            calibrationApplied: !!(completedCalibration.complete),
-                        },
-                    }),
-                );
+                if (resolvedUploadId) {
+                    document.dispatchEvent(
+                        new CustomEvent("starmus:complete", {
+                            detail: {
+                                sessionId: instanceId,
+                                uploadId: resolvedUploadId,
+                                durationMs: Math.round(
+                                    (completedSource.metadata?.duration || 0) * 1000,
+                                ),
+                                sampleRate: 16000,
+                                channels: 1,
+                                format,
+                                language: completedSource.language || "",
+                                contributorId:
+                                    completedState.env?.identifiers?.visitorId || "",
+                                consentGranted: !!(contributorConsent && contributorConsent.granted),
+                                calibrationApplied: !!(completedCalibration.complete),
+                            },
+                        }),
+                    );
+                }
 
                 const redirect = result.data?.redirect_url || result.redirect_url;
                 if (redirect) {

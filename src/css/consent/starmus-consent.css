@@ -29,7 +29,7 @@
     margin: 20px auto;
     padding: 16px;
     border-radius: 12px;
-    background: var(--sparxstar-bg, #ffffff);
+    background: var(--sparxstar-bg, #fff);
     border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 10%));
     font-family: 'Noto Sans', system-ui, sans-serif;
     color: var(--sparxstar-text, #1a1a2e);
@@ -38,7 +38,7 @@
 @supports (backdrop-filter: blur(1px)) {
     .starmus-consent-container {
         backdrop-filter: blur(4px);
-        background: color-mix(in srgb, var(--sparxstar-bg, #ffffff) 90%, transparent);
+        background: color-mix(in srgb, var(--sparxstar-bg, #fff) 90%, transparent);
     }
 }
 
@@ -145,7 +145,7 @@
 .starmus-canvas-container {
     border: 1px solid var(--sparxstar-border-color, rgb(0 0 0 / 20%));
     border-radius: 8px;
-    background: var(--sparxstar-inner-bg, #ffffff);
+    background: var(--sparxstar-inner-bg, #fff);
     height: 180px;
     overflow: hidden;
 }
@@ -193,7 +193,7 @@
 
 .starmus-btn-primary {
     background: var(--sparxstar-primary, #1b4c7a);
-    color: #ffffff;
+    color: #fff;
 }
 
 .starmus-btn-primary:focus-visible {

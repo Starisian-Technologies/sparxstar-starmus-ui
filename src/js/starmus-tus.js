@@ -168,7 +168,7 @@ function createUploadId() {
  * @param {function} [onProgress] - Progress callback (loaded, total)
  * @returns {Promise<Object>} Server response
  */
-export async function uploadDirect(
+async function uploadDirect(
     blob,
     fileName,
     formFields = {},
@@ -232,9 +232,12 @@ export async function uploadDirect(
             clearTimeout(timeout);
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
-                    resolve(JSON.parse(xhr.responseText));
+                    const parsed = JSON.parse(xhr.responseText);
+                    // Merge local uploadId so starmus:complete always has one,
+                    // preferring any uploadId the server returns.
+                    resolve({ uploadId, ...parsed });
                 } catch {
-                    resolve({ success: true, raw: xhr.responseText });
+                    resolve({ success: true, uploadId, raw: xhr.responseText });
                 }
             } else {
                 reject(new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`));
@@ -318,7 +321,7 @@ export async function uploadTus(
             chunkSize: cfg.chunkSize,
             retryDelays: cfg.retryDelays,
             removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
-            checksumAlgorithm: "sha1",
+            checksumAlgorithm: "sha256",
             metadata: tusMetadata,
             headers,
 
@@ -333,7 +336,7 @@ export async function uploadTus(
                     clearTimeout(timeoutId);
                 }
                 settled = true;
-                resolve({ success: true, url: upload.url });
+                resolve({ success: true, url: upload.url, uploadId });
             },
 
             onError(err) {

@@ -23,7 +23,9 @@
  * DO NOT extend the API surface of this file.
  * DO NOT import this file from new modules.
  *
- * Existing callers: starmus-integrator.js, starmus-main.js
+ * Existing callers: starmus-core.js, starmus-enhanced-calibration.js,
+ * starmus-integrator.js, starmus-main.js, starmus-offline.js,
+ * starmus-recorder.js, starmus-tus.js
  * Replacement: SirusClientInterface from sparxstar-sirus-context
  *
  * See: https://github.com/Starisian-Technologies/sparxstar-sirus-context

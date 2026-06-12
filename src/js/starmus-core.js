@@ -286,7 +286,7 @@ export function initCore(store, instanceId, env) {
                             sampleRate: 16000,
                             channels: 1,
                             format,
-                            language: completedSource.language || "",
+                            language: completedSource.language || formFields?.language || "",
                             contributorId:
                                 completedState.env?.identifiers?.visitorId || "",
                             consentGranted: !!(contributorConsent && contributorConsent.granted),

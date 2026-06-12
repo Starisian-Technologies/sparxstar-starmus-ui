@@ -78,8 +78,8 @@ function createOfflineSubmissionId() {
     throw new Error("Secure UUID generation is not available in this runtime");
 }
 
-/** @private */
 /**
+ * @private
  * Offline submission queue backed by IndexedDB.
  *
  * Eviction policy (currently implemented):

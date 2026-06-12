@@ -203,13 +203,60 @@ export function initCore(store, instanceId, env) {
                 const completedSource = completedState.source || {};
                 const completedCalibration = completedState.calibration || {};
                 const mimeType = completedSource.metadata?.mimeType || audioBlob.type || "";
-                const normalizedMimeType = String(mimeType).toLowerCase();
-                const isAacContainer =
-                    normalizedMimeType.includes("audio/mp4") ||
-                    normalizedMimeType.includes("audio/x-m4a") ||
-                    normalizedMimeType.includes("aac") ||
-                    normalizedMimeType.includes("mp4a");
-                const format = isAacContainer ? "aac-lc" : "opus";
+                const normalizedMimeType = String(mimeType).trim().toLowerCase();
+                const normalizedFileName = String(fileName || "").trim().toLowerCase();
+                const resolvedExtension = normalizedFileName.includes(".")
+                    ? normalizedFileName.split(".").pop()
+                    : "";
+                const resolveUploadFormat = (detectedMimeType, detectedExtension) => {
+                    if (
+                        detectedMimeType.includes("audio/mp4") ||
+                        detectedMimeType.includes("audio/x-m4a") ||
+                        detectedMimeType.includes("audio/aac") ||
+                        detectedMimeType.includes("aac") ||
+                        detectedMimeType.includes("mp4a") ||
+                        detectedExtension === "m4a" ||
+                        detectedExtension === "mp4" ||
+                        detectedExtension === "aac"
+                    ) {
+                        return "aac-lc";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/ogg") ||
+                        detectedMimeType.includes("audio/opus") ||
+                        detectedMimeType.includes("opus") ||
+                        detectedExtension === "opus" ||
+                        detectedExtension === "ogg"
+                    ) {
+                        return "opus";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/wav") ||
+                        detectedMimeType.includes("audio/wave") ||
+                        detectedMimeType.includes("audio/x-wav") ||
+                        detectedExtension === "wav"
+                    ) {
+                        return "wav";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/mpeg") ||
+                        detectedMimeType.includes("audio/mp3") ||
+                        detectedExtension === "mp3"
+                    ) {
+                        return "mp3";
+                    }
+
+                    return null;
+                };
+                const format = resolveUploadFormat(normalizedMimeType, resolvedExtension);
+
+                if (!format) {
+                    throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
+                }
+
                 const contributorConsent = (() => {
                     try {
                         const raw =

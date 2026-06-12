@@ -233,9 +233,12 @@ async function uploadDirect(
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
                     const parsed = JSON.parse(xhr.responseText);
+                    // Default successful HTTP responses to success: true, while
+                    // still allowing an explicit server-provided success value
+                    // (including false) to override the default.
                     // Merge local uploadId so starmus:complete always has one,
                     // preferring any uploadId the server returns.
-                    resolve({ uploadId, ...parsed });
+                    resolve({ success: true, uploadId, ...parsed });
                 } catch {
                     resolve({ success: true, uploadId, raw: xhr.responseText });
                 }

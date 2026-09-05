@@ -12062,6 +12062,9 @@
     defaultMaxBlobSize: 5 * 1024 * 1024
   };
 
+  /** Tracks whether the singleton queue has installed its network listener. */
+  var networkListenerInstalled = false;
+
   /**
    * Resolves the maximum blob size permitted for the given metadata's tier.
    *
@@ -12514,7 +12517,7 @@
         return processQueue;
       }()
       /**
-       * Sets up online/offline event listeners and a polling interval.
+       * Sets up the connectivity-restored listener once for the singleton queue.
        *
        * @returns {void}
        */
@@ -12523,14 +12526,15 @@
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
         var _this6 = this;
+        if (networkListenerInstalled) {
+          return;
+        }
+        networkListenerInstalled = true;
         window.addEventListener("online", function () {
           return _this6.processQueue();
+        }, {
+          passive: true
         });
-        setInterval(function () {
-          if (navigator.onLine) {
-            _this6.processQueue().catch(function () {});
-          }
-        }, 60 * 1000);
       }
 
       /** @private */
@@ -12724,6 +12728,25 @@
   var subscribe = ((_window$StarmusHooks = window.StarmusHooks) === null || _window$StarmusHooks === void 0 ? void 0 : _window$StarmusHooks.subscribe) || function () {};
 
   /**
+   * Converts a server-provided redirect into a safe same-origin HTTP(S) URL.
+   *
+   * @param {unknown} candidate - Redirect value returned by the upload service
+   * @returns {string|null} Safe redirect URL, or null when the value is unsafe
+   */
+  function getSafeRedirect(candidate) {
+    if (typeof candidate !== "string" || candidate.length === 0) {
+      return null;
+    }
+    try {
+      var redirect = new URL(candidate, window.location.origin);
+      var isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
+      return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
+    } catch (_unused) {
+      return null;
+    }
+  }
+
+  /**
    * Detects browser capability tier.
    * Prefers the tier provided by SPARXSTAR environment data.
    *
@@ -12876,7 +12899,7 @@
 
               // Fire redirect if server provided one
               if (result && result.success) {
-                redirect = ((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url;
+                redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
                 if (redirect) {
                   setTimeout(function () {
                     window.location.href = redirect;

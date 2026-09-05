@@ -41,6 +41,9 @@ const CONFIG = {
     defaultMaxBlobSize: 5 * 1024 * 1024,
 };
 
+/** Tracks whether the singleton queue has installed its network listener. */
+let networkListenerInstalled = false;
+
 /**
  * Resolves the maximum blob size permitted for the given metadata's tier.
  *
@@ -334,17 +337,17 @@ class OfflineQueue {
     }
 
     /**
-     * Sets up online/offline event listeners and a polling interval.
+     * Sets up the connectivity-restored listener once for the singleton queue.
      *
      * @returns {void}
      */
     setupNetworkListeners() {
-        window.addEventListener("online", () => this.processQueue());
-        setInterval(() => {
-            if (navigator.onLine) {
-                this.processQueue().catch(() => {});
-            }
-        }, 60 * 1000);
+        if (networkListenerInstalled) {
+            return;
+        }
+
+        networkListenerInstalled = true;
+        window.addEventListener("online", () => this.processQueue(), { passive: true });
     }
 
     /** @private */

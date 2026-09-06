@@ -21,17 +21,19 @@
 /** @typedef {"conversation"|"documentation"|"import"} CaptureProfileName */
 
 /**
- * @type {Record<CaptureProfileName, {
- *   name: CaptureProfileName,
- *   sampleRate: number|null,
- *   channelCount: number|null,
- *   audioBitsPerSecond: number|null,
- *   allowLossless: boolean,
- *   transcode: boolean,
- *   admissibleForMeasurement: boolean,
- *   description: string
- * }>}
+ * @typedef {Object} CaptureProfile
+ * @property {CaptureProfileName} name
+ * @property {number|null} sampleRate           Ceiling in Hz, or null to leave unconstrained.
+ * @property {number|null} channelCount         Ceiling in channels, or null to leave unconstrained.
+ * @property {number|null} audioBitsPerSecond   Encoder bitrate, or null to let the browser choose.
+ * @property {boolean} voiceProcessing          Request browser echo cancellation and noise suppression.
+ * @property {boolean} allowLossless
+ * @property {boolean} transcode
+ * @property {boolean} admissibleForMeasurement
+ * @property {string} description
  */
+
+/** @type {Record<CaptureProfileName, CaptureProfile>} */
 export const CAPTURE_PROFILES = Object.freeze({
     /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
     conversation: Object.freeze({
@@ -39,6 +41,10 @@ export const CAPTURE_PROFILES = Object.freeze({
         sampleRate: 16000,
         channelCount: 1,
         audioBitsPerSecond: 32000,
+        // Echo cancellation and noise suppression make conversational speech
+        // intelligible at this bitrate. They are voice-telephony processing,
+        // so they belong to this profile and to no other.
+        voiceProcessing: true,
         allowLossless: false,
         transcode: true,
         admissibleForMeasurement: false,
@@ -55,6 +61,12 @@ export const CAPTURE_PROFILES = Object.freeze({
         sampleRate: null,
         channelCount: null,
         audioBitsPerSecond: null,
+        // Off deliberately. Echo cancellation and noise suppression are
+        // non-linear, non-invertible processing applied before the sample
+        // reaches this package. Pitch, formant and intensity measurements
+        // taken downstream would be measurements of the browser's voice
+        // processing, not of the speaker.
+        voiceProcessing: false,
         allowLossless: true,
         transcode: false,
         admissibleForMeasurement: true,
@@ -67,6 +79,7 @@ export const CAPTURE_PROFILES = Object.freeze({
         sampleRate: null,
         channelCount: null,
         audioBitsPerSecond: null,
+        voiceProcessing: false,
         allowLossless: true,
         transcode: false,
         admissibleForMeasurement: true,
@@ -82,14 +95,19 @@ export const DEFAULT_CAPTURE_PROFILE = "conversation";
  * silently coerced into a different profile — ADR-035 forbids satisfying a
  * request with something other than what was asked for.
  *
+ * Only an absent value (`undefined` or `null`) selects the default. An empty
+ * string is an explicit request for a profile that does not exist, and throws.
+ *
  * @param {CaptureProfileName|undefined|null} name
- * @returns {typeof CAPTURE_PROFILES[CaptureProfileName]}
+ * @returns {CaptureProfile}
  */
 export function resolveCaptureProfile(name) {
     if (name === undefined || name === null) {
         return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
     }
-    const profile = CAPTURE_PROFILES[name];
+    const profile = Object.prototype.hasOwnProperty.call(CAPTURE_PROFILES, name)
+        ? CAPTURE_PROFILES[name]
+        : undefined;
     if (!profile) {
         throw new Error(
             `Unknown capture profile "${String(name)}". Expected one of: ${Object.keys(CAPTURE_PROFILES).join(", ")}.`
@@ -99,9 +117,33 @@ export function resolveCaptureProfile(name) {
 }
 
 /**
+ * The capture profile for this session, chosen by the calling product.
+ *
+ * The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent that,
+ * `conversation` is used, which preserves this package's previous behaviour
+ * exactly. `??` rather than `||`: an explicitly supplied empty string is an
+ * invalid request and must reach `resolveCaptureProfile()` to be rejected,
+ * not be silently upgraded into a working profile.
+ *
+ * @returns {CaptureProfileName}
+ */
+export function activeCaptureProfileName() {
+    const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    return bootstrap?.captureProfile ?? DEFAULT_CAPTURE_PROFILE;
+}
+
+/**
  * Build getUserMedia audio constraints for a profile. Keys the profile does
  * not constrain are omitted entirely rather than sent as a null, so the
  * browser applies its own default instead of failing the request.
+ *
+ * Numeric limits are sent as `{ ideal: n }`, not as `{ max: n }` or
+ * `{ exact: n }`. A mandatory constraint the device cannot meet makes
+ * `getUserMedia` reject with `OverconstrainedError`, and the speaker cannot
+ * record at all — which ADR-011's unconditional-capture rule forbids. The
+ * package therefore asks, then reports what it actually got through
+ * `describeAttainment()`; enforcing a ceiling on the resulting asset is the
+ * Spoken Audio Node's, where refusing does not cost the recording.
  *
  * @param {CaptureProfileName} [name]
  * @returns {MediaTrackConstraints}
@@ -110,14 +152,14 @@ export function getAudioConstraints(name) {
     const profile = resolveCaptureProfile(name);
     /** @type {MediaTrackConstraints} */
     const constraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
+        echoCancellation: profile.voiceProcessing,
+        noiseSuppression: profile.voiceProcessing,
     };
     if (profile.sampleRate !== null) {
-        constraints.sampleRate = profile.sampleRate;
+        constraints.sampleRate = { ideal: profile.sampleRate };
     }
     if (profile.channelCount !== null) {
-        constraints.channelCount = profile.channelCount;
+        constraints.channelCount = { ideal: profile.channelCount };
     }
     return constraints;
 }
@@ -144,13 +186,28 @@ export function getRecorderOptions(name, mimeType) {
 }
 
 /**
+ * @typedef {Object} CaptureAttainment
+ * @property {CaptureProfileName} profile
+ * @property {{sampleRate: number|null, channelCount: number|null}} requested
+ * @property {{sampleRate?: number, channelCount?: number}} actual
+ * @property {boolean} attained    True only when every constrained value was verified within its limit.
+ * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
+ * @property {string[]} unverified Constrained values the device did not report at all.
+ */
+
+/**
  * Report what the device actually delivered against what the profile asked
  * for. ADR-035: an unattainable profile is reported to the product, never
  * silently satisfied by substituting a different one.
  *
+ * A profile's numbers are ceilings, so a value is within limit when it is at
+ * or below the requested one. A value the device does not report is
+ * `unverified`, never assumed to be fine — an unreported rate is exactly the
+ * case where a 44.1 or 48 kHz stream would otherwise pass unnoticed.
+ *
  * @param {CaptureProfileName} name
  * @param {MediaStreamTrack} track
- * @returns {{ profile: CaptureProfileName, requested: object, actual: object, attained: boolean }}
+ * @returns {CaptureAttainment}
  */
 export function describeAttainment(name, track) {
     const profile = resolveCaptureProfile(name);
@@ -159,11 +216,31 @@ export function describeAttainment(name, track) {
         sampleRate: profile.sampleRate,
         channelCount: profile.channelCount,
     };
-    const attained =
-        (profile.sampleRate === null || actual.sampleRate === undefined || actual.sampleRate >= profile.sampleRate) &&
-        (profile.channelCount === null ||
-            actual.channelCount === undefined ||
-            actual.channelCount === profile.channelCount);
 
-    return { profile: profile.name, requested, actual, attained };
+    /** @type {string[]} */
+    const exceeded = [];
+    /** @type {string[]} */
+    const unverified = [];
+
+    for (const key of /** @type {const} */ (["sampleRate", "channelCount"])) {
+        const limit = profile[key];
+        if (limit === null) {
+            continue;
+        }
+        const reported = actual[key];
+        if (typeof reported !== "number") {
+            unverified.push(key);
+        } else if (reported > limit) {
+            exceeded.push(key);
+        }
+    }
+
+    return {
+        profile: profile.name,
+        requested,
+        actual,
+        attained: exceeded.length === 0 && unverified.length === 0,
+        exceeded,
+        unverified,
+    };
 }

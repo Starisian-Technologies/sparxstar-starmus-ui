@@ -124,15 +124,23 @@ ready for processing.
 document.dispatchEvent(new CustomEvent('starmus:complete', {
   detail: {
     sessionId: string,
-    uploadId: string,       // TUS upload UUID
+    uploadId: string,               // server's id, or '' if it returned none
     durationMs: number,
-    sampleRate: number,     // must be ≤ 16000
-    channels: 1,
-    format: 'opus',         // or 'aac-lc' — never wav, never pcm
-    language: string,       // BCP-47 e.g. 'mnk' for Mandinka
+    // What the device actually delivered, not what the profile asked for.
+    // null means the device did not report it. ADR-035: never a constant.
+    sampleRate: number | null,
+    channels: number | null,
+    captureProfile: string | null,  // 'conversation' | 'documentation' | 'import'
+    captureProfileAttained: boolean | null,
+    // Named as captured. ADR-035 holds the container/codec restriction
+    // pending OQ-021, so this package reports the format it has rather than
+    // deciding an arriving format is inadmissible. The Spoken Audio Node
+    // rules on admissibility, where refusing does not cost the recording.
+    format: 'opus' | 'aac-lc' | 'wav' | 'mp3',
+    language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
-    consentGranted: true,
-    calibrationApplied: true,
+    consentGranted: boolean,
+    calibrationApplied: boolean,
   }
 }));
 ```
@@ -411,7 +419,11 @@ Profiles live in `src/js/starmus-capture-profiles.js`.
 | FAIL | `conversation` profile: bitrate > 32 kbps |
 | *(held)* | Container/codec restriction --- **not enforced on any profile** until OQ-021 is ruled on; restricting formats now would answer that open question |
 | FAIL | `documentation` or `import` profile downsampled, transcoded or fold-down to mono |
+| FAIL | Echo cancellation or noise suppression requested on a profile whose `voiceProcessing` is false |
+| FAIL | A profile's numeric limit sent as a mandatory constraint (`exact`/`min`/`max`) rather than `ideal` |
+| FAIL | An unreported device setting counted as a profile attained |
 | FAIL | An asset uploaded without its capture profile recorded |
+| FAIL | `starmus:complete` not emitted on a queued upload that later drains |
 | FAIL | A requested profile silently substituted instead of reported unattainable |
 | FAIL | Recording starts automatically without explicit user action |
 

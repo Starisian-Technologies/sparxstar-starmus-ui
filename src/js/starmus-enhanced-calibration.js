@@ -22,6 +22,7 @@
 "use strict";
 
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
+import { activeCaptureProfileName, resolveCaptureProfile } from "./starmus-capture-profiles.js";
 
 /**
  * Tier-based calibration settings.
@@ -33,7 +34,6 @@ const TIER_SETTINGS = {
         phases: 3,
         noiseThreshold: 5,
         speechThreshold: 20,
-        sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz for upload compatibility
         fftSize: 2048,
         smoothing: 0.8,
         gainRange: [0.5, 2.0],
@@ -44,7 +44,6 @@ const TIER_SETTINGS = {
         phases: 2,
         noiseThreshold: 8,
         speechThreshold: 15,
-        sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz for upload compatibility
         fftSize: 1024,
         smoothing: 0.6,
         gainRange: [0.7, 1.5],
@@ -55,7 +54,6 @@ const TIER_SETTINGS = {
         phases: 1,
         noiseThreshold: 12,
         speechThreshold: 10,
-        sampleRate: 16000,
         fftSize: 512,
         smoothing: 0.4,
         gainRange: [0.8, 1.2],
@@ -100,22 +98,31 @@ class EnhancedCalibration {
      * @param {function} onUpdate - Callback(message, volume, complete, data)
      * @returns {Promise<Object>} Calibration result
      */
-    async performCalibration(stream, onUpdate) {
+    async performCalibration(stream, onUpdate, options = {}) {
         const settings = this.getTierSettings();
+
+        // ADR-035: the analysis rate comes from the capture profile, never
+        // from the tier. A profile that constrains nothing (documentation,
+        // import) gets the device's own rate, so calibration measures the
+        // signal the recorder will actually capture.
+        const profile = resolveCaptureProfile(options.captureProfile ?? activeCaptureProfileName());
+        const analysisSampleRate = profile.sampleRate;
 
         try {
             try {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: settings.sampleRate,
-                    latencyHint: "interactive",
-                });
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)(
+                    analysisSampleRate === null
+                        ? { latencyHint: "interactive" }
+                        : { sampleRate: analysisSampleRate, latencyHint: "interactive" }
+                );
             } catch (_sampleRateError) {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                     latencyHint: "interactive",
                 });
                 sparxstarIntegration.reportError("calibration_samplerate_fallback", {
                     tier: this.tier,
-                    requestedSampleRate: settings.sampleRate,
+                    captureProfile: profile.name,
+                    requestedSampleRate: analysisSampleRate,
                     error: _sampleRateError.message,
                 });
             }

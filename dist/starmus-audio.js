@@ -2749,8 +2749,13 @@
           mimeType: "",
           fileSize: 0
         },
-        // ADR-035: the capture profile travels with the asset.
-        captureProfile: null
+        // ADR-035: the capture profile travels with the asset. The whole
+        // attainment record is kept — profile name, what was requested,
+        // what the device actually delivered — because a consumer needs
+        // all three to judge whether a measurement from this asset is
+        // admissible. Two derived booleans would not carry that.
+        captureProfile: null,
+        captureAttainment: null
       },
       calibration: {
         phase: null,
@@ -2790,7 +2795,7 @@
       return out;
     }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment$at, _action$attainment2;
+      var _action$attainment$pr, _action$attainment, _action$attainment2;
       if (!action || !action.type) {
         return state;
       }
@@ -2866,7 +2871,7 @@
           return merge(state, {
             source: merge(state.source, {
               captureProfile: (_action$attainment$pr = (_action$attainment = action.attainment) === null || _action$attainment === void 0 ? void 0 : _action$attainment.profile) !== null && _action$attainment$pr !== void 0 ? _action$attainment$pr : null,
-              captureProfileAttained: (_action$attainment$at = (_action$attainment2 = action.attainment) === null || _action$attainment2 === void 0 ? void 0 : _action$attainment2.attained) !== null && _action$attainment$at !== void 0 ? _action$attainment$at : null
+              captureAttainment: (_action$attainment2 = action.attainment) !== null && _action$attainment2 !== void 0 ? _action$attainment2 : null
             })
           });
         case "starmus/mic-start":
@@ -3037,7 +3042,89 @@
    */
   runtimeGlobal.StarmusStore.DEFAULT_INITIAL_STATE;
 
-  var es_array_find = {};
+  var es_regexp_exec = {};
+
+  var toString;
+  var hasRequiredToString;
+
+  function requireToString () {
+  	if (hasRequiredToString) return toString;
+  	hasRequiredToString = 1;
+  	var classof = requireClassof();
+
+  	var $String = String;
+
+  	toString = function (argument) {
+  	  if (classof(argument) === 'Symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+  	  return $String(argument);
+  	};
+  	return toString;
+  }
+
+  var regexpFlags;
+  var hasRequiredRegexpFlags;
+
+  function requireRegexpFlags () {
+  	if (hasRequiredRegexpFlags) return regexpFlags;
+  	hasRequiredRegexpFlags = 1;
+  	var anObject = requireAnObject();
+
+  	// `RegExp.prototype.flags` getter implementation
+  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
+  	regexpFlags = function () {
+  	  var that = anObject(this);
+  	  var result = '';
+  	  if (that.hasIndices) result += 'd';
+  	  if (that.global) result += 'g';
+  	  if (that.ignoreCase) result += 'i';
+  	  if (that.multiline) result += 'm';
+  	  if (that.dotAll) result += 's';
+  	  if (that.unicode) result += 'u';
+  	  if (that.unicodeSets) result += 'v';
+  	  if (that.sticky) result += 'y';
+  	  return result;
+  	};
+  	return regexpFlags;
+  }
+
+  var regexpStickyHelpers;
+  var hasRequiredRegexpStickyHelpers;
+
+  function requireRegexpStickyHelpers () {
+  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
+  	hasRequiredRegexpStickyHelpers = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	var UNSUPPORTED_Y = fails(function () {
+  	  var re = $RegExp('a', 'y');
+  	  re.lastIndex = 2;
+  	  return re.exec('abcd') !== null;
+  	});
+
+  	// UC Browser bug
+  	// https://github.com/zloirock/core-js/issues/1008
+  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
+  	  return !$RegExp('a', 'y').sticky;
+  	});
+
+  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
+  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
+  	  var re = $RegExp('^r', 'gy');
+  	  re.lastIndex = 2;
+  	  return re.exec('str') !== null;
+  	});
+
+  	regexpStickyHelpers = {
+  	  BROKEN_CARET: BROKEN_CARET,
+  	  MISSED_STICKY: MISSED_STICKY,
+  	  UNSUPPORTED_Y: UNSUPPORTED_Y
+  	};
+  	return regexpStickyHelpers;
+  }
 
   var objectDefineProperties = {};
 
@@ -3190,215 +3277,6 @@
   	  return Properties === undefined ? result : definePropertiesModule.f(result, Properties);
   	};
   	return objectCreate;
-  }
-
-  var addToUnscopables;
-  var hasRequiredAddToUnscopables;
-
-  function requireAddToUnscopables () {
-  	if (hasRequiredAddToUnscopables) return addToUnscopables;
-  	hasRequiredAddToUnscopables = 1;
-  	var wellKnownSymbol = requireWellKnownSymbol();
-  	var create = requireObjectCreate();
-  	var defineProperty = requireObjectDefineProperty().f;
-
-  	var UNSCOPABLES = wellKnownSymbol('unscopables');
-  	var ArrayPrototype = Array.prototype;
-
-  	// Array.prototype[@@unscopables]
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
-  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
-  	    configurable: true,
-  	    value: create(null)
-  	  });
-  	}
-
-  	// add a key to Array.prototype[@@unscopables]
-  	addToUnscopables = function (key) {
-  	  ArrayPrototype[UNSCOPABLES][key] = true;
-  	};
-  	return addToUnscopables;
-  }
-
-  var hasRequiredEs_array_find;
-
-  function requireEs_array_find () {
-  	if (hasRequiredEs_array_find) return es_array_find;
-  	hasRequiredEs_array_find = 1;
-  	var $ = require_export();
-  	var $find = requireArrayIteration().find;
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	var FIND = 'find';
-  	var SKIPS_HOLES = true;
-
-  	// Shouldn't skip holes
-  	// eslint-disable-next-line es/no-array-prototype-find -- testing
-  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
-
-  	// `Array.prototype.find` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.find
-  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
-  	  find: function find(callbackfn /* , that = undefined */) {
-  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables(FIND);
-  	return es_array_find;
-  }
-
-  requireEs_array_find();
-
-  var es_array_includes = {};
-
-  var hasRequiredEs_array_includes;
-
-  function requireEs_array_includes () {
-  	if (hasRequiredEs_array_includes) return es_array_includes;
-  	hasRequiredEs_array_includes = 1;
-  	var $ = require_export();
-  	var $includes = requireArrayIncludes().includes;
-  	var fails = requireFails();
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	// FF99+ bug
-  	var BROKEN_ON_SPARSE = fails(function () {
-  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
-  	  return !Array(1).includes();
-  	});
-
-  	// Safari 26.4- bug
-  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
-  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
-  	  return [, 1].includes(undefined, 1);
-  	});
-
-  	// `Array.prototype.includes` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.includes
-  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
-  	  includes: function includes(el /* , fromIndex = 0 */) {
-  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables('includes');
-  	return es_array_includes;
-  }
-
-  requireEs_array_includes();
-
-  var es_object_keys = {};
-
-  var hasRequiredEs_object_keys;
-
-  function requireEs_object_keys () {
-  	if (hasRequiredEs_object_keys) return es_object_keys;
-  	hasRequiredEs_object_keys = 1;
-  	var $ = require_export();
-  	var toObject = requireToObject();
-  	var nativeKeys = requireObjectKeys();
-  	var fails = requireFails();
-
-  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
-
-  	// `Object.keys` method
-  	// https://tc39.es/ecma262/#sec-object.keys
-  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
-  	  keys: function keys(it) {
-  	    return nativeKeys(toObject(it));
-  	  }
-  	});
-  	return es_object_keys;
-  }
-
-  requireEs_object_keys();
-
-  var es_regexp_exec = {};
-
-  var toString;
-  var hasRequiredToString;
-
-  function requireToString () {
-  	if (hasRequiredToString) return toString;
-  	hasRequiredToString = 1;
-  	var classof = requireClassof();
-
-  	var $String = String;
-
-  	toString = function (argument) {
-  	  if (classof(argument) === 'Symbol') throw new TypeError('Cannot convert a Symbol value to a string');
-  	  return $String(argument);
-  	};
-  	return toString;
-  }
-
-  var regexpFlags;
-  var hasRequiredRegexpFlags;
-
-  function requireRegexpFlags () {
-  	if (hasRequiredRegexpFlags) return regexpFlags;
-  	hasRequiredRegexpFlags = 1;
-  	var anObject = requireAnObject();
-
-  	// `RegExp.prototype.flags` getter implementation
-  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
-  	regexpFlags = function () {
-  	  var that = anObject(this);
-  	  var result = '';
-  	  if (that.hasIndices) result += 'd';
-  	  if (that.global) result += 'g';
-  	  if (that.ignoreCase) result += 'i';
-  	  if (that.multiline) result += 'm';
-  	  if (that.dotAll) result += 's';
-  	  if (that.unicode) result += 'u';
-  	  if (that.unicodeSets) result += 'v';
-  	  if (that.sticky) result += 'y';
-  	  return result;
-  	};
-  	return regexpFlags;
-  }
-
-  var regexpStickyHelpers;
-  var hasRequiredRegexpStickyHelpers;
-
-  function requireRegexpStickyHelpers () {
-  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
-  	hasRequiredRegexpStickyHelpers = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	var UNSUPPORTED_Y = fails(function () {
-  	  var re = $RegExp('a', 'y');
-  	  re.lastIndex = 2;
-  	  return re.exec('abcd') !== null;
-  	});
-
-  	// UC Browser bug
-  	// https://github.com/zloirock/core-js/issues/1008
-  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
-  	  return !$RegExp('a', 'y').sticky;
-  	});
-
-  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
-  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
-  	  var re = $RegExp('^r', 'gy');
-  	  re.lastIndex = 2;
-  	  return re.exec('str') !== null;
-  	});
-
-  	regexpStickyHelpers = {
-  	  BROKEN_CARET: BROKEN_CARET,
-  	  MISSED_STICKY: MISSED_STICKY,
-  	  UNSUPPORTED_Y: UNSUPPORTED_Y
-  	};
-  	return regexpStickyHelpers;
   }
 
   var regexpUnsupportedDotAll;
@@ -3590,101 +3468,6 @@
 
   requireEs_regexp_exec();
 
-  var es_string_includes = {};
-
-  var isRegexp;
-  var hasRequiredIsRegexp;
-
-  function requireIsRegexp () {
-  	if (hasRequiredIsRegexp) return isRegexp;
-  	hasRequiredIsRegexp = 1;
-  	var isObject = requireIsObject();
-  	var classof = requireClassofRaw();
-  	var wellKnownSymbol = requireWellKnownSymbol();
-
-  	var MATCH = wellKnownSymbol('match');
-
-  	// `IsRegExp` abstract operation
-  	// https://tc39.es/ecma262/#sec-isregexp
-  	isRegexp = function (it) {
-  	  var isRegExp;
-  	  return isObject(it) && ((isRegExp = it[MATCH]) !== undefined ? !!isRegExp : classof(it) === 'RegExp');
-  	};
-  	return isRegexp;
-  }
-
-  var notARegexp;
-  var hasRequiredNotARegexp;
-
-  function requireNotARegexp () {
-  	if (hasRequiredNotARegexp) return notARegexp;
-  	hasRequiredNotARegexp = 1;
-  	var isRegExp = requireIsRegexp();
-
-  	var $TypeError = TypeError;
-
-  	notARegexp = function (it) {
-  	  if (isRegExp(it)) {
-  	    throw new $TypeError("The method doesn't accept regular expressions");
-  	  } return it;
-  	};
-  	return notARegexp;
-  }
-
-  var correctIsRegexpLogic;
-  var hasRequiredCorrectIsRegexpLogic;
-
-  function requireCorrectIsRegexpLogic () {
-  	if (hasRequiredCorrectIsRegexpLogic) return correctIsRegexpLogic;
-  	hasRequiredCorrectIsRegexpLogic = 1;
-  	var wellKnownSymbol = requireWellKnownSymbol();
-
-  	var MATCH = wellKnownSymbol('match');
-
-  	correctIsRegexpLogic = function (METHOD_NAME) {
-  	  var regexp = /./;
-  	  try {
-  	    '/./'[METHOD_NAME](regexp);
-  	  } catch (error1) {
-  	    try {
-  	      regexp[MATCH] = false;
-  	      return '/./'[METHOD_NAME](regexp);
-  	    } catch (error2) { /* empty */ }
-  	  } return false;
-  	};
-  	return correctIsRegexpLogic;
-  }
-
-  var hasRequiredEs_string_includes;
-
-  function requireEs_string_includes () {
-  	if (hasRequiredEs_string_includes) return es_string_includes;
-  	hasRequiredEs_string_includes = 1;
-  	var $ = require_export();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var notARegExp = requireNotARegexp();
-  	var requireObjectCoercible = requireRequireObjectCoercible();
-  	var toString = requireToString();
-  	var correctIsRegExpLogic = requireCorrectIsRegexpLogic();
-
-  	var stringIndexOf = uncurryThis(''.indexOf);
-
-  	// `String.prototype.includes` method
-  	// https://tc39.es/ecma262/#sec-string.prototype.includes
-  	$({ target: 'String', proto: true, forced: !correctIsRegExpLogic('includes') }, {
-  	  includes: function includes(searchString /* , position = 0 */) {
-  	    return !!~stringIndexOf(
-  	      toString(requireObjectCoercible(this)),
-  	      toString(notARegExp(searchString)),
-  	      arguments.length > 1 ? arguments[1] : undefined
-  	    );
-  	  }
-  	});
-  	return es_string_includes;
-  }
-
-  requireEs_string_includes();
-
   var es_string_trim = {};
 
   var whitespaces;
@@ -3852,6 +3635,68 @@
   }
 
   requireEs_array_concat();
+
+  var es_array_find = {};
+
+  var addToUnscopables;
+  var hasRequiredAddToUnscopables;
+
+  function requireAddToUnscopables () {
+  	if (hasRequiredAddToUnscopables) return addToUnscopables;
+  	hasRequiredAddToUnscopables = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var create = requireObjectCreate();
+  	var defineProperty = requireObjectDefineProperty().f;
+
+  	var UNSCOPABLES = wellKnownSymbol('unscopables');
+  	var ArrayPrototype = Array.prototype;
+
+  	// Array.prototype[@@unscopables]
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
+  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
+  	    configurable: true,
+  	    value: create(null)
+  	  });
+  	}
+
+  	// add a key to Array.prototype[@@unscopables]
+  	addToUnscopables = function (key) {
+  	  ArrayPrototype[UNSCOPABLES][key] = true;
+  	};
+  	return addToUnscopables;
+  }
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
+  }
+
+  requireEs_array_find();
 
   var es_array_from = {};
 
@@ -5355,6 +5200,32 @@
   }
 
   requireEs_object_entries();
+
+  var es_object_keys = {};
+
+  var hasRequiredEs_object_keys;
+
+  function requireEs_object_keys () {
+  	if (hasRequiredEs_object_keys) return es_object_keys;
+  	hasRequiredEs_object_keys = 1;
+  	var $ = require_export();
+  	var toObject = requireToObject();
+  	var nativeKeys = requireObjectKeys();
+  	var fails = requireFails();
+
+  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
+
+  	// `Object.keys` method
+  	// https://tc39.es/ecma262/#sec-object.keys
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
+  	  keys: function keys(it) {
+  	    return nativeKeys(toObject(it));
+  	  }
+  	});
+  	return es_object_keys;
+  }
+
+  requireEs_object_keys();
 
   var es_promise = {};
 
@@ -11977,12 +11848,20 @@
                 clearTimeout(timeout);
                 if (xhr.status >= 200 && xhr.status < 300) {
                   try {
+                    var _parsed$data, _parsed$data2;
                     var parsed = JSON.parse(xhr.responseText);
                     // Default successful HTTP responses to success: true, while
                     // still allowing an explicit server-provided success value
                     // (including false) to override the default.
                     var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
-                    var parsedUploadId = typeof parsed.uploadId === "string" && parsed.uploadId.trim() ? parsed.uploadId : uploadId;
+                    // The server's identifier wins over the client-generated
+                    // one, in whichever spelling it arrives. Checking only
+                    // `uploadId` and writing the local id into that field made
+                    // the local id outrank a server `upload_id` downstream,
+                    // because completion reads `uploadId` first.
+                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
+                      return typeof value === "string" && value.trim() !== "";
+                    }) || uploadId;
                     resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
                       success: success,
                       uploadId: parsedUploadId
@@ -12187,6 +12066,278 @@
       }, _callee5);
     }));
     return _uploadWithPriority.apply(this, arguments);
+  }
+
+  var es_array_includes = {};
+
+  var hasRequiredEs_array_includes;
+
+  function requireEs_array_includes () {
+  	if (hasRequiredEs_array_includes) return es_array_includes;
+  	hasRequiredEs_array_includes = 1;
+  	var $ = require_export();
+  	var $includes = requireArrayIncludes().includes;
+  	var fails = requireFails();
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	// FF99+ bug
+  	var BROKEN_ON_SPARSE = fails(function () {
+  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
+  	  return !Array(1).includes();
+  	});
+
+  	// Safari 26.4- bug
+  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
+  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
+  	  return [, 1].includes(undefined, 1);
+  	});
+
+  	// `Array.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.includes
+  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
+  	  includes: function includes(el /* , fromIndex = 0 */) {
+  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables('includes');
+  	return es_array_includes;
+  }
+
+  requireEs_array_includes();
+
+  var es_string_includes = {};
+
+  var isRegexp;
+  var hasRequiredIsRegexp;
+
+  function requireIsRegexp () {
+  	if (hasRequiredIsRegexp) return isRegexp;
+  	hasRequiredIsRegexp = 1;
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	// `IsRegExp` abstract operation
+  	// https://tc39.es/ecma262/#sec-isregexp
+  	isRegexp = function (it) {
+  	  var isRegExp;
+  	  return isObject(it) && ((isRegExp = it[MATCH]) !== undefined ? !!isRegExp : classof(it) === 'RegExp');
+  	};
+  	return isRegexp;
+  }
+
+  var notARegexp;
+  var hasRequiredNotARegexp;
+
+  function requireNotARegexp () {
+  	if (hasRequiredNotARegexp) return notARegexp;
+  	hasRequiredNotARegexp = 1;
+  	var isRegExp = requireIsRegexp();
+
+  	var $TypeError = TypeError;
+
+  	notARegexp = function (it) {
+  	  if (isRegExp(it)) {
+  	    throw new $TypeError("The method doesn't accept regular expressions");
+  	  } return it;
+  	};
+  	return notARegexp;
+  }
+
+  var correctIsRegexpLogic;
+  var hasRequiredCorrectIsRegexpLogic;
+
+  function requireCorrectIsRegexpLogic () {
+  	if (hasRequiredCorrectIsRegexpLogic) return correctIsRegexpLogic;
+  	hasRequiredCorrectIsRegexpLogic = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	correctIsRegexpLogic = function (METHOD_NAME) {
+  	  var regexp = /./;
+  	  try {
+  	    '/./'[METHOD_NAME](regexp);
+  	  } catch (error1) {
+  	    try {
+  	      regexp[MATCH] = false;
+  	      return '/./'[METHOD_NAME](regexp);
+  	    } catch (error2) { /* empty */ }
+  	  } return false;
+  	};
+  	return correctIsRegexpLogic;
+  }
+
+  var hasRequiredEs_string_includes;
+
+  function requireEs_string_includes () {
+  	if (hasRequiredEs_string_includes) return es_string_includes;
+  	hasRequiredEs_string_includes = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var notARegExp = requireNotARegexp();
+  	var requireObjectCoercible = requireRequireObjectCoercible();
+  	var toString = requireToString();
+  	var correctIsRegExpLogic = requireCorrectIsRegexpLogic();
+
+  	var stringIndexOf = uncurryThis(''.indexOf);
+
+  	// `String.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-string.prototype.includes
+  	$({ target: 'String', proto: true, forced: !correctIsRegExpLogic('includes') }, {
+  	  includes: function includes(searchString /* , position = 0 */) {
+  	    return !!~stringIndexOf(
+  	      toString(requireObjectCoercible(this)),
+  	      toString(notARegExp(searchString)),
+  	      arguments.length > 1 ? arguments[1] : undefined
+  	    );
+  	  }
+  	});
+  	return es_string_includes;
+  }
+
+  requireEs_string_includes();
+
+  /**
+   * @file starmus-completion-event.js
+   * @summary The single home for the `starmus:complete` event.
+   *
+   * `starmus:complete` is the boundary between capture and the platform audio
+   * lifecycle (ADR-034): nothing server-side begins until it fires. It therefore
+   * has to fire on every path that ends in a stored recording — an immediate
+   * upload and a queued upload that later drains — and it has to describe the
+   * asset that was actually captured.
+   *
+   * It lives here rather than in `starmus-core.js` so the offline queue can emit
+   * the same event without duplicating how it is built, and without a circular
+   * import between core and offline.
+   */
+
+  /**
+   * Map a captured MIME type or file extension to the format name the
+   * capture-to-ingestion contract uses.
+   *
+   * @param {string} mimeType
+   * @param {string} fileName
+   * @returns {string|null} null when the format is not one this package can name.
+   */
+  function resolveUploadFormat(mimeType, fileName) {
+    var type = String(mimeType || "").trim().toLowerCase();
+    var name = String(fileName || "").trim().toLowerCase();
+    var ext = name.includes(".") ? name.split(".").pop() : "";
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || type.includes("audio/aac") || type.includes("aac") || type.includes("mp4a") || ext === "m4a" || ext === "mp4" || ext === "aac") {
+      return "aac-lc";
+    }
+    if (type.includes("audio/ogg") || type.includes("audio/opus") || type.includes("opus") || ext === "opus" || ext === "ogg") {
+      return "opus";
+    }
+
+    // WAV and MP3 are reported as themselves. ADR-035 holds the container and
+    // codec restriction pending OQ-021, so this package does not decide that
+    // an arriving format is inadmissible — it names what it has and lets the
+    // Spoken Audio Node rule on it. Silently mapping these onto `opus` would
+    // be worse: it would misdescribe the asset.
+    if (type.includes("audio/wav") || type.includes("audio/wave") || type.includes("audio/x-wav") || ext === "wav") {
+      return "wav";
+    }
+    if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
+      return "mp3";
+    }
+    return null;
+  }
+
+  /**
+   * Read the contributor's stored consent record, if any.
+   *
+   * @returns {{granted?: boolean}|null}
+   */
+  function readContributorConsent() {
+    try {
+      var raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
+      return raw ? JSON.parse(raw) : null;
+    } catch (_unused) {
+      return null;
+    }
+  }
+
+  /**
+   * Pick the server's upload identifier out of a result, in whichever spelling
+   * it arrived, falling back to nothing rather than to a guess.
+   *
+   * @param {Object} result
+   * @returns {string}
+   */
+  function resolveUploadId(result) {
+    var _result$data, _result$data2;
+    return [result === null || result === void 0 ? void 0 : result.uploadId, result === null || result === void 0 ? void 0 : result.upload_id, result === null || result === void 0 || (_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.uploadId, result === null || result === void 0 || (_result$data2 = result.data) === null || _result$data2 === void 0 ? void 0 : _result$data2.upload_id].find(function (value) {
+      return typeof value === "string" && value.trim() !== "";
+    }) || "";
+  }
+
+  /**
+   * Build the `starmus:complete` detail from an upload result and the metadata
+   * that travelled with the asset.
+   *
+   * Audio details come from the capture attainment record, never from constants:
+   * a `documentation` session at 48 kHz stereo must not be announced as 16 kHz
+   * mono. `null` means the device did not report the value.
+   *
+   * @param {Object} input
+   * @param {string} input.instanceId
+   * @param {Object} input.result       Upload result.
+   * @param {Object} input.metadata     Metadata that travelled with the asset.
+   * @param {Object} [input.formFields]
+   * @param {string} [input.fileName]
+   * @param {string} [input.mimeType]
+   * @param {string} [input.language]
+   * @param {string} [input.contributorId]
+   * @param {boolean} [input.calibrationApplied]
+   * @param {number} [input.durationMs]
+   * @returns {Object|null} null when the format cannot be named.
+   */
+  function buildCompletionDetail(input) {
+    var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
+    var format = resolveUploadFormat(input.mimeType, input.fileName);
+    if (!format) {
+      return null;
+    }
+    var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
+    var consent = readContributorConsent();
+    return {
+      sessionId: input.instanceId,
+      uploadId: resolveUploadId(input.result),
+      durationMs: (_input$durationMs = input.durationMs) !== null && _input$durationMs !== void 0 ? _input$durationMs : 0,
+      sampleRate: (_attainment$actual$sa = attainment === null || attainment === void 0 || (_attainment$actual = attainment.actual) === null || _attainment$actual === void 0 ? void 0 : _attainment$actual.sampleRate) !== null && _attainment$actual$sa !== void 0 ? _attainment$actual$sa : null,
+      channels: (_attainment$actual$ch = attainment === null || attainment === void 0 || (_attainment$actual2 = attainment.actual) === null || _attainment$actual2 === void 0 ? void 0 : _attainment$actual2.channelCount) !== null && _attainment$actual$ch !== void 0 ? _attainment$actual$ch : null,
+      captureProfile: ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) || null,
+      captureProfileAttained: (_attainment$attained = attainment === null || attainment === void 0 ? void 0 : attainment.attained) !== null && _attainment$attained !== void 0 ? _attainment$attained : null,
+      format: format,
+      language: input.language || ((_input$formFields = input.formFields) === null || _input$formFields === void 0 ? void 0 : _input$formFields.language) || "",
+      contributorId: input.contributorId || "",
+      consentGranted: !!(consent && consent.granted),
+      calibrationApplied: !!input.calibrationApplied
+    };
+  }
+
+  /**
+   * Dispatch `starmus:complete`. No-op when the detail could not be built or
+   * there is no document to dispatch on.
+   *
+   * @param {Object|null} detail
+   * @returns {boolean} whether the event was dispatched.
+   */
+  function emitCompletionEvent(detail) {
+    if (!detail || typeof document === "undefined") {
+      return false;
+    }
+    document.dispatchEvent(new CustomEvent("starmus:complete", {
+      detail: detail
+    }));
+    return true;
   }
 
   var es_array_map = {};
@@ -12589,7 +12740,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
+          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.p = _context6.n) {
               case 0:
@@ -12658,6 +12809,24 @@
                   instanceId: instanceId
                 });
               case 11:
+                result = _context6.v;
+                // `starmus:complete` is the boundary before any
+                // server-side processing (ADR-034). A queued upload that
+                // drains is as complete as an immediate one, so it fires
+                // here too — and it fires before `remove()`, because
+                // removal destroys the metadata the event is built from.
+                emitCompletionEvent(buildCompletionDetail({
+                  instanceId: instanceId,
+                  result: result,
+                  metadata: metadata,
+                  formFields: formFields,
+                  fileName: fileName,
+                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                  durationMs: (_metadata$durationMs = metadata === null || metadata === void 0 ? void 0 : metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                  language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
+                  contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
+                  calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
+                }));
                 _context6.n = 12;
                 return this.remove(id);
               case 12:
@@ -13044,8 +13213,8 @@
     }
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
-        var _source$transcript;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, metadata, result, _completedSource$meta, _result$data, _result$data2, _completedSource$meta2, _completedState$env, _result$data3, _result$data4, completedState, completedSource, completedCalibration, mimeType, normalizedMimeType, normalizedFileName, resolvedExtension, resolveUploadFormat, format, contributorConsent, resolvedUploadId, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var _source$transcript, _source$metadata, _source$metadata2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -13065,12 +13234,26 @@
               console.error("[Core] No audio recording found.");
               return _context.a(2);
             case 1:
+              // ADR-035 / capture-to-ingestion contract: the capture profile travels
+              // with the asset. This object is what the direct and TUS serializers
+              // send and what the offline queue persists for later retry, so the
+              // profile has to be in it here or it reaches ingestion on no path at
+              // all. `null` means the recorder never reported one (a file upload via
+              // the Tier C fallback), which is itself information the consumer needs.
+              captureAttainment = source.captureAttainment || null;
               metadata = {
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 calibration: calibration.complete ? {
                   gain: calibration.gain,
                   speechLevel: calibration.speechLevel
                 } : null,
+                captureProfile: source.captureProfile || null,
+                captureAttainment: captureAttainment,
+                // Persisted so a queued upload that drains hours later can still
+                // describe the asset it sent. The store state it came from is long
+                // gone by then.
+                durationMs: Math.round((((_source$metadata = source.metadata) === null || _source$metadata === void 0 ? void 0 : _source$metadata.duration) || 0) * 1000),
+                mimeType: ((_source$metadata2 = source.metadata) === null || _source$metadata2 === void 0 ? void 0 : _source$metadata2.mimeType) || audioBlob.type || "",
                 env: stateEnv,
                 tier: stateEnv.tier || (currentEnvData === null || currentEnvData === void 0 ? void 0 : currentEnvData.tier) || "C"
               };
@@ -13114,58 +13297,26 @@
               completedState = store.getState();
               completedSource = completedState.source || {};
               completedCalibration = completedState.calibration || {};
-              mimeType = ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "";
-              normalizedMimeType = String(mimeType).trim().toLowerCase();
-              normalizedFileName = String(fileName || "").trim().toLowerCase();
-              resolvedExtension = normalizedFileName.includes(".") ? normalizedFileName.split(".").pop() : "";
-              resolveUploadFormat = function resolveUploadFormat(detectedMimeType, detectedExtension) {
-                if (detectedMimeType.includes("audio/mp4") || detectedMimeType.includes("audio/x-m4a") || detectedMimeType.includes("audio/aac") || detectedMimeType.includes("aac") || detectedMimeType.includes("mp4a") || detectedExtension === "m4a" || detectedExtension === "mp4" || detectedExtension === "aac") {
-                  return "aac-lc";
-                }
-                if (detectedMimeType.includes("audio/ogg") || detectedMimeType.includes("audio/opus") || detectedMimeType.includes("opus") || detectedExtension === "opus" || detectedExtension === "ogg") {
-                  return "opus";
-                }
-                if (detectedMimeType.includes("audio/wav") || detectedMimeType.includes("audio/wave") || detectedMimeType.includes("audio/x-wav") || detectedExtension === "wav") {
-                  return "wav";
-                }
-                if (detectedMimeType.includes("audio/mpeg") || detectedMimeType.includes("audio/mp3") || detectedExtension === "mp3") {
-                  return "mp3";
-                }
-                return null;
-              };
-              format = resolveUploadFormat(normalizedMimeType, resolvedExtension);
-              if (format) {
+              detail = buildCompletionDetail({
+                instanceId: instanceId,
+                result: result,
+                metadata: metadata,
+                formFields: formFields,
+                fileName: fileName,
+                mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
+                durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
+                language: completedSource.language,
+                contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
+                calibrationApplied: !!completedCalibration.complete
+              });
+              if (detail) {
                 _context.n = 5;
                 break;
               }
               throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
             case 5:
-              contributorConsent = function () {
-                try {
-                  var raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
-                  return raw ? JSON.parse(raw) : null;
-                } catch (_unused) {
-                  return null;
-                }
-              }();
-              resolvedUploadId = [result.uploadId, result.upload_id, (_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.uploadId, (_result$data2 = result.data) === null || _result$data2 === void 0 ? void 0 : _result$data2.upload_id].find(function (value) {
-                return typeof value === "string" && value.trim() !== "";
-              }) || "";
-              document.dispatchEvent(new CustomEvent("starmus:complete", {
-                detail: {
-                  sessionId: instanceId,
-                  uploadId: resolvedUploadId,
-                  durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
-                  sampleRate: 16000,
-                  channels: 1,
-                  format: format,
-                  language: completedSource.language || (formFields === null || formFields === void 0 ? void 0 : formFields.language) || "",
-                  contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
-                  consentGranted: !!(contributorConsent && contributorConsent.granted),
-                  calibrationApplied: !!completedCalibration.complete
-                }
-              }));
-              redirect = ((_result$data3 = result.data) === null || _result$data3 === void 0 ? void 0 : _result$data3.redirect_url) || result.redirect_url;
+              emitCompletionEvent(detail);
+              redirect = ((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url;
               if (redirect) {
                 setTimeout(function () {
                   window.location.href = redirect;
@@ -13173,7 +13324,7 @@
               }
 
               // Notify parent frame (modal context) safely
-              if ((_result$data4 = result.data) !== null && _result$data4 !== void 0 && _result$data4.post_id) {
+              if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
                 try {
                   if (window.parent && window.parent !== window) {
                     void window.parent.location.href; // Throws if cross-origin
@@ -13183,7 +13334,7 @@
                       }]);
                     }
                   }
-                } catch (_unused2) {
+                } catch (_unused) {
                   // Cross-origin — silently skip
                 }
               }
@@ -16362,6 +16513,280 @@
 
   requireEs_math_log10();
 
+  var es_object_freeze = {};
+
+  var hasRequiredEs_object_freeze;
+
+  function requireEs_object_freeze () {
+  	if (hasRequiredEs_object_freeze) return es_object_freeze;
+  	hasRequiredEs_object_freeze = 1;
+  	var $ = require_export();
+  	var FREEZING = requireFreezing();
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var onFreeze = requireInternalMetadata().onFreeze;
+
+  	// eslint-disable-next-line es/no-object-freeze -- safe
+  	var $freeze = Object.freeze;
+  	var FAILS_ON_PRIMITIVES = fails(function () { $freeze(1); });
+
+  	// `Object.freeze` method
+  	// https://tc39.es/ecma262/#sec-object.freeze
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES, sham: !FREEZING }, {
+  	  freeze: function freeze(it) {
+  	    return $freeze && isObject(it) ? $freeze(onFreeze(it)) : it;
+  	  }
+  	});
+  	return es_object_freeze;
+  }
+
+  requireEs_object_freeze();
+
+  /**
+   * @file starmus-capture-profiles.js
+   * @summary Named capture profiles. Audio constraints belong to a profile the
+   *          calling product chooses — never to a platform-wide ceiling.
+   *
+   * Governed by ADR-035. The 16 kHz / mono / 32 kbps limits that used to be
+   * applied to every recording in this package are a low-bandwidth
+   * conversational transport profile; held platform-wide they destroy the source
+   * material that documentation, sound-to-IPA, tone and prosody work depend on.
+   *
+   * The profile travels with the asset. A consumer reads it to decide whether a
+   * measurement taken from that asset is admissible.
+   *
+   * The numeric floor for `documentation` is deliberately NOT set here. It is
+   * OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
+   * owner. `null` means "do not constrain" — the device's own default is used
+   * and the real capability is reported back, rather than this package inventing
+   * a floor it has no authority to set.
+   */
+
+  /** @typedef {"conversation"|"documentation"|"import"} CaptureProfileName */
+
+  /**
+   * @typedef {Object} CaptureProfile
+   * @property {CaptureProfileName} name
+   * @property {number|null} sampleRate           Ceiling in Hz, or null to leave unconstrained.
+   * @property {number|null} channelCount         Ceiling in channels, or null to leave unconstrained.
+   * @property {number|null} audioBitsPerSecond   Encoder bitrate, or null to let the browser choose.
+   * @property {boolean} voiceProcessing          Request browser echo cancellation and noise suppression.
+   * @property {boolean} allowLossless
+   * @property {boolean} transcode
+   * @property {boolean} admissibleForMeasurement
+   * @property {string} description
+   */
+
+  /** @type {Record<CaptureProfileName, CaptureProfile>} */
+  var CAPTURE_PROFILES = Object.freeze({
+    /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
+    conversation: Object.freeze({
+      name: "conversation",
+      sampleRate: 16000,
+      channelCount: 1,
+      audioBitsPerSecond: 32000,
+      // Echo cancellation and noise suppression make conversational speech
+      // intelligible at this bitrate. They are voice-telephony processing,
+      // so they belong to this profile and to no other.
+      voiceProcessing: true,
+      allowLossless: false,
+      transcode: true,
+      admissibleForMeasurement: false,
+      description: "Low-bandwidth conversational capture for interactive use."
+    }),
+    /**
+     * Highest quality the device can safely sustain, for material that will be
+     * measured. Not downsampled to a transport ceiling; not denied a lossless
+     * container. Floors are OQ-021 and not set in this package.
+     */
+    documentation: Object.freeze({
+      name: "documentation",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      // Off deliberately. Echo cancellation and noise suppression are
+      // non-linear, non-invertible processing applied before the sample
+      // reaches this package. Pitch, formant and intensity measurements
+      // taken downstream would be measurements of the browser's voice
+      // processing, not of the speaker.
+      voiceProcessing: false,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Highest safe source quality for material that will be measured."
+    }),
+    /** Prerecorded material, preserved unchanged. No transcode, resample or fold-down. */
+    import: Object.freeze({
+      name: "import",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      voiceProcessing: false,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Prerecorded material preserved byte-for-byte."
+    })
+  });
+
+  /** @type {CaptureProfileName} */
+  var DEFAULT_CAPTURE_PROFILE = "conversation";
+
+  /**
+   * Resolve a profile by name. An unknown name is a caller error and is not
+   * silently coerced into a different profile — ADR-035 forbids satisfying a
+   * request with something other than what was asked for.
+   *
+   * Only an absent value (`undefined` or `null`) selects the default. An empty
+   * string is an explicit request for a profile that does not exist, and throws.
+   *
+   * @param {CaptureProfileName|undefined|null} name
+   * @returns {CaptureProfile}
+   */
+  function resolveCaptureProfile(name) {
+    if (name === undefined || name === null) {
+      return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
+    }
+    var profile = Object.prototype.hasOwnProperty.call(CAPTURE_PROFILES, name) ? CAPTURE_PROFILES[name] : undefined;
+    if (!profile) {
+      throw new Error("Unknown capture profile \"".concat(String(name), "\". Expected one of: ").concat(Object.keys(CAPTURE_PROFILES).join(", "), "."));
+    }
+    return profile;
+  }
+
+  /**
+   * The capture profile for this session, chosen by the calling product.
+   *
+   * The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent that,
+   * `conversation` is used, which preserves this package's previous behaviour
+   * exactly. `??` rather than `||`: an explicitly supplied empty string is an
+   * invalid request and must reach `resolveCaptureProfile()` to be rejected,
+   * not be silently upgraded into a working profile.
+   *
+   * @returns {CaptureProfileName}
+   */
+  function activeCaptureProfileName() {
+    var _bootstrap$capturePro;
+    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    return (_bootstrap$capturePro = bootstrap === null || bootstrap === void 0 ? void 0 : bootstrap.captureProfile) !== null && _bootstrap$capturePro !== void 0 ? _bootstrap$capturePro : DEFAULT_CAPTURE_PROFILE;
+  }
+
+  /**
+   * Build getUserMedia audio constraints for a profile. Keys the profile does
+   * not constrain are omitted entirely rather than sent as a null, so the
+   * browser applies its own default instead of failing the request.
+   *
+   * Numeric limits are sent as `{ ideal: n }`, not as `{ max: n }` or
+   * `{ exact: n }`. A mandatory constraint the device cannot meet makes
+   * `getUserMedia` reject with `OverconstrainedError`, and the speaker cannot
+   * record at all — which ADR-011's unconditional-capture rule forbids. The
+   * package therefore asks, then reports what it actually got through
+   * `describeAttainment()`; enforcing a ceiling on the resulting asset is the
+   * Spoken Audio Node's, where refusing does not cost the recording.
+   *
+   * @param {CaptureProfileName} [name]
+   * @returns {MediaTrackConstraints}
+   */
+  function getAudioConstraints(name) {
+    var profile = resolveCaptureProfile(name);
+    /** @type {MediaTrackConstraints} */
+    var constraints = {
+      echoCancellation: profile.voiceProcessing,
+      noiseSuppression: profile.voiceProcessing
+    };
+    if (profile.sampleRate !== null) {
+      constraints.sampleRate = {
+        ideal: profile.sampleRate
+      };
+    }
+    if (profile.channelCount !== null) {
+      constraints.channelCount = {
+        ideal: profile.channelCount
+      };
+    }
+    return constraints;
+  }
+
+  /**
+   * MediaRecorder options for a profile. An unconstrained bitrate lets the
+   * browser choose, which is what `documentation` and `import` want.
+   *
+   * @param {CaptureProfileName} [name]
+   * @param {string} [mimeType]
+   * @returns {MediaRecorderOptions}
+   */
+  function getRecorderOptions(name, mimeType) {
+    var profile = resolveCaptureProfile(name);
+    /** @type {MediaRecorderOptions} */
+    var options = {};
+    if (mimeType) {
+      options.mimeType = mimeType;
+    }
+    if (profile.audioBitsPerSecond !== null) {
+      options.audioBitsPerSecond = profile.audioBitsPerSecond;
+    }
+    return options;
+  }
+
+  /**
+   * @typedef {Object} CaptureAttainment
+   * @property {CaptureProfileName} profile
+   * @property {{sampleRate: number|null, channelCount: number|null}} requested
+   * @property {{sampleRate?: number, channelCount?: number}} actual
+   * @property {boolean} attained    True only when every constrained value was verified within its limit.
+   * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
+   * @property {string[]} unverified Constrained values the device did not report at all.
+   */
+
+  /**
+   * Report what the device actually delivered against what the profile asked
+   * for. ADR-035: an unattainable profile is reported to the product, never
+   * silently satisfied by substituting a different one.
+   *
+   * A profile's numbers are ceilings, so a value is within limit when it is at
+   * or below the requested one. A value the device does not report is
+   * `unverified`, never assumed to be fine — an unreported rate is exactly the
+   * case where a 44.1 or 48 kHz stream would otherwise pass unnoticed.
+   *
+   * @param {CaptureProfileName} name
+   * @param {MediaStreamTrack} track
+   * @returns {CaptureAttainment}
+   */
+  function describeAttainment(name, track) {
+    var profile = resolveCaptureProfile(name);
+    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    var requested = {
+      sampleRate: profile.sampleRate,
+      channelCount: profile.channelCount
+    };
+
+    /** @type {string[]} */
+    var exceeded = [];
+    /** @type {string[]} */
+    var unverified = [];
+    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
+      var key = _arr[_i];
+      var limit = profile[key];
+      if (limit === null) {
+        continue;
+      }
+      var reported = actual[key];
+      if (typeof reported !== "number") {
+        unverified.push(key);
+      } else if (reported > limit) {
+        exceeded.push(key);
+      }
+    }
+    return {
+      profile: profile.name,
+      requested: requested,
+      actual: actual,
+      attained: exceeded.length === 0 && unverified.length === 0,
+      exceeded: exceeded,
+      unverified: unverified
+    };
+  }
+
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
    *
@@ -16387,8 +16812,6 @@
       phases: 3,
       noiseThreshold: 5,
       speechThreshold: 20,
-      sampleRate: 16000,
-      // Runtime policy: cap all tiers to 16kHz for upload compatibility
       fftSize: 2048,
       smoothing: 0.8,
       gainRange: [0.5, 2.0],
@@ -16399,8 +16822,6 @@
       phases: 2,
       noiseThreshold: 8,
       speechThreshold: 15,
-      sampleRate: 16000,
-      // Runtime policy: cap all tiers to 16kHz for upload compatibility
       fftSize: 1024,
       smoothing: 0.6,
       gainRange: [0.7, 1.5],
@@ -16411,7 +16832,6 @@
       phases: 1,
       noiseThreshold: 12,
       speechThreshold: 10,
-      sampleRate: 16000,
       fftSize: 512,
       smoothing: 0.4,
       gainRange: [0.8, 1.2],
@@ -16476,15 +16896,30 @@
       key: "performCalibration",
       value: (function () {
         var _performCalibration = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(stream, onUpdate) {
-          var settings, result, _t;
+          var _options$captureProfi;
+          var options,
+            settings,
+            profile,
+            analysisSampleRate,
+            result,
+            _args2 = arguments,
+            _t;
           return _regenerator().w(function (_context2) {
             while (1) switch (_context2.p = _context2.n) {
               case 0:
-                settings = this.getTierSettings();
+                options = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
+                settings = this.getTierSettings(); // ADR-035: the analysis rate comes from the capture profile, never
+                // from the tier. A profile that constrains nothing (documentation,
+                // import) gets the device's own rate, so calibration measures the
+                // signal the recorder will actually capture.
+                profile = resolveCaptureProfile((_options$captureProfi = options.captureProfile) !== null && _options$captureProfi !== void 0 ? _options$captureProfi : activeCaptureProfileName());
+                analysisSampleRate = profile.sampleRate;
                 _context2.p = 1;
                 try {
-                  this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: settings.sampleRate,
+                  this.audioContext = new (window.AudioContext || window.webkitAudioContext)(analysisSampleRate === null ? {
+                    latencyHint: "interactive"
+                  } : {
+                    sampleRate: analysisSampleRate,
                     latencyHint: "interactive"
                   });
                 } catch (_sampleRateError) {
@@ -16493,7 +16928,8 @@
                   });
                   sparxstarIntegration.reportError("calibration_samplerate_fallback", {
                     tier: this.tier,
-                    requestedSampleRate: settings.sampleRate,
+                    captureProfile: profile.name,
+                    requestedSampleRate: analysisSampleRate,
                     error: _sampleRateError.message
                   });
                 }
@@ -16769,180 +17205,6 @@
     }]);
   }();
 
-  var es_object_freeze = {};
-
-  var hasRequiredEs_object_freeze;
-
-  function requireEs_object_freeze () {
-  	if (hasRequiredEs_object_freeze) return es_object_freeze;
-  	hasRequiredEs_object_freeze = 1;
-  	var $ = require_export();
-  	var FREEZING = requireFreezing();
-  	var fails = requireFails();
-  	var isObject = requireIsObject();
-  	var onFreeze = requireInternalMetadata().onFreeze;
-
-  	// eslint-disable-next-line es/no-object-freeze -- safe
-  	var $freeze = Object.freeze;
-  	var FAILS_ON_PRIMITIVES = fails(function () { $freeze(1); });
-
-  	// `Object.freeze` method
-  	// https://tc39.es/ecma262/#sec-object.freeze
-  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES, sham: !FREEZING }, {
-  	  freeze: function freeze(it) {
-  	    return $freeze && isObject(it) ? $freeze(onFreeze(it)) : it;
-  	  }
-  	});
-  	return es_object_freeze;
-  }
-
-  requireEs_object_freeze();
-
-  /**
-   * @file starmus-capture-profiles.js
-   * @summary Named capture profiles. Audio constraints belong to a profile the
-   *          calling product chooses — never to a platform-wide ceiling.
-   *
-   * Governed by ADR-035. The 16 kHz / mono / 32 kbps limits that used to be
-   * applied to every recording in this package are a low-bandwidth
-   * conversational transport profile; held platform-wide they destroy the source
-   * material that documentation, sound-to-IPA, tone and prosody work depend on.
-   *
-   * The profile travels with the asset. A consumer reads it to decide whether a
-   * measurement taken from that asset is admissible.
-   *
-   * The numeric floor for `documentation` is deliberately NOT set here. It is
-   * OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
-   * owner. `null` means "do not constrain" — the device's own default is used
-   * and the real capability is reported back, rather than this package inventing
-   * a floor it has no authority to set.
-   */
-
-  /** @typedef {"conversation"|"documentation"|"import"} CaptureProfileName */
-
-  /**
-   * @type {Record<CaptureProfileName, {
-   *   name: CaptureProfileName,
-   *   sampleRate: number|null,
-   *   channelCount: number|null,
-   *   audioBitsPerSecond: number|null,
-   *   allowLossless: boolean,
-   *   transcode: boolean,
-   *   admissibleForMeasurement: boolean,
-   *   description: string
-   * }>}
-   */
-  var CAPTURE_PROFILES = Object.freeze({
-    /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
-    conversation: Object.freeze({
-      name: "conversation",
-      sampleRate: 16000,
-      channelCount: 1,
-      audioBitsPerSecond: 32000,
-      allowLossless: false,
-      transcode: true,
-      admissibleForMeasurement: false,
-      description: "Low-bandwidth conversational capture for interactive use."
-    }),
-    /**
-     * Highest quality the device can safely sustain, for material that will be
-     * measured. Not downsampled to a transport ceiling; not denied a lossless
-     * container. Floors are OQ-021 and not set in this package.
-     */
-    documentation: Object.freeze({
-      name: "documentation",
-      sampleRate: null,
-      channelCount: null,
-      audioBitsPerSecond: null,
-      allowLossless: true,
-      transcode: false,
-      admissibleForMeasurement: true,
-      description: "Highest safe source quality for material that will be measured."
-    }),
-    /** Prerecorded material, preserved unchanged. No transcode, resample or fold-down. */
-    import: Object.freeze({
-      name: "import",
-      sampleRate: null,
-      channelCount: null,
-      audioBitsPerSecond: null,
-      allowLossless: true,
-      transcode: false,
-      admissibleForMeasurement: true,
-      description: "Prerecorded material preserved byte-for-byte."
-    })
-  });
-
-  /** @type {CaptureProfileName} */
-  var DEFAULT_CAPTURE_PROFILE = "conversation";
-
-  /**
-   * Resolve a profile by name. An unknown name is a caller error and is not
-   * silently coerced into a different profile — ADR-035 forbids satisfying a
-   * request with something other than what was asked for.
-   *
-   * @param {CaptureProfileName|undefined|null} name
-   * @returns {typeof CAPTURE_PROFILES[CaptureProfileName]}
-   */
-  function resolveCaptureProfile(name) {
-    if (name === undefined || name === null) {
-      return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
-    }
-    var profile = CAPTURE_PROFILES[name];
-    if (!profile) {
-      throw new Error("Unknown capture profile \"".concat(String(name), "\". Expected one of: ").concat(Object.keys(CAPTURE_PROFILES).join(", "), "."));
-    }
-    return profile;
-  }
-
-  /**
-   * Build getUserMedia audio constraints for a profile. Keys the profile does
-   * not constrain are omitted entirely rather than sent as a null, so the
-   * browser applies its own default instead of failing the request.
-   *
-   * @param {CaptureProfileName} [name]
-   * @returns {MediaTrackConstraints}
-   */
-  function getAudioConstraints(name) {
-    var profile = resolveCaptureProfile(name);
-    /** @type {MediaTrackConstraints} */
-    var constraints = {
-      echoCancellation: true,
-      noiseSuppression: true
-    };
-    if (profile.sampleRate !== null) {
-      constraints.sampleRate = profile.sampleRate;
-    }
-    if (profile.channelCount !== null) {
-      constraints.channelCount = profile.channelCount;
-    }
-    return constraints;
-  }
-
-  /**
-   * Report what the device actually delivered against what the profile asked
-   * for. ADR-035: an unattainable profile is reported to the product, never
-   * silently satisfied by substituting a different one.
-   *
-   * @param {CaptureProfileName} name
-   * @param {MediaStreamTrack} track
-   * @returns {{ profile: CaptureProfileName, requested: object, actual: object, attained: boolean }}
-   */
-  function describeAttainment(name, track) {
-    var profile = resolveCaptureProfile(name);
-    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
-    var requested = {
-      sampleRate: profile.sampleRate,
-      channelCount: profile.channelCount
-    };
-    var attained = (profile.sampleRate === null || actual.sampleRate === undefined || actual.sampleRate >= profile.sampleRate) && (profile.channelCount === null || actual.channelCount === undefined || actual.channelCount === profile.channelCount);
-    return {
-      profile: profile.name,
-      requested: requested,
-      actual: actual,
-      attained: attained
-    };
-  }
-
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
    *
@@ -17009,22 +17271,6 @@
   var MAX_DURATION_SECONDS = 1200;
 
   /**
-   * The capture profile for this session, chosen by the calling product.
-   *
-   * ADR-035: constraints come from a named profile, never a platform-wide
-   * ceiling. The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent
-   * that, `conversation` is used, which preserves this package's previous
-   * behaviour exactly. An unknown name throws rather than being coerced — a
-   * profile is never silently substituted.
-   *
-   * @returns {import("./starmus-capture-profiles.js").CaptureProfileName}
-   */
-  function activeCaptureProfile() {
-    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
-    return (bootstrap === null || bootstrap === void 0 ? void 0 : bootstrap.captureProfile) || DEFAULT_CAPTURE_PROFILE;
-  }
-
-  /**
    * Initialises a recorder instance for a given store and instance ID.
    * Subscribes to the CommandBus for mic-start, mic-pause, mic-resume, and mic-stop.
    *
@@ -17061,7 +17307,7 @@
               _context.p = 1;
               _context.n = 2;
               return navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfile())
+                audio: getAudioConstraints(activeCaptureProfileName())
               });
             case 2:
               stream = _context.v;
@@ -17102,6 +17348,8 @@
                     volumePercent: vol
                   });
                 }
+              }, {
+                captureProfile: activeCaptureProfileName()
               });
             case 6:
               result = _context.v;
@@ -17153,7 +17401,7 @@
      */
     function _startRecording() {
       _startRecording = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2() {
-        var stream, mimeType, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
+        var stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
         return _regenerator().w(function (_context2) {
           while (1) switch (_context2.p = _context2.n) {
             case 0:
@@ -17224,7 +17472,7 @@
               _context2.p = 1;
               _context2.n = 2;
               return navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfile())
+                audio: getAudioConstraints(activeCaptureProfileName())
               });
             case 2:
               stream = _context2.v;
@@ -17245,10 +17493,12 @@
               return _context2.a(2);
             case 4:
               mimeType = getSupportedMimeType();
+              captureProfile = activeCaptureProfileName();
               _context2.p = 5;
-              mediaRecorder = new MediaRecorder(stream, mimeType ? {
-                mimeType: mimeType
-              } : {});
+              // ADR-035: the profile's encoder options are applied here, not
+              // merely declared. Constructing with only { mimeType } left
+              // `conversation`'s 32 kbps ceiling as dead configuration.
+              mediaRecorder = new MediaRecorder(stream, getRecorderOptions(captureProfile, mimeType));
               _context2.n = 7;
               break;
             case 6:
@@ -17272,7 +17522,7 @@
               // silently satisfied by substituting a different one. The capture
               // profile travels with the asset so a consumer can tell whether a
               // measurement taken from it is admissible.
-              attainment = describeAttainment(activeCaptureProfile(), stream.getAudioTracks()[0]);
+              attainment = describeAttainment(captureProfile, stream.getAudioTracks()[0]);
               store.dispatch({
                 type: "starmus/capture-profile",
                 attainment: attainment
@@ -17300,7 +17550,7 @@
               }
               // The meter must not force a rate the capture profile did not ask
               // for; let the context follow the device for unconstrained profiles.
-              meterConstraints = getAudioConstraints(activeCaptureProfile());
+              meterConstraints = getAudioConstraints(activeCaptureProfileName());
               sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterConstraints.sampleRate ? {
                 sampleRate: meterConstraints.sampleRate
               } : {});

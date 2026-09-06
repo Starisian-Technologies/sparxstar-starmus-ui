@@ -238,10 +238,19 @@ async function uploadDirect(
                     const success = Object.prototype.hasOwnProperty.call(parsed, "success")
                         ? parsed.success
                         : true;
+                    // The server's identifier wins over the client-generated
+                    // one, in whichever spelling it arrives. Checking only
+                    // `uploadId` and writing the local id into that field made
+                    // the local id outrank a server `upload_id` downstream,
+                    // because completion reads `uploadId` first.
                     const parsedUploadId =
-                        typeof parsed.uploadId === "string" && parsed.uploadId.trim()
-                            ? parsed.uploadId
-                            : uploadId;
+                        [
+                            parsed.uploadId,
+                            parsed.upload_id,
+                            parsed.data?.uploadId,
+                            parsed.data?.upload_id,
+                        ].find((value) => typeof value === "string" && value.trim() !== "") ||
+                        uploadId;
                     resolve({ ...parsed, success, uploadId: parsedUploadId });
                 } catch {
                     resolve({ success: true, uploadId, raw: xhr.responseText });

@@ -25,7 +25,12 @@
 import { CommandBus } from "./starmus-hooks.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 import { EnhancedCalibration } from "./starmus-enhanced-calibration.js";
-import { getAudioConstraints, describeAttainment, DEFAULT_CAPTURE_PROFILE } from "./starmus-capture-profiles.js";
+import {
+    activeCaptureProfileName,
+    describeAttainment,
+    getAudioConstraints,
+    getRecorderOptions,
+} from "./starmus-capture-profiles.js";
 
 /**
  * Registry of active recorder instances, keyed by instanceId.
@@ -74,22 +79,6 @@ function getSupportedMimeType() {
 const MAX_DURATION_SECONDS = 1200;
 
 /**
- * The capture profile for this session, chosen by the calling product.
- *
- * ADR-035: constraints come from a named profile, never a platform-wide
- * ceiling. The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent
- * that, `conversation` is used, which preserves this package's previous
- * behaviour exactly. An unknown name throws rather than being coerced — a
- * profile is never silently substituted.
- *
- * @returns {import("./starmus-capture-profiles.js").CaptureProfileName}
- */
-function activeCaptureProfile() {
-    const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
-    return bootstrap?.captureProfile || DEFAULT_CAPTURE_PROFILE;
-}
-
-/**
  * Initialises a recorder instance for a given store and instance ID.
  * Subscribes to the CommandBus for mic-start, mic-pause, mic-resume, and mic-stop.
  *
@@ -113,7 +102,7 @@ export function initRecorder(store, instanceId) {
 
         try {
             stream = await navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfile()),
+                audio: getAudioConstraints(activeCaptureProfileName()),
             });
         } catch (err) {
             console.error("[Recorder] Microphone access denied:", err);
@@ -128,20 +117,27 @@ export function initRecorder(store, instanceId) {
         await calibration.init();
 
         try {
-            const result = await calibration.performCalibration(stream, (msg, vol, done, data) => {
-                if (done) {
-                    store.dispatch({
-                        type: "starmus/calibration-complete",
-                        payload: { calibration: data },
-                    });
-                } else {
-                    store.dispatch({
-                        type: "starmus/calibration-update",
-                        message: msg,
-                        volumePercent: vol,
-                    });
-                }
-            });
+            // ADR-035: calibration analyses at the profile's rate. Forcing a
+            // 16 kHz AudioContext here would reintroduce the platform-wide
+            // ceiling for documentation and import sessions.
+            const result = await calibration.performCalibration(
+                stream,
+                (msg, vol, done, data) => {
+                    if (done) {
+                        store.dispatch({
+                            type: "starmus/calibration-complete",
+                            payload: { calibration: data },
+                        });
+                    } else {
+                        store.dispatch({
+                            type: "starmus/calibration-update",
+                            message: msg,
+                            volumePercent: vol,
+                        });
+                    }
+                },
+                { captureProfile: activeCaptureProfileName() }
+            );
 
             // Store the calibrated stream for recording
             recorderRegistry.set(instanceId, {
@@ -182,7 +178,7 @@ export function initRecorder(store, instanceId) {
 
         try {
             stream = await navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfile()),
+                audio: getAudioConstraints(activeCaptureProfileName()),
             });
         } catch (err) {
             console.error("[Recorder] Cannot open microphone for recording:", err);
@@ -194,10 +190,14 @@ export function initRecorder(store, instanceId) {
         }
 
         const mimeType = getSupportedMimeType();
+        const captureProfile = activeCaptureProfileName();
         let mediaRecorder;
 
         try {
-            mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+            // ADR-035: the profile's encoder options are applied here, not
+            // merely declared. Constructing with only { mimeType } left
+            // `conversation`'s 32 kbps ceiling as dead configuration.
+            mediaRecorder = new MediaRecorder(stream, getRecorderOptions(captureProfile, mimeType));
         } catch (err) {
             console.error("[Recorder] MediaRecorder creation failed:", err);
             store.dispatch({
@@ -212,7 +212,7 @@ export function initRecorder(store, instanceId) {
         // silently satisfied by substituting a different one. The capture
         // profile travels with the asset so a consumer can tell whether a
         // measurement taken from it is admissible.
-        const attainment = describeAttainment(activeCaptureProfile(), stream.getAudioTracks()[0]);
+        const attainment = describeAttainment(captureProfile, stream.getAudioTracks()[0]);
         store.dispatch({ type: "starmus/capture-profile", attainment });
         if (!attainment.attained) {
             console.warn(
@@ -237,7 +237,7 @@ export function initRecorder(store, instanceId) {
                 if (!sharedAudioContext) {
                     // The meter must not force a rate the capture profile did not ask
                     // for; let the context follow the device for unconstrained profiles.
-                    const meterConstraints = getAudioConstraints(activeCaptureProfile());
+                    const meterConstraints = getAudioConstraints(activeCaptureProfileName());
                     sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(
                         meterConstraints.sampleRate ? { sampleRate: meterConstraints.sampleRate } : {}
                     );

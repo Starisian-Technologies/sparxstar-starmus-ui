@@ -147,12 +147,20 @@ product chose (ADR-035).
 
 - `conversation` carries the low-bandwidth numbers, and only that profile does
 - `documentation` and `import` constrain nothing this package has authority to set
-- Reports what the device actually delivered; never silently substitutes a profile
+- Echo cancellation and noise suppression are `conversation`'s, not the package's:
+  they are non-invertible processing, and material captured for measurement must
+  not arrive already processed
+- Limits are requested as `ideal`, never as `exact`/`max`. A mandatory constraint
+  the device cannot meet makes `getUserMedia` throw and the speaker cannot record
+  at all, which ADR-011's unconditional-capture rule forbids
+- Reports what the device actually delivered; never silently substitutes a profile.
+  A setting the device does not report is `unverified`, not attained
 - The `documentation` floor is OQ-021, owned by AIWA and the analysis owner
 
 **Public API**
 
 ```js
+activeCaptureProfileName()
 resolveCaptureProfile(name)
 getAudioConstraints(name)
 getRecorderOptions(name, mimeType)
@@ -161,7 +169,22 @@ describeAttainment(name, track)
 
 ---
 
-### 8. `appmode/starmus-audio.js` — Smart Audio Player
+### 8. `starmus-completion-event.js` — Completion Boundary
+
+**Responsibility**: The one home for `starmus:complete`, the boundary between
+capture and the platform audio lifecycle (ADR-034).
+
+- Builds the event detail from the upload result and the metadata that
+  travelled with the asset
+- Audio details come from the capture attainment record, never from constants
+- Emitted on every path that ends in a stored recording — an immediate upload
+  and a queued upload that later drains
+- Lives apart from `starmus-core.js` so the offline queue can emit the same
+  event without duplicating it, and without a circular import
+
+---
+
+### 9. `appmode/starmus-audio.js` — Smart Audio Player
 
 **Responsibility**: Optimised playback for recordings-list views on low-end devices.
 

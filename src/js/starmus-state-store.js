@@ -54,8 +54,13 @@
                 mimeType: "",
                 fileSize: 0,
             },
-            // ADR-035: the capture profile travels with the asset.
+            // ADR-035: the capture profile travels with the asset. The whole
+            // attainment record is kept — profile name, what was requested,
+            // what the device actually delivered — because a consumer needs
+            // all three to judge whether a measurement from this asset is
+            // admissible. Two derived booleans would not carry that.
             captureProfile: null,
+            captureAttainment: null,
         },
         calibration: {
             phase: null,
@@ -168,7 +173,7 @@
                 return merge(state, {
                     source: merge(state.source, {
                         captureProfile: action.attainment?.profile ?? null,
-                        captureProfileAttained: action.attainment?.attained ?? null,
+                        captureAttainment: action.attainment ?? null,
                     }),
                 });
 

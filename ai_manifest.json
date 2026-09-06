@@ -20,8 +20,6 @@
         { "symbol": "EnhancedCalibration",   "type": "class",    "owner": "Starisian", "path": "src/js/starmus-enhanced-calibration.js" },
         { "symbol": "sparxstarIntegration",  "type": "object",   "owner": "Starisian", "path": "src/js/starmus-sparxstar-integration.js" },
         { "symbol": "exposePeaksBridge",     "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
-        { "symbol": "StarmusTranscript",     "type": "class",    "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
-        { "symbol": "init",                  "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-controller.js" },
         { "symbol": "SmartAudioPlayer",      "type": "class",    "owner": "Starisian", "path": "src/js/appmode/starmus-audio.js" }
     ]
 }

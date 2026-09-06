@@ -409,7 +409,7 @@ Profiles live in `src/js/starmus-capture-profiles.js`.
 | FAIL | `conversation` profile: `sampleRate` > 16000 |
 | FAIL | `conversation` profile: `channels` > 1 |
 | FAIL | `conversation` profile: bitrate > 32 kbps |
-| FAIL | `conversation` profile: format is WAV or uncompressed PCM --- Opus or AAC-LC only |
+| *(held)* | Container/codec restriction --- **not enforced on any profile** until OQ-021 is ruled on; restricting formats now would answer that open question |
 | FAIL | `documentation` or `import` profile downsampled, transcoded or fold-down to mono |
 | FAIL | An asset uploaded without its capture profile recorded |
 | FAIL | A requested profile silently substituted instead of reported unattainable |

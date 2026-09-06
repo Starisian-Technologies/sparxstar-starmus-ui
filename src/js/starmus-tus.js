@@ -148,8 +148,7 @@ function createUploadId() {
         values[6] = (values[6] & 0x0f) | 0x40; // RFC 4122 version 4
         values[8] = (values[8] & 0x3f) | 0x80; // RFC 4122 variant
         const hex = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
-        const suffix = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-        return `starmus-upload-${suffix}`;
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
     throw new Error("Secure UUID generation is not available in this runtime");
 }
@@ -236,9 +235,14 @@ async function uploadDirect(
                     // Default successful HTTP responses to success: true, while
                     // still allowing an explicit server-provided success value
                     // (including false) to override the default.
-                    // Merge local uploadId so starmus:complete always has one,
-                    // preferring any uploadId the server returns.
-                    resolve({ success: true, uploadId, ...parsed });
+                    const success = Object.prototype.hasOwnProperty.call(parsed, "success")
+                        ? parsed.success
+                        : true;
+                    const parsedUploadId =
+                        typeof parsed.uploadId === "string" && parsed.uploadId.trim()
+                            ? parsed.uploadId
+                            : uploadId;
+                    resolve({ ...parsed, success, uploadId: parsedUploadId });
                 } catch {
                     resolve({ success: true, uploadId, raw: xhr.responseText });
                 }

@@ -180,9 +180,17 @@ async function uploadDirect(
     const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
         ? cfg.requestTimeoutMs
         : 5000;
-    const endpoint =
-        cfg.endpoints?.directUpload ||
-        "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
+    // ADR-034: this package holds no CMS path. The host injects the endpoint
+    // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
+    // package silently CMS-coupled and contradicted its own architecture doc.
+    // Failing loudly is correct — a default that posts a speaker's recording
+    // to a guessed URL is worse than not uploading it.
+    const endpoint = cfg.endpoints?.directUpload;
+    if (!endpoint) {
+        throw new Error(
+            "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
+        );
+    }
     const fields = normalizeFormFields(formFields);
 
     if (!(blob instanceof Blob)) {
@@ -238,10 +246,19 @@ async function uploadDirect(
                     const success = Object.prototype.hasOwnProperty.call(parsed, "success")
                         ? parsed.success
                         : true;
+                    // The server's identifier wins over the client-generated
+                    // one, in whichever spelling it arrives. Checking only
+                    // `uploadId` and writing the local id into that field made
+                    // the local id outrank a server `upload_id` downstream,
+                    // because completion reads `uploadId` first.
                     const parsedUploadId =
-                        typeof parsed.uploadId === "string" && parsed.uploadId.trim()
-                            ? parsed.uploadId
-                            : uploadId;
+                        [
+                            parsed.uploadId,
+                            parsed.upload_id,
+                            parsed.data?.uploadId,
+                            parsed.data?.upload_id,
+                        ].find((value) => typeof value === "string" && value.trim() !== "") ||
+                        uploadId;
                     resolve({ ...parsed, success, uploadId: parsedUploadId });
                 } catch {
                     resolve({ success: true, uploadId, raw: xhr.responseText });
@@ -291,10 +308,13 @@ export async function uploadTus(
 ) {
     const cfg = getConfig();
     const nonce = cfg.nonce || "";
-    const tusEndpoint =
-        cfg.endpoint ||
-        cfg.endpoints?.tus ||
-        "/wp-json/star-starmus-audio-recorder/v1/tus";
+    // ADR-034: host-injected, never a CMS path held by this package.
+    const tusEndpoint = cfg.endpoint || cfg.endpoints?.tus;
+    if (!tusEndpoint) {
+        throw new Error(
+            "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
+        );
+    }
     const fields = normalizeFormFields(formFields);
     const uploadId = createUploadId();
 

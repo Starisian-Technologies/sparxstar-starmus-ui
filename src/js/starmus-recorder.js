@@ -25,6 +25,13 @@
 import { CommandBus } from "./starmus-hooks.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 import { EnhancedCalibration } from "./starmus-enhanced-calibration.js";
+import {
+    activeCaptureProfileName,
+    describeAttainment,
+    getAudioConstraints,
+    getRecorderOptions,
+    resolveCaptureProfile,
+} from "./starmus-capture-profiles.js";
 
 /**
  * Registry of active recorder instances, keyed by instanceId.
@@ -92,17 +99,26 @@ export function initRecorder(store, instanceId) {
     async function startCalibration() {
         store.dispatch({ type: "starmus/calibration-start" });
 
+        // Resolve constraints before touching the microphone. An unknown
+        // profile name throws, and inside the getUserMedia try/catch that
+        // throw would be reported as MIC_DENIED — sending someone to check
+        // browser permissions for what is a bootstrap typo.
+        let constraints;
+        try {
+            constraints = getAudioConstraints(activeCaptureProfileName());
+        } catch (err) {
+            console.error("[Recorder] Invalid capture profile:", err);
+            store.dispatch({
+                type: "starmus/error",
+                error: { code: "INVALID_CAPTURE_PROFILE", message: err.message, retryable: false },
+            });
+            return;
+        }
+
         let stream;
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz
-                    channelCount: 1,
-                },
-            });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         } catch (err) {
             console.error("[Recorder] Microphone access denied:", err);
             store.dispatch({
@@ -116,20 +132,27 @@ export function initRecorder(store, instanceId) {
         await calibration.init();
 
         try {
-            const result = await calibration.performCalibration(stream, (msg, vol, done, data) => {
-                if (done) {
-                    store.dispatch({
-                        type: "starmus/calibration-complete",
-                        payload: { calibration: data },
-                    });
-                } else {
-                    store.dispatch({
-                        type: "starmus/calibration-update",
-                        message: msg,
-                        volumePercent: vol,
-                    });
-                }
-            });
+            // ADR-035: calibration analyses at the profile's rate. Forcing a
+            // 16 kHz AudioContext here would reintroduce the platform-wide
+            // ceiling for documentation and import sessions.
+            const result = await calibration.performCalibration(
+                stream,
+                (msg, vol, done, data) => {
+                    if (done) {
+                        store.dispatch({
+                            type: "starmus/calibration-complete",
+                            payload: { calibration: data },
+                        });
+                    } else {
+                        store.dispatch({
+                            type: "starmus/calibration-update",
+                            message: msg,
+                            volumePercent: vol,
+                        });
+                    }
+                },
+                { captureProfile: activeCaptureProfileName() }
+            );
 
             // Store the calibrated stream for recording
             recorderRegistry.set(instanceId, {
@@ -166,17 +189,24 @@ export function initRecorder(store, instanceId) {
      * @returns {Promise<void>}
      */
     async function startRecording() {
+        // Same as calibration: a bad profile name is a configuration error,
+        // not a permission error, and must not be reported as one.
+        let constraints;
+        try {
+            constraints = getAudioConstraints(activeCaptureProfileName());
+        } catch (err) {
+            console.error("[Recorder] Invalid capture profile:", err);
+            store.dispatch({
+                type: "starmus/error",
+                error: { code: "INVALID_CAPTURE_PROFILE", message: err.message, retryable: false },
+            });
+            return;
+        }
+
         let stream;
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 16000,
-                    channelCount: 1,
-                },
-            });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         } catch (err) {
             console.error("[Recorder] Cannot open microphone for recording:", err);
             store.dispatch({
@@ -187,10 +217,14 @@ export function initRecorder(store, instanceId) {
         }
 
         const mimeType = getSupportedMimeType();
+        const captureProfile = activeCaptureProfileName();
         let mediaRecorder;
 
         try {
-            mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+            // ADR-035: the profile's encoder options are applied here, not
+            // merely declared. Constructing with only { mimeType } left
+            // `conversation`'s 32 kbps ceiling as dead configuration.
+            mediaRecorder = new MediaRecorder(stream, getRecorderOptions(captureProfile, mimeType));
         } catch (err) {
             console.error("[Recorder] MediaRecorder creation failed:", err);
             store.dispatch({
@@ -199,6 +233,19 @@ export function initRecorder(store, instanceId) {
             });
             stream.getTracks().forEach((t) => t.stop());
             return;
+        }
+
+        // ADR-035: an unattainable profile is reported to the product, never
+        // silently satisfied by substituting a different one. The capture
+        // profile travels with the asset so a consumer can tell whether a
+        // measurement taken from it is admissible.
+        const attainment = describeAttainment(captureProfile, stream.getAudioTracks()[0]);
+        store.dispatch({ type: "starmus/capture-profile", attainment });
+        if (!attainment.attained) {
+            console.warn(
+                `[Recorder] Capture profile "${attainment.profile}" not attained by this device.`,
+                attainment
+            );
         }
 
         store.dispatch({ type: "starmus/mic-start" });
@@ -215,9 +262,16 @@ export function initRecorder(store, instanceId) {
         if (tier !== "C") {
             try {
                 if (!sharedAudioContext) {
-                    sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({
-                        sampleRate: 16000,
-                    });
+                    // The meter must not force a rate the capture profile did not ask
+                    // for; let the context follow the device for unconstrained profiles.
+                    // Take the rate from the profile, not from
+                    // getAudioConstraints(): those are MediaTrackConstraints,
+                    // where sampleRate is `{ ideal: n }`. AudioContext wants a
+                    // plain number and would throw or ignore the object.
+                    const meterSampleRate = resolveCaptureProfile(activeCaptureProfileName()).sampleRate;
+                    sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(
+                        meterSampleRate === null ? {} : { sampleRate: meterSampleRate }
+                    );
                 } else if (sharedAudioContext.state === "suspended") {
                     await sharedAudioContext.resume();
                 }

@@ -124,15 +124,27 @@ ready for processing.
 document.dispatchEvent(new CustomEvent('starmus:complete', {
   detail: {
     sessionId: string,
-    uploadId: string,       // TUS upload UUID
+    // The server's identifier when it returns one; otherwise the
+    // client-generated UUID that was sent as TUS `upload_uuid` metadata.
+    // Empty only when neither is present. Consumers cannot tell which they
+    // received, so do not treat this as proof the server acknowledged.
+    uploadId: string,
     durationMs: number,
-    sampleRate: number,     // must be ≤ 16000
-    channels: 1,
-    format: 'opus',         // or 'aac-lc' — never wav, never pcm
-    language: string,       // BCP-47 e.g. 'mnk' for Mandinka
+    // What the device actually delivered, not what the profile asked for.
+    // null means the device did not report it. ADR-035: never a constant.
+    sampleRate: number | null,
+    channels: number | null,
+    captureProfile: string | null,  // 'conversation' | 'documentation' | 'import'
+    captureProfileAttained: boolean | null,
+    // Named as captured. ADR-035 holds the container/codec restriction
+    // pending OQ-021, so this package reports the format it has rather than
+    // deciding an arriving format is inadmissible. The Spoken Audio Node
+    // rules on admissibility, where refusing does not cost the recording.
+    format: 'opus' | 'aac-lc' | 'wav' | 'mp3',
+    language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
-    consentGranted: true,
-    calibrationApplied: true,
+    consentGranted: boolean,
+    calibrationApplied: boolean,
   }
 }));
 ```
@@ -392,16 +404,37 @@ Accessibility --- WCAG 2.1 AA Required
 
 * * * * *
 
-Audio and Video --- CI Fail Conditions
-------------------------------------
+Audio --- CI Fail Conditions
+---------------------------
+
+Audio constraints belong to a **named capture profile**, never to a
+platform-wide ceiling (ADR-035). The limits below are the `conversation`
+profile's and apply to that profile only. Applying them to every recording
+destroys the source material that documentation, sound-to-IPA, tone and
+prosody work depend on.
+
+Profiles live in `src/js/starmus-capture-profiles.js`.
 
 | FAIL | Condition |
 | --- | --- |
-| FAIL | Audio `sampleRate` > 16000 |
-| FAIL | Audio `channels` > 1 |
-| FAIL | Audio bitrate > 32 kbps |
-| FAIL | Audio format is WAV or uncompressed PCM --- Opus or AAC-LC only |
+| FAIL | Any sample-rate, channel, bitrate or codec limit applied outside a profile |
+| FAIL | `conversation` profile: `sampleRate` > 16000 |
+| FAIL | `conversation` profile: `channels` > 1 |
+| FAIL | `conversation` profile: bitrate > 32 kbps |
+| *(held)* | Container/codec restriction --- **not enforced on any profile** until OQ-021 is ruled on; restricting formats now would answer that open question |
+| FAIL | `documentation` or `import` profile downsampled, transcoded or fold-down to mono |
+| FAIL | Echo cancellation or noise suppression requested on a profile whose `voiceProcessing` is false |
+| FAIL | A profile's numeric limit sent as a mandatory constraint (`exact`/`min`/`max`) rather than `ideal` |
+| FAIL | An unreported device setting counted as a profile attained |
+| FAIL | An asset uploaded without its capture profile recorded |
+| FAIL | `starmus:complete` not emitted on a queued upload that later drains |
+| FAIL | A requested profile silently substituted instead of reported unattainable |
 | FAIL | Recording starts automatically without explicit user action |
+
+The numeric floor for `documentation` is **not this repository's to set**. It
+is OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
+owner. Until it is ruled on, `documentation` constrains nothing and reports
+what the device delivered.
 
 * * * * *
 

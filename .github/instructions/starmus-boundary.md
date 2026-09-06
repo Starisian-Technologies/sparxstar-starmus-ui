@@ -8,7 +8,10 @@ rationale in this repository — cite the ADR number.
 
 ## Hold
 
-ADR-034, ADR-035 and ADR-036 are **Proposed**. They were filed so the boundary
+[ADR-034](https://github.com/Starisian-Technologies/sparxstar-architecture-governance-registry/blob/main/standards/decisions/ADR-034-capture-experience-vs-audio-lifecycle-split.md),
+[ADR-035](https://github.com/Starisian-Technologies/sparxstar-architecture-governance-registry/blob/main/standards/decisions/ADR-035-capture-profiles-not-a-platform-audio-ceiling.md) and
+[ADR-036](https://github.com/Starisian-Technologies/sparxstar-architecture-governance-registry/blob/main/standards/decisions/ADR-036-elicitation-pacing-is-not-acoustic-prosody.md) are
+**Proposed**. They were filed so the boundary
 is settled once before either coding agent moves files. **Do not restructure
 this repository, and do not change the audio limits in `AGENTS.md`, until they
 are Accepted.** Until then the rules currently in `AGENTS.md` still govern this
@@ -39,4 +42,7 @@ CMS.
   `documentation` profile are **not ours to pick**: they are OQ-021, open on
   AIWA and the acoustic-analysis owner.
 - **Transcript synchronization is not ours.** The reviewed transcript and any
-  translation are ESU's records (ADR-034).
+  translation are ESU's records (ADR-034) — ESU being the platform component
+  that holds reviewed transcript, translation and linguistic-interpretation
+  records. Its name is deliberately not expanded here: this repository is not
+  ESU's home, and a definition kept in two places drifts.

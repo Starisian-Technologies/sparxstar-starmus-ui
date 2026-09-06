@@ -21,7 +21,6 @@
 
 "use strict";
 
-import "./starmus-hooks.js";
 import { CommandBus } from "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";

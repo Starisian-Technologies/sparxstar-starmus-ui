@@ -180,9 +180,17 @@ async function uploadDirect(
     const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
         ? cfg.requestTimeoutMs
         : 5000;
-    const endpoint =
-        cfg.endpoints?.directUpload ||
-        "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
+    // ADR-034: this package holds no CMS path. The host injects the endpoint
+    // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
+    // package silently CMS-coupled and contradicted its own architecture doc.
+    // Failing loudly is correct — a default that posts a speaker's recording
+    // to a guessed URL is worse than not uploading it.
+    const endpoint = cfg.endpoints?.directUpload;
+    if (!endpoint) {
+        throw new Error(
+            "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
+        );
+    }
     const fields = normalizeFormFields(formFields);
 
     if (!(blob instanceof Blob)) {
@@ -300,10 +308,13 @@ export async function uploadTus(
 ) {
     const cfg = getConfig();
     const nonce = cfg.nonce || "";
-    const tusEndpoint =
-        cfg.endpoint ||
-        cfg.endpoints?.tus ||
-        "/wp-json/star-starmus-audio-recorder/v1/tus";
+    // ADR-034: host-injected, never a CMS path held by this package.
+    const tusEndpoint = cfg.endpoint || cfg.endpoints?.tus;
+    if (!tusEndpoint) {
+        throw new Error(
+            "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
+        );
+    }
     const fields = normalizeFormFields(formFields);
     const uploadId = createUploadId();
 

@@ -45,7 +45,8 @@ window.STARMUS_BOOTSTRAP = {
   // 'conversation' | 'documentation' | 'import'. Omitted means 'conversation'.
   captureProfile: string | undefined,
   // Upload endpoint is injected by the host. This package ships no default
-  // and holds no CMS path.
+  // and holds no CMS path: with no `restUrl`, uploads throw
+  // NO_UPLOAD_ENDPOINT rather than posting to a guessed route.
   uploadEndpoint: string | undefined,
 }
 ```

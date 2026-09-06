@@ -11801,15 +11801,25 @@
             onProgress = _args2.length > 5 ? _args2[5] : undefined;
             cfg = getConfig();
             nonce = cfg.nonce || "";
-            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
-            endpoint = ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload) || "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
-            fields = normalizeFormFields(formFields);
-            if (blob instanceof Blob) {
+            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000; // ADR-034: this package holds no CMS path. The host injects the endpoint
+            // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
+            // package silently CMS-coupled and contradicted its own architecture doc.
+            // Failing loudly is correct — a default that posts a speaker's recording
+            // to a guessed URL is worse than not uploading it.
+            endpoint = (_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload;
+            if (endpoint) {
               _context2.n = 1;
               break;
             }
-            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
           case 1:
+            fields = normalizeFormFields(formFields);
+            if (blob instanceof Blob) {
+              _context2.n = 2;
+              break;
+            }
+            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+          case 2:
             fd = new FormData();
             uploadId = createUploadId();
             fd.append("audio_file", blob, fileName);
@@ -11943,8 +11953,14 @@
             instanceId = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : "";
             _onProgress = _args3.length > 5 ? _args3[5] : undefined;
             cfg = getConfig();
-            nonce = cfg.nonce || "";
-            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus) || "/wp-json/star-starmus-audio-recorder/v1/tus";
+            nonce = cfg.nonce || ""; // ADR-034: host-injected, never a CMS path held by this package.
+            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus);
+            if (tusEndpoint) {
+              _context3.n = 1;
+              break;
+            }
+            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
+          case 1:
             fields = normalizeFormFields(formFields);
             uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
@@ -17297,42 +17313,65 @@
      */
     function _startCalibration() {
       _startCalibration = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee() {
-        var stream, calibration, result, _t, _t2;
+        var constraints, stream, calibration, result, _t, _t2, _t3;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
               store.dispatch({
                 type: "starmus/calibration-start"
               });
+
+              // Resolve constraints before touching the microphone. An unknown
+              // profile name throws, and inside the getUserMedia try/catch that
+              // throw would be reported as MIC_DENIED — sending someone to check
+              // browser permissions for what is a bootstrap typo.
               _context.p = 1;
-              _context.n = 2;
-              return navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfileName())
-              });
-            case 2:
-              stream = _context.v;
-              _context.n = 4;
+              constraints = getAudioConstraints(activeCaptureProfileName());
+              _context.n = 3;
               break;
+            case 2:
+              _context.p = 2;
+              _t = _context.v;
+              console.error("[Recorder] Invalid capture profile:", _t);
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  code: "INVALID_CAPTURE_PROFILE",
+                  message: _t.message,
+                  retryable: false
+                }
+              });
+              return _context.a(2);
             case 3:
               _context.p = 3;
-              _t = _context.v;
-              console.error("[Recorder] Microphone access denied:", _t);
+              _context.n = 4;
+              return navigator.mediaDevices.getUserMedia({
+                audio: constraints
+              });
+            case 4:
+              stream = _context.v;
+              _context.n = 6;
+              break;
+            case 5:
+              _context.p = 5;
+              _t2 = _context.v;
+              console.error("[Recorder] Microphone access denied:", _t2);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MIC_DENIED",
-                  message: _t.message,
+                  message: _t2.message,
                   retryable: true
                 }
               });
               return _context.a(2);
-            case 4:
+            case 6:
               calibration = new EnhancedCalibration();
-              _context.n = 5;
+              _context.n = 7;
               return calibration.init();
-            case 5:
-              _context.p = 5;
-              _context.n = 6;
+            case 7:
+              _context.p = 7;
+              _context.n = 8;
               return calibration.performCalibration(stream, function (msg, vol, done, data) {
                 if (done) {
                   store.dispatch({
@@ -17351,19 +17390,19 @@
               }, {
                 captureProfile: activeCaptureProfileName()
               });
-            case 6:
+            case 8:
               result = _context.v;
               // Store the calibrated stream for recording
               recorderRegistry.set(instanceId, _objectSpread2(_objectSpread2({}, recorderRegistry.get(instanceId) || {}), {}, {
                 calibrationResult: result,
                 stream: stream
               }));
-              _context.n = 8;
+              _context.n = 10;
               break;
-            case 7:
-              _context.p = 7;
-              _t2 = _context.v;
-              console.error("[Recorder] Calibration failed:", _t2);
+            case 9:
+              _context.p = 9;
+              _t3 = _context.v;
+              console.error("[Recorder] Calibration failed:", _t3);
               // Fallback: mark calibration complete with defaults
               store.dispatch({
                 type: "starmus/calibration-complete",
@@ -17378,15 +17417,15 @@
               recorderRegistry.set(instanceId, _objectSpread2(_objectSpread2({}, recorderRegistry.get(instanceId) || {}), {}, {
                 stream: stream
               }));
-            case 8:
+            case 10:
               // Stop calibration stream tracks — a new stream is opened at record start
               stream.getTracks().forEach(function (t) {
                 return t.stop();
               });
-            case 9:
+            case 11:
               return _context.a(2);
           }
-        }, _callee, null, [[5, 7], [1, 3]]);
+        }, _callee, null, [[7, 9], [3, 5], [1, 2]]);
       }));
       return _startCalibration.apply(this, arguments);
     }
@@ -17401,7 +17440,7 @@
      */
     function _startRecording() {
       _startRecording = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2() {
-        var stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
+        var constraints, stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t4, _t5, _t6;
         return _regenerator().w(function (_context2) {
           while (1) switch (_context2.p = _context2.n) {
             case 0:
@@ -17470,46 +17509,64 @@
                 return Math.min(100, Math.sqrt(sumSq / analyserData.length) * 200);
               };
               _context2.p = 1;
-              _context2.n = 2;
-              return navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfileName())
-              });
-            case 2:
-              stream = _context2.v;
-              _context2.n = 4;
+              constraints = getAudioConstraints(activeCaptureProfileName());
+              _context2.n = 3;
               break;
+            case 2:
+              _context2.p = 2;
+              _t4 = _context2.v;
+              console.error("[Recorder] Invalid capture profile:", _t4);
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  code: "INVALID_CAPTURE_PROFILE",
+                  message: _t4.message,
+                  retryable: false
+                }
+              });
+              return _context2.a(2);
             case 3:
               _context2.p = 3;
-              _t3 = _context2.v;
-              console.error("[Recorder] Cannot open microphone for recording:", _t3);
+              _context2.n = 4;
+              return navigator.mediaDevices.getUserMedia({
+                audio: constraints
+              });
+            case 4:
+              stream = _context2.v;
+              _context2.n = 6;
+              break;
+            case 5:
+              _context2.p = 5;
+              _t5 = _context2.v;
+              console.error("[Recorder] Cannot open microphone for recording:", _t5);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MIC_DENIED",
-                  message: _t3.message,
+                  message: _t5.message,
                   retryable: true
                 }
               });
               return _context2.a(2);
-            case 4:
+            case 6:
               mimeType = getSupportedMimeType();
               captureProfile = activeCaptureProfileName();
-              _context2.p = 5;
+              _context2.p = 7;
               // ADR-035: the profile's encoder options are applied here, not
               // merely declared. Constructing with only { mimeType } left
               // `conversation`'s 32 kbps ceiling as dead configuration.
               mediaRecorder = new MediaRecorder(stream, getRecorderOptions(captureProfile, mimeType));
-              _context2.n = 7;
+              _context2.n = 9;
               break;
-            case 6:
-              _context2.p = 6;
-              _t4 = _context2.v;
-              console.error("[Recorder] MediaRecorder creation failed:", _t4);
+            case 8:
+              _context2.p = 8;
+              _t6 = _context2.v;
+              console.error("[Recorder] MediaRecorder creation failed:", _t6);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MEDIARECORDER_FAILED",
-                  message: _t4.message,
+                  message: _t6.message,
                   retryable: false
                 }
               });
@@ -17517,7 +17574,7 @@
                 return t.stop();
               });
               return _context2.a(2);
-            case 7:
+            case 9:
               // ADR-035: an unattainable profile is reported to the product, never
               // silently satisfied by substituting a different one. The capture
               // profile travels with the asset so a consumer can tell whether a
@@ -17540,12 +17597,12 @@
               analyser = null;
               analyserData = null;
               if (!(tier !== "C")) {
-                _context2.n = 12;
+                _context2.n = 14;
                 break;
               }
-              _context2.p = 8;
+              _context2.p = 10;
               if (sharedAudioContext) {
-                _context2.n = 9;
+                _context2.n = 11;
                 break;
               }
               // The meter must not force a rate the capture profile did not ask
@@ -17554,28 +17611,28 @@
               sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterConstraints.sampleRate ? {
                 sampleRate: meterConstraints.sampleRate
               } : {});
-              _context2.n = 10;
+              _context2.n = 12;
               break;
-            case 9:
+            case 11:
               if (!(sharedAudioContext.state === "suspended")) {
-                _context2.n = 10;
+                _context2.n = 12;
                 break;
               }
-              _context2.n = 10;
+              _context2.n = 12;
               return sharedAudioContext.resume();
-            case 10:
+            case 12:
               source = sharedAudioContext.createMediaStreamSource(stream);
               analyser = sharedAudioContext.createAnalyser();
               analyser.fftSize = 256;
               analyser.smoothingTimeConstant = 0.6;
               source.connect(analyser);
               analyserData = new Uint8Array(analyser.fftSize);
-              _context2.n = 12;
+              _context2.n = 14;
               break;
-            case 11:
-              _context2.p = 11;
+            case 13:
+              _context2.p = 13;
               _context2.v;
-            case 12:
+            case 14:
               mediaRecorder.addEventListener("dataavailable", function (e) {
                 if (e.data && e.data.size > 0) {
                   chunks.push(e.data);
@@ -17636,10 +17693,10 @@
                   stopped();
                 }
               });
-            case 13:
+            case 15:
               return _context2.a(2);
           }
-        }, _callee2, null, [[8, 11], [5, 6], [1, 3]]);
+        }, _callee2, null, [[10, 13], [7, 8], [3, 5], [1, 2]]);
       }));
       return _startRecording.apply(this, arguments);
     }

@@ -98,12 +98,26 @@ export function initRecorder(store, instanceId) {
     async function startCalibration() {
         store.dispatch({ type: "starmus/calibration-start" });
 
+        // Resolve constraints before touching the microphone. An unknown
+        // profile name throws, and inside the getUserMedia try/catch that
+        // throw would be reported as MIC_DENIED — sending someone to check
+        // browser permissions for what is a bootstrap typo.
+        let constraints;
+        try {
+            constraints = getAudioConstraints(activeCaptureProfileName());
+        } catch (err) {
+            console.error("[Recorder] Invalid capture profile:", err);
+            store.dispatch({
+                type: "starmus/error",
+                error: { code: "INVALID_CAPTURE_PROFILE", message: err.message, retryable: false },
+            });
+            return;
+        }
+
         let stream;
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfileName()),
-            });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         } catch (err) {
             console.error("[Recorder] Microphone access denied:", err);
             store.dispatch({
@@ -174,12 +188,24 @@ export function initRecorder(store, instanceId) {
      * @returns {Promise<void>}
      */
     async function startRecording() {
+        // Same as calibration: a bad profile name is a configuration error,
+        // not a permission error, and must not be reported as one.
+        let constraints;
+        try {
+            constraints = getAudioConstraints(activeCaptureProfileName());
+        } catch (err) {
+            console.error("[Recorder] Invalid capture profile:", err);
+            store.dispatch({
+                type: "starmus/error",
+                error: { code: "INVALID_CAPTURE_PROFILE", message: err.message, retryable: false },
+            });
+            return;
+        }
+
         let stream;
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                audio: getAudioConstraints(activeCaptureProfileName()),
-            });
+            stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
         } catch (err) {
             console.error("[Recorder] Cannot open microphone for recording:", err);
             store.dispatch({

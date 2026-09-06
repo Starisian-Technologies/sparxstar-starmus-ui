@@ -25,6 +25,7 @@
 import { CommandBus } from "./starmus-hooks.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 import { EnhancedCalibration } from "./starmus-enhanced-calibration.js";
+import { getAudioConstraints, describeAttainment, DEFAULT_CAPTURE_PROFILE } from "./starmus-capture-profiles.js";
 
 /**
  * Registry of active recorder instances, keyed by instanceId.
@@ -73,6 +74,22 @@ function getSupportedMimeType() {
 const MAX_DURATION_SECONDS = 1200;
 
 /**
+ * The capture profile for this session, chosen by the calling product.
+ *
+ * ADR-035: constraints come from a named profile, never a platform-wide
+ * ceiling. The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent
+ * that, `conversation` is used, which preserves this package's previous
+ * behaviour exactly. An unknown name throws rather than being coerced — a
+ * profile is never silently substituted.
+ *
+ * @returns {import("./starmus-capture-profiles.js").CaptureProfileName}
+ */
+function activeCaptureProfile() {
+    const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    return bootstrap?.captureProfile || DEFAULT_CAPTURE_PROFILE;
+}
+
+/**
  * Initialises a recorder instance for a given store and instance ID.
  * Subscribes to the CommandBus for mic-start, mic-pause, mic-resume, and mic-stop.
  *
@@ -96,12 +113,7 @@ export function initRecorder(store, instanceId) {
 
         try {
             stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 16000, // Runtime policy: cap all tiers to 16kHz
-                    channelCount: 1,
-                },
+                audio: getAudioConstraints(activeCaptureProfile()),
             });
         } catch (err) {
             console.error("[Recorder] Microphone access denied:", err);
@@ -170,12 +182,7 @@ export function initRecorder(store, instanceId) {
 
         try {
             stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 16000,
-                    channelCount: 1,
-                },
+                audio: getAudioConstraints(activeCaptureProfile()),
             });
         } catch (err) {
             console.error("[Recorder] Cannot open microphone for recording:", err);
@@ -201,6 +208,19 @@ export function initRecorder(store, instanceId) {
             return;
         }
 
+        // ADR-035: an unattainable profile is reported to the product, never
+        // silently satisfied by substituting a different one. The capture
+        // profile travels with the asset so a consumer can tell whether a
+        // measurement taken from it is admissible.
+        const attainment = describeAttainment(activeCaptureProfile(), stream.getAudioTracks()[0]);
+        store.dispatch({ type: "starmus/capture-profile", attainment });
+        if (!attainment.attained) {
+            console.warn(
+                `[Recorder] Capture profile "${attainment.profile}" not attained by this device.`,
+                attainment
+            );
+        }
+
         store.dispatch({ type: "starmus/mic-start" });
 
         const chunks = [];
@@ -215,9 +235,12 @@ export function initRecorder(store, instanceId) {
         if (tier !== "C") {
             try {
                 if (!sharedAudioContext) {
-                    sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({
-                        sampleRate: 16000,
-                    });
+                    // The meter must not force a rate the capture profile did not ask
+                    // for; let the context follow the device for unconstrained profiles.
+                    const meterConstraints = getAudioConstraints(activeCaptureProfile());
+                    sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(
+                        meterConstraints.sampleRate ? { sampleRate: meterConstraints.sampleRate } : {}
+                    );
                 } else if (sharedAudioContext.state === "suspended") {
                     await sharedAudioContext.resume();
                 }

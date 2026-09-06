@@ -31,7 +31,7 @@ import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
  * Sirus will overwrite these values at runtime in Phase 3.
  * Do not hardcode feature logic outside of this object.
  *
- * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean, allowProsody: boolean }}
+ * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean }}
  */
 export const starmusCapabilities = {
     tier: "A",
@@ -39,7 +39,6 @@ export const starmusCapabilities = {
     allowCalibration: true,
     allowCanvas: true,
     allowLiveTranscript: true,
-    allowProsody: true,
 };
 
 /**
@@ -93,7 +92,6 @@ export function initCore(store, instanceId, env) {
             starmusCapabilities.allowCalibration = tier !== "C";
             starmusCapabilities.allowCanvas = tier !== "C";
             starmusCapabilities.allowLiveTranscript = tier !== "C";
-            starmusCapabilities.allowProsody = tier !== "C";
 
             store.dispatch({
                 type: "starmus/tier-ready",
@@ -128,7 +126,6 @@ export function initCore(store, instanceId, env) {
             starmusCapabilities.allowCalibration = tier !== "C";
             starmusCapabilities.allowCanvas = tier !== "C";
             starmusCapabilities.allowLiveTranscript = tier !== "C";
-            starmusCapabilities.allowProsody = tier !== "C";
 
             store.dispatch({ type: "starmus/tier-ready", payload: { tier } });
             window.dispatchEvent(

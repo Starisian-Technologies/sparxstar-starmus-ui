@@ -54,6 +54,8 @@
                 mimeType: "",
                 fileSize: 0,
             },
+            // ADR-035: the capture profile travels with the asset.
+            captureProfile: null,
         },
         calibration: {
             phase: null,
@@ -160,6 +162,14 @@
                         state.calibration,
                         merge(action.payload.calibration || {}, { complete: true }),
                     ),
+                });
+
+            case "starmus/capture-profile":
+                return merge(state, {
+                    source: merge(state.source, {
+                        captureProfile: action.attainment?.profile ?? null,
+                        captureProfileAttained: action.attainment?.attained ?? null,
+                    }),
                 });
 
             case "starmus/mic-start":

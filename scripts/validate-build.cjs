@@ -7,7 +7,6 @@ console.log("🔍 Validating build configuration...\n");
 
 const requiredFiles = [
     "src/starmus-audio.css",
-    "src/starmus-prosody-engine.css",
     "src/css/consent/starmus-consent.css",
     "src/js/starmus-hooks.js",
     "src/js/starmus-state-store.js",
@@ -21,8 +20,6 @@ const requiredFiles = [
     "src/js/starmus-ui.js",
     "src/js/starmus-core.js",
     "src/js/starmus-main.js",
-    "src/js/starmus-transcript-controller.js",
-    "src/js/prosody/starmus-prosody-engine.js",
     "src/js/appmode/starmus-audio.js",
 ];
 

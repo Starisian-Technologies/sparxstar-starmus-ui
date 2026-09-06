@@ -2566,7 +2566,7 @@
    * @param {function} handler - Handler called with (payload, meta)
    * @returns {function} Unsubscribe function
    */
-  function subscribe$1(command, handler) {
+  function subscribe(command, handler) {
     if (!registry[command]) {
       registry[command] = [];
     }
@@ -2614,7 +2614,7 @@
     /* console.log(..._args); */
   }
   var Bus = {
-    subscribe: subscribe$1,
+    subscribe: subscribe,
     dispatch: dispatch,
     debugLog: debugLog
   };
@@ -2748,7 +2748,9 @@
           duration: 0,
           mimeType: "",
           fileSize: 0
-        }
+        },
+        // ADR-035: the capture profile travels with the asset.
+        captureProfile: null
       },
       calibration: {
         phase: null,
@@ -2788,6 +2790,7 @@
       return out;
     }
     function reducer(state, action) {
+      var _action$attainment$pr, _action$attainment, _action$attainment$at, _action$attainment2;
       if (!action || !action.type) {
         return state;
       }
@@ -2858,6 +2861,13 @@
             calibration: merge(state.calibration, merge(action.payload.calibration || {}, {
               complete: true
             }))
+          });
+        case "starmus/capture-profile":
+          return merge(state, {
+            source: merge(state.source, {
+              captureProfile: (_action$attainment$pr = (_action$attainment = action.attainment) === null || _action$attainment === void 0 ? void 0 : _action$attainment.profile) !== null && _action$attainment$pr !== void 0 ? _action$attainment$pr : null,
+              captureProfileAttained: (_action$attainment$at = (_action$attainment2 = action.attainment) === null || _action$attainment2 === void 0 ? void 0 : _action$attainment2.attained) !== null && _action$attainment$at !== void 0 ? _action$attainment$at : null
+            })
           });
         case "starmus/mic-start":
           return merge(state, {
@@ -3027,89 +3037,7 @@
    */
   runtimeGlobal.StarmusStore.DEFAULT_INITIAL_STATE;
 
-  var es_regexp_exec = {};
-
-  var toString;
-  var hasRequiredToString;
-
-  function requireToString () {
-  	if (hasRequiredToString) return toString;
-  	hasRequiredToString = 1;
-  	var classof = requireClassof();
-
-  	var $String = String;
-
-  	toString = function (argument) {
-  	  if (classof(argument) === 'Symbol') throw new TypeError('Cannot convert a Symbol value to a string');
-  	  return $String(argument);
-  	};
-  	return toString;
-  }
-
-  var regexpFlags;
-  var hasRequiredRegexpFlags;
-
-  function requireRegexpFlags () {
-  	if (hasRequiredRegexpFlags) return regexpFlags;
-  	hasRequiredRegexpFlags = 1;
-  	var anObject = requireAnObject();
-
-  	// `RegExp.prototype.flags` getter implementation
-  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
-  	regexpFlags = function () {
-  	  var that = anObject(this);
-  	  var result = '';
-  	  if (that.hasIndices) result += 'd';
-  	  if (that.global) result += 'g';
-  	  if (that.ignoreCase) result += 'i';
-  	  if (that.multiline) result += 'm';
-  	  if (that.dotAll) result += 's';
-  	  if (that.unicode) result += 'u';
-  	  if (that.unicodeSets) result += 'v';
-  	  if (that.sticky) result += 'y';
-  	  return result;
-  	};
-  	return regexpFlags;
-  }
-
-  var regexpStickyHelpers;
-  var hasRequiredRegexpStickyHelpers;
-
-  function requireRegexpStickyHelpers () {
-  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
-  	hasRequiredRegexpStickyHelpers = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	var UNSUPPORTED_Y = fails(function () {
-  	  var re = $RegExp('a', 'y');
-  	  re.lastIndex = 2;
-  	  return re.exec('abcd') !== null;
-  	});
-
-  	// UC Browser bug
-  	// https://github.com/zloirock/core-js/issues/1008
-  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
-  	  return !$RegExp('a', 'y').sticky;
-  	});
-
-  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
-  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
-  	  var re = $RegExp('^r', 'gy');
-  	  re.lastIndex = 2;
-  	  return re.exec('str') !== null;
-  	});
-
-  	regexpStickyHelpers = {
-  	  BROKEN_CARET: BROKEN_CARET,
-  	  MISSED_STICKY: MISSED_STICKY,
-  	  UNSUPPORTED_Y: UNSUPPORTED_Y
-  	};
-  	return regexpStickyHelpers;
-  }
+  var es_array_find = {};
 
   var objectDefineProperties = {};
 
@@ -3262,6 +3190,215 @@
   	  return Properties === undefined ? result : definePropertiesModule.f(result, Properties);
   	};
   	return objectCreate;
+  }
+
+  var addToUnscopables;
+  var hasRequiredAddToUnscopables;
+
+  function requireAddToUnscopables () {
+  	if (hasRequiredAddToUnscopables) return addToUnscopables;
+  	hasRequiredAddToUnscopables = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var create = requireObjectCreate();
+  	var defineProperty = requireObjectDefineProperty().f;
+
+  	var UNSCOPABLES = wellKnownSymbol('unscopables');
+  	var ArrayPrototype = Array.prototype;
+
+  	// Array.prototype[@@unscopables]
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
+  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
+  	    configurable: true,
+  	    value: create(null)
+  	  });
+  	}
+
+  	// add a key to Array.prototype[@@unscopables]
+  	addToUnscopables = function (key) {
+  	  ArrayPrototype[UNSCOPABLES][key] = true;
+  	};
+  	return addToUnscopables;
+  }
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
+  }
+
+  requireEs_array_find();
+
+  var es_array_includes = {};
+
+  var hasRequiredEs_array_includes;
+
+  function requireEs_array_includes () {
+  	if (hasRequiredEs_array_includes) return es_array_includes;
+  	hasRequiredEs_array_includes = 1;
+  	var $ = require_export();
+  	var $includes = requireArrayIncludes().includes;
+  	var fails = requireFails();
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	// FF99+ bug
+  	var BROKEN_ON_SPARSE = fails(function () {
+  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
+  	  return !Array(1).includes();
+  	});
+
+  	// Safari 26.4- bug
+  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
+  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
+  	  return [, 1].includes(undefined, 1);
+  	});
+
+  	// `Array.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.includes
+  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
+  	  includes: function includes(el /* , fromIndex = 0 */) {
+  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables('includes');
+  	return es_array_includes;
+  }
+
+  requireEs_array_includes();
+
+  var es_object_keys = {};
+
+  var hasRequiredEs_object_keys;
+
+  function requireEs_object_keys () {
+  	if (hasRequiredEs_object_keys) return es_object_keys;
+  	hasRequiredEs_object_keys = 1;
+  	var $ = require_export();
+  	var toObject = requireToObject();
+  	var nativeKeys = requireObjectKeys();
+  	var fails = requireFails();
+
+  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
+
+  	// `Object.keys` method
+  	// https://tc39.es/ecma262/#sec-object.keys
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
+  	  keys: function keys(it) {
+  	    return nativeKeys(toObject(it));
+  	  }
+  	});
+  	return es_object_keys;
+  }
+
+  requireEs_object_keys();
+
+  var es_regexp_exec = {};
+
+  var toString;
+  var hasRequiredToString;
+
+  function requireToString () {
+  	if (hasRequiredToString) return toString;
+  	hasRequiredToString = 1;
+  	var classof = requireClassof();
+
+  	var $String = String;
+
+  	toString = function (argument) {
+  	  if (classof(argument) === 'Symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+  	  return $String(argument);
+  	};
+  	return toString;
+  }
+
+  var regexpFlags;
+  var hasRequiredRegexpFlags;
+
+  function requireRegexpFlags () {
+  	if (hasRequiredRegexpFlags) return regexpFlags;
+  	hasRequiredRegexpFlags = 1;
+  	var anObject = requireAnObject();
+
+  	// `RegExp.prototype.flags` getter implementation
+  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
+  	regexpFlags = function () {
+  	  var that = anObject(this);
+  	  var result = '';
+  	  if (that.hasIndices) result += 'd';
+  	  if (that.global) result += 'g';
+  	  if (that.ignoreCase) result += 'i';
+  	  if (that.multiline) result += 'm';
+  	  if (that.dotAll) result += 's';
+  	  if (that.unicode) result += 'u';
+  	  if (that.unicodeSets) result += 'v';
+  	  if (that.sticky) result += 'y';
+  	  return result;
+  	};
+  	return regexpFlags;
+  }
+
+  var regexpStickyHelpers;
+  var hasRequiredRegexpStickyHelpers;
+
+  function requireRegexpStickyHelpers () {
+  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
+  	hasRequiredRegexpStickyHelpers = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	var UNSUPPORTED_Y = fails(function () {
+  	  var re = $RegExp('a', 'y');
+  	  re.lastIndex = 2;
+  	  return re.exec('abcd') !== null;
+  	});
+
+  	// UC Browser bug
+  	// https://github.com/zloirock/core-js/issues/1008
+  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
+  	  return !$RegExp('a', 'y').sticky;
+  	});
+
+  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
+  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
+  	  var re = $RegExp('^r', 'gy');
+  	  re.lastIndex = 2;
+  	  return re.exec('str') !== null;
+  	});
+
+  	regexpStickyHelpers = {
+  	  BROKEN_CARET: BROKEN_CARET,
+  	  MISSED_STICKY: MISSED_STICKY,
+  	  UNSUPPORTED_Y: UNSUPPORTED_Y
+  	};
+  	return regexpStickyHelpers;
   }
 
   var regexpUnsupportedDotAll;
@@ -3452,6 +3589,101 @@
   }
 
   requireEs_regexp_exec();
+
+  var es_string_includes = {};
+
+  var isRegexp;
+  var hasRequiredIsRegexp;
+
+  function requireIsRegexp () {
+  	if (hasRequiredIsRegexp) return isRegexp;
+  	hasRequiredIsRegexp = 1;
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	// `IsRegExp` abstract operation
+  	// https://tc39.es/ecma262/#sec-isregexp
+  	isRegexp = function (it) {
+  	  var isRegExp;
+  	  return isObject(it) && ((isRegExp = it[MATCH]) !== undefined ? !!isRegExp : classof(it) === 'RegExp');
+  	};
+  	return isRegexp;
+  }
+
+  var notARegexp;
+  var hasRequiredNotARegexp;
+
+  function requireNotARegexp () {
+  	if (hasRequiredNotARegexp) return notARegexp;
+  	hasRequiredNotARegexp = 1;
+  	var isRegExp = requireIsRegexp();
+
+  	var $TypeError = TypeError;
+
+  	notARegexp = function (it) {
+  	  if (isRegExp(it)) {
+  	    throw new $TypeError("The method doesn't accept regular expressions");
+  	  } return it;
+  	};
+  	return notARegexp;
+  }
+
+  var correctIsRegexpLogic;
+  var hasRequiredCorrectIsRegexpLogic;
+
+  function requireCorrectIsRegexpLogic () {
+  	if (hasRequiredCorrectIsRegexpLogic) return correctIsRegexpLogic;
+  	hasRequiredCorrectIsRegexpLogic = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	correctIsRegexpLogic = function (METHOD_NAME) {
+  	  var regexp = /./;
+  	  try {
+  	    '/./'[METHOD_NAME](regexp);
+  	  } catch (error1) {
+  	    try {
+  	      regexp[MATCH] = false;
+  	      return '/./'[METHOD_NAME](regexp);
+  	    } catch (error2) { /* empty */ }
+  	  } return false;
+  	};
+  	return correctIsRegexpLogic;
+  }
+
+  var hasRequiredEs_string_includes;
+
+  function requireEs_string_includes () {
+  	if (hasRequiredEs_string_includes) return es_string_includes;
+  	hasRequiredEs_string_includes = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var notARegExp = requireNotARegexp();
+  	var requireObjectCoercible = requireRequireObjectCoercible();
+  	var toString = requireToString();
+  	var correctIsRegExpLogic = requireCorrectIsRegexpLogic();
+
+  	var stringIndexOf = uncurryThis(''.indexOf);
+
+  	// `String.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-string.prototype.includes
+  	$({ target: 'String', proto: true, forced: !correctIsRegExpLogic('includes') }, {
+  	  includes: function includes(searchString /* , position = 0 */) {
+  	    return !!~stringIndexOf(
+  	      toString(requireObjectCoercible(this)),
+  	      toString(notARegExp(searchString)),
+  	      arguments.length > 1 ? arguments[1] : undefined
+  	    );
+  	  }
+  	});
+  	return es_string_includes;
+  }
+
+  requireEs_string_includes();
 
   var es_string_trim = {};
 
@@ -3882,35 +4114,6 @@
   }
 
   requireEs_array_from();
-
-  var addToUnscopables;
-  var hasRequiredAddToUnscopables;
-
-  function requireAddToUnscopables () {
-  	if (hasRequiredAddToUnscopables) return addToUnscopables;
-  	hasRequiredAddToUnscopables = 1;
-  	var wellKnownSymbol = requireWellKnownSymbol();
-  	var create = requireObjectCreate();
-  	var defineProperty = requireObjectDefineProperty().f;
-
-  	var UNSCOPABLES = wellKnownSymbol('unscopables');
-  	var ArrayPrototype = Array.prototype;
-
-  	// Array.prototype[@@unscopables]
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
-  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
-  	    configurable: true,
-  	    value: create(null)
-  	  });
-  	}
-
-  	// add a key to Array.prototype[@@unscopables]
-  	addToUnscopables = function (key) {
-  	  ArrayPrototype[UNSCOPABLES][key] = true;
-  	};
-  	return addToUnscopables;
-  }
 
   var correctPrototypeGetter;
   var hasRequiredCorrectPrototypeGetter;
@@ -5152,32 +5355,6 @@
   }
 
   requireEs_object_entries();
-
-  var es_object_keys = {};
-
-  var hasRequiredEs_object_keys;
-
-  function requireEs_object_keys () {
-  	if (hasRequiredEs_object_keys) return es_object_keys;
-  	hasRequiredEs_object_keys = 1;
-  	var $ = require_export();
-  	var toObject = requireToObject();
-  	var nativeKeys = requireObjectKeys();
-  	var fails = requireFails();
-
-  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
-
-  	// `Object.keys` method
-  	// https://tc39.es/ecma262/#sec-object.keys
-  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
-  	  keys: function keys(it) {
-  	    return nativeKeys(toObject(it));
-  	  }
-  	});
-  	return es_object_keys;
-  }
-
-  requireEs_object_keys();
 
   var es_promise = {};
 
@@ -11690,8 +11867,7 @@
       var hex = Array.from(values, function (value) {
         return value.toString(16).padStart(2, "0");
       }).join("");
-      var suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
-      return "starmus-upload-".concat(suffix);
+      return "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
     }
     throw new Error("Secure UUID generation is not available in this runtime");
   }
@@ -11713,9 +11889,7 @@
   function uploadDirect(_x2, _x3) {
     return _uploadDirect.apply(this, arguments);
   }
-
   /* ---- TUS Upload ---- */
-
   /**
    * Uploads a recording blob using the TUS resumable-upload protocol.
    *
@@ -11803,10 +11977,20 @@
                 clearTimeout(timeout);
                 if (xhr.status >= 200 && xhr.status < 300) {
                   try {
-                    resolve(JSON.parse(xhr.responseText));
+                    var parsed = JSON.parse(xhr.responseText);
+                    // Default successful HTTP responses to success: true, while
+                    // still allowing an explicit server-provided success value
+                    // (including false) to override the default.
+                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
+                    var parsedUploadId = typeof parsed.uploadId === "string" && parsed.uploadId.trim() ? parsed.uploadId : uploadId;
+                    resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
+                      success: success,
+                      uploadId: parsedUploadId
+                    }));
                   } catch (_unused) {
                     resolve({
                       success: true,
+                      uploadId: uploadId,
                       raw: xhr.responseText
                     });
                   }
@@ -11910,7 +12094,7 @@
                 chunkSize: cfg.chunkSize,
                 retryDelays: cfg.retryDelays,
                 removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
-                checksumAlgorithm: "sha1",
+                checksumAlgorithm: "sha256",
                 metadata: tusMetadata,
                 headers: headers,
                 onProgress: function onProgress(bytesUploaded, bytesTotal) {
@@ -11925,7 +12109,8 @@
                   settled = true;
                   resolve({
                     success: true,
-                    url: upload.url
+                    url: upload.url,
+                    uploadId: uploadId
                   });
                 },
                 onError: function onError(err) {
@@ -12095,7 +12280,22 @@
     throw new Error("Secure UUID generation is not available in this runtime");
   }
 
-  /** @private */
+  /**
+   * @private
+   * Offline submission queue backed by IndexedDB.
+   *
+   * Eviction policy (currently implemented):
+   * - Entries are removed on successful upload.
+   * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
+   *   next processQueue run (they are not left orphaned indefinitely).
+   *
+   * Target eviction policy (Phase 3 — not yet implemented):
+   * - LRU, 20 MB maximum total queue size.
+   * - Entries older than 7 days are eligible for automatic eviction.
+   * - Eviction will run on queue initialization and after each successful upload.
+   *
+   * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
+   */
   var OfflineQueue = /*#__PURE__*/function () {
     function OfflineQueue() {
       _classCallCheck$9(this, OfflineQueue);
@@ -12423,30 +12623,33 @@
                 _iterator.s();
               case 7:
                 if ((_step = _iterator.n()).done) {
-                  _context6.n = 16;
+                  _context6.n = 17;
                   break;
                 }
                 item = _step.value;
                 id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId;
                 if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context6.n = 8;
+                  _context6.n = 9;
                   break;
                 }
-                return _context6.a(3, 15);
+                _context6.n = 8;
+                return this.remove(id);
               case 8:
+                return _context6.a(3, 16);
+              case 9:
                 if (!(item.lastAttempt !== null)) {
-                  _context6.n = 9;
+                  _context6.n = 10;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context6.n = 9;
+                  _context6.n = 10;
                   break;
                 }
-                return _context6.a(3, 15);
-              case 9:
-                _context6.p = 9;
-                _context6.n = 10;
+                return _context6.a(3, 16);
+              case 10:
+                _context6.p = 10;
+                _context6.n = 11;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -12454,59 +12657,59 @@
                   metadata: metadata,
                   instanceId: instanceId
                 });
-              case 10:
-                _context6.n = 11;
-                return this.remove(id);
               case 11:
-                _context6.n = 15;
-                break;
+                _context6.n = 12;
+                return this.remove(id);
               case 12:
-                _context6.p = 12;
+                _context6.n = 16;
+                break;
+              case 13:
+                _context6.p = 13;
                 _t = _context6.v;
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context6.n = 14;
+                  _context6.n = 15;
                   break;
                 }
-                _context6.n = 13;
+                _context6.n = 14;
                 return this.remove(id);
-              case 13:
-                _context6.n = 15;
-                break;
               case 14:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context6.n = 15;
-                return this._updateRetry(id, nextRetryCount, msg);
+                _context6.n = 16;
+                break;
               case 15:
+                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                _context6.n = 16;
+                return this._updateRetry(id, nextRetryCount, msg);
+              case 16:
                 _context6.n = 7;
                 break;
-              case 16:
-                _context6.n = 18;
-                break;
               case 17:
-                _context6.p = 17;
-                _t2 = _context6.v;
-                _iterator.e(_t2);
+                _context6.n = 19;
+                break;
               case 18:
                 _context6.p = 18;
-                _iterator.f();
-                return _context6.f(18);
+                _t2 = _context6.v;
+                _iterator.e(_t2);
               case 19:
-                _context6.n = 21;
-                break;
+                _context6.p = 19;
+                _iterator.f();
+                return _context6.f(19);
               case 20:
-                _context6.p = 20;
-                _t3 = _context6.v;
-                console.error("[Offline] Queue fatal:", _t3);
+                _context6.n = 22;
+                break;
               case 21:
                 _context6.p = 21;
-                this.isProcessing = false;
-                return _context6.f(21);
+                _t3 = _context6.v;
+                console.error("[Offline] Queue fatal:", _t3);
               case 22:
+                _context6.p = 22;
+                this.isProcessing = false;
+                return _context6.f(22);
+              case 23:
                 return _context6.a(2);
             }
-          }, _callee6, this, [[9, 12], [6, 17, 18, 19], [3, 20, 21, 22]]);
+          }, _callee6, this, [[10, 13], [6, 18, 19, 20], [3, 21, 22, 23]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -12720,8 +12923,21 @@
    * See the LICENSE file in the repository root for full license terms.
    */
 
-  var _window$StarmusHooks;
-  var subscribe = ((_window$StarmusHooks = window.StarmusHooks) === null || _window$StarmusHooks === void 0 ? void 0 : _window$StarmusHooks.subscribe) || function () {};
+
+  /**
+   * Mutable capability flags populated after tier resolution.
+   * Sirus will overwrite these values at runtime in Phase 3.
+   * Do not hardcode feature logic outside of this object.
+   *
+   * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean }}
+   */
+  var starmusCapabilities = {
+    tier: "A",
+    allowRecording: true,
+    allowCalibration: true,
+    allowCanvas: true,
+    allowLiveTranscript: true
+  };
 
   /**
    * Detects browser capability tier.
@@ -12763,6 +12979,13 @@
         tier: tier,
         sparxstar_available: sparxstarIntegration.isAvailable
       });
+
+      // Populate mutable capabilities — Sirus will overwrite these in Phase 3
+      starmusCapabilities.tier = tier;
+      starmusCapabilities.allowRecording = tier !== "C";
+      starmusCapabilities.allowCalibration = tier !== "C";
+      starmusCapabilities.allowCanvas = tier !== "C";
+      starmusCapabilities.allowLiveTranscript = tier !== "C";
       store.dispatch({
         type: "starmus/tier-ready",
         payload: {
@@ -12788,6 +13011,14 @@
     }).catch(function (error) {
       console.error("[Core] Environment initialisation failed:", error);
       var tier = detectTier();
+
+      // Populate mutable capabilities on the error path so consumers
+      // never observe stale Tier A defaults when init() rejects.
+      starmusCapabilities.tier = tier;
+      starmusCapabilities.allowRecording = tier !== "C";
+      starmusCapabilities.allowCalibration = tier !== "C";
+      starmusCapabilities.allowCanvas = tier !== "C";
+      starmusCapabilities.allowLiveTranscript = tier !== "C";
       store.dispatch({
         type: "starmus/tier-ready",
         payload: {
@@ -12814,7 +13045,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, metadata, result, _result$data, _result$data2, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, metadata, result, _completedSource$meta, _result$data, _result$data2, _completedSource$meta2, _completedState$env, _result$data3, _result$data4, completedState, completedSource, completedCalibration, mimeType, normalizedMimeType, normalizedFileName, resolvedExtension, resolveUploadFormat, format, contributorConsent, resolvedUploadId, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -12874,35 +13105,93 @@
                 payload: result
               });
 
-              // Fire redirect if server provided one
-              if (result && result.success) {
-                redirect = ((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url;
-                if (redirect) {
-                  setTimeout(function () {
-                    window.location.href = redirect;
-                  }, 1500);
+              // Emit starmus:complete — boundary between recording and server-side processing.
+              // Nothing downstream triggers until this event fires.
+              if (!(result && result.success)) {
+                _context.n = 6;
+                break;
+              }
+              completedState = store.getState();
+              completedSource = completedState.source || {};
+              completedCalibration = completedState.calibration || {};
+              mimeType = ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "";
+              normalizedMimeType = String(mimeType).trim().toLowerCase();
+              normalizedFileName = String(fileName || "").trim().toLowerCase();
+              resolvedExtension = normalizedFileName.includes(".") ? normalizedFileName.split(".").pop() : "";
+              resolveUploadFormat = function resolveUploadFormat(detectedMimeType, detectedExtension) {
+                if (detectedMimeType.includes("audio/mp4") || detectedMimeType.includes("audio/x-m4a") || detectedMimeType.includes("audio/aac") || detectedMimeType.includes("aac") || detectedMimeType.includes("mp4a") || detectedExtension === "m4a" || detectedExtension === "mp4" || detectedExtension === "aac") {
+                  return "aac-lc";
                 }
+                if (detectedMimeType.includes("audio/ogg") || detectedMimeType.includes("audio/opus") || detectedMimeType.includes("opus") || detectedExtension === "opus" || detectedExtension === "ogg") {
+                  return "opus";
+                }
+                if (detectedMimeType.includes("audio/wav") || detectedMimeType.includes("audio/wave") || detectedMimeType.includes("audio/x-wav") || detectedExtension === "wav") {
+                  return "wav";
+                }
+                if (detectedMimeType.includes("audio/mpeg") || detectedMimeType.includes("audio/mp3") || detectedExtension === "mp3") {
+                  return "mp3";
+                }
+                return null;
+              };
+              format = resolveUploadFormat(normalizedMimeType, resolvedExtension);
+              if (format) {
+                _context.n = 5;
+                break;
+              }
+              throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
+            case 5:
+              contributorConsent = function () {
+                try {
+                  var raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
+                  return raw ? JSON.parse(raw) : null;
+                } catch (_unused) {
+                  return null;
+                }
+              }();
+              resolvedUploadId = [result.uploadId, result.upload_id, (_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.uploadId, (_result$data2 = result.data) === null || _result$data2 === void 0 ? void 0 : _result$data2.upload_id].find(function (value) {
+                return typeof value === "string" && value.trim() !== "";
+              }) || "";
+              document.dispatchEvent(new CustomEvent("starmus:complete", {
+                detail: {
+                  sessionId: instanceId,
+                  uploadId: resolvedUploadId,
+                  durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
+                  sampleRate: 16000,
+                  channels: 1,
+                  format: format,
+                  language: completedSource.language || (formFields === null || formFields === void 0 ? void 0 : formFields.language) || "",
+                  contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
+                  consentGranted: !!(contributorConsent && contributorConsent.granted),
+                  calibrationApplied: !!completedCalibration.complete
+                }
+              }));
+              redirect = ((_result$data3 = result.data) === null || _result$data3 === void 0 ? void 0 : _result$data3.redirect_url) || result.redirect_url;
+              if (redirect) {
+                setTimeout(function () {
+                  window.location.href = redirect;
+                }, 1500);
+              }
 
-                // Notify parent frame (modal context) safely
-                if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
-                  try {
-                    if (window.parent && window.parent !== window) {
-                      void window.parent.location.href; // Throws if cross-origin
-                      if (window.parent.jQuery) {
-                        window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
-                          audioPostId: result.data.post_id
-                        }]);
-                      }
+              // Notify parent frame (modal context) safely
+              if ((_result$data4 = result.data) !== null && _result$data4 !== void 0 && _result$data4.post_id) {
+                try {
+                  if (window.parent && window.parent !== window) {
+                    void window.parent.location.href; // Throws if cross-origin
+                    if (window.parent.jQuery) {
+                      window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
+                        audioPostId: result.data.post_id
+                      }]);
                     }
-                  } catch (_unused) {
-                    // Cross-origin — silently skip
                   }
+                } catch (_unused2) {
+                  // Cross-origin — silently skip
                 }
               }
-              _context.n = 12;
+            case 6:
+              _context.n = 14;
               break;
-            case 5:
-              _context.p = 5;
+            case 7:
+              _context.p = 7;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -12915,31 +13204,31 @@
               message = _t && _t.message ? _t.message : String(_t);
               retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
               if (!retryableUploadError) {
-                _context.n = 11;
+                _context.n = 13;
                 break;
               }
-              _context.p = 6;
-              _context.n = 7;
+              _context.p = 8;
+              _context.n = 9;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
-            case 7:
+            case 9:
               submissionId = _context.v;
               store.dispatch({
                 type: "starmus/submit-queued",
                 submissionId: submissionId
               });
-              _context.n = 8;
+              _context.n = 10;
               return getPendingCount();
-            case 8:
+            case 10:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
                   count: pending
                 });
               }
-              _context.n = 10;
+              _context.n = 12;
               break;
-            case 9:
-              _context.p = 9;
+            case 11:
+              _context.p = 11;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
               store.dispatch({
@@ -12949,10 +13238,10 @@
                   retryable: false
                 }
               });
-            case 10:
-              _context.n = 12;
+            case 12:
+              _context.n = 14;
               break;
-            case 11:
+            case 13:
               store.dispatch({
                 type: "starmus/error",
                 error: {
@@ -12960,26 +13249,26 @@
                   retryable: false
                 }
               });
-            case 12:
+            case 14:
               return _context.a(2);
           }
-        }, _callee, null, [[6, 9], [2, 5]]);
+        }, _callee, null, [[8, 11], [2, 7]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }
-    subscribe("submit", function (payload, meta) {
+    Bus.subscribe("submit", function (payload, meta) {
       if (meta && meta.instanceId === instanceId) {
         handleSubmit(payload.formFields || {});
       }
     });
-    subscribe("reset", function (_p, meta) {
+    Bus.subscribe("reset", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
         store.dispatch({
           type: "starmus/reset"
         });
       }
     });
-    subscribe("continue", function (_p, meta) {
+    Bus.subscribe("continue", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
         store.dispatch({
           type: "starmus/ui/step-continue"
@@ -12993,45 +13282,6 @@
   if (typeof window !== "undefined") {
     window.initCore = initCore;
   }
-
-  var es_array_includes = {};
-
-  var hasRequiredEs_array_includes;
-
-  function requireEs_array_includes () {
-  	if (hasRequiredEs_array_includes) return es_array_includes;
-  	hasRequiredEs_array_includes = 1;
-  	var $ = require_export();
-  	var $includes = requireArrayIncludes().includes;
-  	var fails = requireFails();
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	// FF99+ bug
-  	var BROKEN_ON_SPARSE = fails(function () {
-  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
-  	  return !Array(1).includes();
-  	});
-
-  	// Safari 26.4- bug
-  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
-  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
-  	  return [, 1].includes(undefined, 1);
-  	});
-
-  	// `Array.prototype.includes` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.includes
-  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
-  	  includes: function includes(el /* , fromIndex = 0 */) {
-  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables('includes');
-  	return es_array_includes;
-  }
-
-  requireEs_array_includes();
 
   var web_domCollections_iterator = {};
 
@@ -16519,6 +16769,180 @@
     }]);
   }();
 
+  var es_object_freeze = {};
+
+  var hasRequiredEs_object_freeze;
+
+  function requireEs_object_freeze () {
+  	if (hasRequiredEs_object_freeze) return es_object_freeze;
+  	hasRequiredEs_object_freeze = 1;
+  	var $ = require_export();
+  	var FREEZING = requireFreezing();
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var onFreeze = requireInternalMetadata().onFreeze;
+
+  	// eslint-disable-next-line es/no-object-freeze -- safe
+  	var $freeze = Object.freeze;
+  	var FAILS_ON_PRIMITIVES = fails(function () { $freeze(1); });
+
+  	// `Object.freeze` method
+  	// https://tc39.es/ecma262/#sec-object.freeze
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES, sham: !FREEZING }, {
+  	  freeze: function freeze(it) {
+  	    return $freeze && isObject(it) ? $freeze(onFreeze(it)) : it;
+  	  }
+  	});
+  	return es_object_freeze;
+  }
+
+  requireEs_object_freeze();
+
+  /**
+   * @file starmus-capture-profiles.js
+   * @summary Named capture profiles. Audio constraints belong to a profile the
+   *          calling product chooses — never to a platform-wide ceiling.
+   *
+   * Governed by ADR-035. The 16 kHz / mono / 32 kbps limits that used to be
+   * applied to every recording in this package are a low-bandwidth
+   * conversational transport profile; held platform-wide they destroy the source
+   * material that documentation, sound-to-IPA, tone and prosody work depend on.
+   *
+   * The profile travels with the asset. A consumer reads it to decide whether a
+   * measurement taken from that asset is admissible.
+   *
+   * The numeric floor for `documentation` is deliberately NOT set here. It is
+   * OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
+   * owner. `null` means "do not constrain" — the device's own default is used
+   * and the real capability is reported back, rather than this package inventing
+   * a floor it has no authority to set.
+   */
+
+  /** @typedef {"conversation"|"documentation"|"import"} CaptureProfileName */
+
+  /**
+   * @type {Record<CaptureProfileName, {
+   *   name: CaptureProfileName,
+   *   sampleRate: number|null,
+   *   channelCount: number|null,
+   *   audioBitsPerSecond: number|null,
+   *   allowLossless: boolean,
+   *   transcode: boolean,
+   *   admissibleForMeasurement: boolean,
+   *   description: string
+   * }>}
+   */
+  var CAPTURE_PROFILES = Object.freeze({
+    /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
+    conversation: Object.freeze({
+      name: "conversation",
+      sampleRate: 16000,
+      channelCount: 1,
+      audioBitsPerSecond: 32000,
+      allowLossless: false,
+      transcode: true,
+      admissibleForMeasurement: false,
+      description: "Low-bandwidth conversational capture for interactive use."
+    }),
+    /**
+     * Highest quality the device can safely sustain, for material that will be
+     * measured. Not downsampled to a transport ceiling; not denied a lossless
+     * container. Floors are OQ-021 and not set in this package.
+     */
+    documentation: Object.freeze({
+      name: "documentation",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Highest safe source quality for material that will be measured."
+    }),
+    /** Prerecorded material, preserved unchanged. No transcode, resample or fold-down. */
+    import: Object.freeze({
+      name: "import",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Prerecorded material preserved byte-for-byte."
+    })
+  });
+
+  /** @type {CaptureProfileName} */
+  var DEFAULT_CAPTURE_PROFILE = "conversation";
+
+  /**
+   * Resolve a profile by name. An unknown name is a caller error and is not
+   * silently coerced into a different profile — ADR-035 forbids satisfying a
+   * request with something other than what was asked for.
+   *
+   * @param {CaptureProfileName|undefined|null} name
+   * @returns {typeof CAPTURE_PROFILES[CaptureProfileName]}
+   */
+  function resolveCaptureProfile(name) {
+    if (name === undefined || name === null) {
+      return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
+    }
+    var profile = CAPTURE_PROFILES[name];
+    if (!profile) {
+      throw new Error("Unknown capture profile \"".concat(String(name), "\". Expected one of: ").concat(Object.keys(CAPTURE_PROFILES).join(", "), "."));
+    }
+    return profile;
+  }
+
+  /**
+   * Build getUserMedia audio constraints for a profile. Keys the profile does
+   * not constrain are omitted entirely rather than sent as a null, so the
+   * browser applies its own default instead of failing the request.
+   *
+   * @param {CaptureProfileName} [name]
+   * @returns {MediaTrackConstraints}
+   */
+  function getAudioConstraints(name) {
+    var profile = resolveCaptureProfile(name);
+    /** @type {MediaTrackConstraints} */
+    var constraints = {
+      echoCancellation: true,
+      noiseSuppression: true
+    };
+    if (profile.sampleRate !== null) {
+      constraints.sampleRate = profile.sampleRate;
+    }
+    if (profile.channelCount !== null) {
+      constraints.channelCount = profile.channelCount;
+    }
+    return constraints;
+  }
+
+  /**
+   * Report what the device actually delivered against what the profile asked
+   * for. ADR-035: an unattainable profile is reported to the product, never
+   * silently satisfied by substituting a different one.
+   *
+   * @param {CaptureProfileName} name
+   * @param {MediaStreamTrack} track
+   * @returns {{ profile: CaptureProfileName, requested: object, actual: object, attained: boolean }}
+   */
+  function describeAttainment(name, track) {
+    var profile = resolveCaptureProfile(name);
+    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    var requested = {
+      sampleRate: profile.sampleRate,
+      channelCount: profile.channelCount
+    };
+    var attained = (profile.sampleRate === null || actual.sampleRate === undefined || actual.sampleRate >= profile.sampleRate) && (profile.channelCount === null || actual.channelCount === undefined || actual.channelCount === profile.channelCount);
+    return {
+      profile: profile.name,
+      requested: requested,
+      actual: actual,
+      attained: attained
+    };
+  }
+
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
    *
@@ -16585,6 +17009,22 @@
   var MAX_DURATION_SECONDS = 1200;
 
   /**
+   * The capture profile for this session, chosen by the calling product.
+   *
+   * ADR-035: constraints come from a named profile, never a platform-wide
+   * ceiling. The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent
+   * that, `conversation` is used, which preserves this package's previous
+   * behaviour exactly. An unknown name throws rather than being coerced — a
+   * profile is never silently substituted.
+   *
+   * @returns {import("./starmus-capture-profiles.js").CaptureProfileName}
+   */
+  function activeCaptureProfile() {
+    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    return (bootstrap === null || bootstrap === void 0 ? void 0 : bootstrap.captureProfile) || DEFAULT_CAPTURE_PROFILE;
+  }
+
+  /**
    * Initialises a recorder instance for a given store and instance ID.
    * Subscribes to the CommandBus for mic-start, mic-pause, mic-resume, and mic-stop.
    *
@@ -16621,13 +17061,7 @@
               _context.p = 1;
               _context.n = 2;
               return navigator.mediaDevices.getUserMedia({
-                audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  sampleRate: 16000,
-                  // Runtime policy: cap all tiers to 16kHz
-                  channelCount: 1
-                }
+                audio: getAudioConstraints(activeCaptureProfile())
               });
             case 2:
               stream = _context.v;
@@ -16711,9 +17145,15 @@
     function startRecording() {
       return _startRecording.apply(this, arguments);
     } // Subscribe to setup-mic and record commands
+    /**
+     * Dispatches a TIER_C_NO_MIC error and returns true when the current tier
+     * is "C", blocking any microphone command before the recorder runs.
+     *
+     * @returns {boolean} true if the command was blocked (Tier C), false otherwise
+     */
     function _startRecording() {
       _startRecording = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2() {
-        var stream, mimeType, mediaRecorder, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
+        var stream, mimeType, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
         return _regenerator().w(function (_context2) {
           while (1) switch (_context2.p = _context2.n) {
             case 0:
@@ -16784,12 +17224,7 @@
               _context2.p = 1;
               _context2.n = 2;
               return navigator.mediaDevices.getUserMedia({
-                audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  sampleRate: 16000,
-                  channelCount: 1
-                }
+                audio: getAudioConstraints(activeCaptureProfile())
               });
             case 2:
               stream = _context2.v;
@@ -16833,6 +17268,18 @@
               });
               return _context2.a(2);
             case 7:
+              // ADR-035: an unattainable profile is reported to the product, never
+              // silently satisfied by substituting a different one. The capture
+              // profile travels with the asset so a consumer can tell whether a
+              // measurement taken from it is admissible.
+              attainment = describeAttainment(activeCaptureProfile(), stream.getAudioTracks()[0]);
+              store.dispatch({
+                type: "starmus/capture-profile",
+                attainment: attainment
+              });
+              if (!attainment.attained) {
+                console.warn("[Recorder] Capture profile \"".concat(attainment.profile, "\" not attained by this device."), attainment);
+              }
               store.dispatch({
                 type: "starmus/mic-start"
               });
@@ -16851,9 +17298,12 @@
                 _context2.n = 9;
                 break;
               }
-              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
-              });
+              // The meter must not force a rate the capture profile did not ask
+              // for; let the context follow the device for unconstrained profiles.
+              meterConstraints = getAudioConstraints(activeCaptureProfile());
+              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterConstraints.sampleRate ? {
+                sampleRate: meterConstraints.sampleRate
+              } : {});
               _context2.n = 10;
               break;
             case 9:
@@ -16943,14 +17393,32 @@
       }));
       return _startRecording.apply(this, arguments);
     }
+    function blockIfTierC() {
+      if (store.getState().tier !== "C") {
+        return false;
+      }
+      store.dispatch({
+        type: "starmus/error",
+        error: {
+          code: "TIER_C_NO_MIC",
+          message: "Recording is not available on this device. Please upload a file.",
+          retryable: false
+        }
+      });
+      return true;
+    }
     Bus.subscribe("starmus/setup-mic", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
-        startCalibration();
+        if (!blockIfTierC()) {
+          startCalibration();
+        }
       }
     });
     Bus.subscribe("starmus/mic-start", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
-        startRecording();
+        if (!blockIfTierC()) {
+          startRecording();
+        }
       }
     });
 
@@ -17351,6 +17819,7 @@
       window.StarmusStoreInstance = store;
       window.StarmusRuntime = window.StarmusRuntime || {};
       window.StarmusRuntime.store = store;
+      window.StarmusRuntime.capabilities = starmusCapabilities;
       initOffline().catch(function (error) {
         console.warn("[StarmusMain] Offline queue unavailable, continuing:", error);
       });
@@ -17373,5 +17842,6 @@
   };
   window.StarmusOfflineQueue = getOfflineQueue;
   window.SparxstarIntegration = sparxstarIntegration;
+  window.StarmusCapabilities = starmusCapabilities;
 
 })();

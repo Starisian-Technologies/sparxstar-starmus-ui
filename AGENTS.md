@@ -392,16 +392,33 @@ Accessibility --- WCAG 2.1 AA Required
 
 * * * * *
 
-Audio and Video --- CI Fail Conditions
-------------------------------------
+Audio --- CI Fail Conditions
+---------------------------
+
+Audio constraints belong to a **named capture profile**, never to a
+platform-wide ceiling (ADR-035). The limits below are the `conversation`
+profile's and apply to that profile only. Applying them to every recording
+destroys the source material that documentation, sound-to-IPA, tone and
+prosody work depend on.
+
+Profiles live in `src/js/starmus-capture-profiles.js`.
 
 | FAIL | Condition |
 | --- | --- |
-| FAIL | Audio `sampleRate` > 16000 |
-| FAIL | Audio `channels` > 1 |
-| FAIL | Audio bitrate > 32 kbps |
-| FAIL | Audio format is WAV or uncompressed PCM --- Opus or AAC-LC only |
+| FAIL | Any sample-rate, channel, bitrate or codec limit applied outside a profile |
+| FAIL | `conversation` profile: `sampleRate` > 16000 |
+| FAIL | `conversation` profile: `channels` > 1 |
+| FAIL | `conversation` profile: bitrate > 32 kbps |
+| FAIL | `conversation` profile: format is WAV or uncompressed PCM --- Opus or AAC-LC only |
+| FAIL | `documentation` or `import` profile downsampled, transcoded or fold-down to mono |
+| FAIL | An asset uploaded without its capture profile recorded |
+| FAIL | A requested profile silently substituted instead of reported unattainable |
 | FAIL | Recording starts automatically without explicit user action |
+
+The numeric floor for `documentation` is **not this repository's to set**. It
+is OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
+owner. Until it is ruled on, `documentation` constrains nothing and reports
+what the device delivered.
 
 * * * * *
 

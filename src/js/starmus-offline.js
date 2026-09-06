@@ -347,8 +347,12 @@ class OfflineQueue {
         }
 
         networkListenerInstalled = true;
-        window.addEventListener("online", () => this.processQueue(), { passive: true });
-    }
+        window.addEventListener("online", () => void this.processQueue());
+
+        // Flush pending items on startup when already online.
+        if (navigator.onLine) {
+            void this.processQueue();
+        }
 
     /** @private */
     _notifyQueueUpdate() {

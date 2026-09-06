@@ -12281,8 +12281,16 @@
   }
 
   /**
-   * Pick the server's upload identifier out of a result, in whichever spelling
-   * it arrived, falling back to nothing rather than to a guess.
+   * Pick the upload identifier out of a result, in whichever spelling it
+   * arrived, or an empty string when the result carries none.
+   *
+   * This cannot tell a server-issued identifier from a client-generated one:
+   * `uploadDirect` already writes the client's UUID into `uploadId` when the
+   * server returns no identifier of its own, so by the time a result reaches
+   * here the two are indistinguishable. That fallback is deliberate — the same
+   * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
+   * handle rather than a guess — but this function does not verify the origin,
+   * and callers must not assume it did.
    *
    * @param {Object} result
    * @returns {string}
@@ -12756,7 +12764,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
+          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.p = _context6.n) {
               case 0:
@@ -12831,7 +12839,7 @@
                 // drains is as complete as an immediate one, so it fires
                 // here too — and it fires before `remove()`, because
                 // removal destroys the metadata the event is built from.
-                emitCompletionEvent(buildCompletionDetail({
+                detail = buildCompletionDetail({
                   instanceId: instanceId,
                   result: result,
                   metadata: metadata,
@@ -12842,7 +12850,30 @@
                   language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
                   contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
                   calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
-                }));
+                });
+                if (detail) {
+                  emitCompletionEvent(detail);
+                } else {
+                  // The upload succeeded but the format cannot be named,
+                  // so no consumer can be told this asset exists. The
+                  // entry is still removed — the asset is on the server
+                  // and re-uploading it on every future drain would burn
+                  // bandwidth the contributor is paying for without ever
+                  // producing a nameable format. What must not happen is
+                  // this passing in silence, so it is reported.
+                  console.error("[Offline] Uploaded but could not build starmus:complete:", {
+                    id: id,
+                    fileName: fileName,
+                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
+                  });
+                  sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                    submissionId: id,
+                    instanceId: instanceId,
+                    fileName: fileName,
+                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                  });
+                }
                 _context6.n = 12;
                 return this.remove(id);
               case 12:

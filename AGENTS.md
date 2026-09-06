@@ -124,7 +124,11 @@ ready for processing.
 document.dispatchEvent(new CustomEvent('starmus:complete', {
   detail: {
     sessionId: string,
-    uploadId: string,               // server's id, or '' if it returned none
+    // The server's identifier when it returns one; otherwise the
+    // client-generated UUID that was sent as TUS `upload_uuid` metadata.
+    // Empty only when neither is present. Consumers cannot tell which they
+    // received, so do not treat this as proof the server acknowledged.
+    uploadId: string,
     durationMs: number,
     // What the device actually delivered, not what the profile asked for.
     // null means the device did not report it. ADR-035: never a constant.

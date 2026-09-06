@@ -148,8 +148,7 @@ function createUploadId() {
         values[6] = (values[6] & 0x0f) | 0x40; // RFC 4122 version 4
         values[8] = (values[8] & 0x3f) | 0x80; // RFC 4122 variant
         const hex = Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
-        const suffix = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-        return `starmus-upload-${suffix}`;
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
     }
     throw new Error("Secure UUID generation is not available in this runtime");
 }
@@ -168,7 +167,7 @@ function createUploadId() {
  * @param {function} [onProgress] - Progress callback (loaded, total)
  * @returns {Promise<Object>} Server response
  */
-export async function uploadDirect(
+async function uploadDirect(
     blob,
     fileName,
     formFields = {},
@@ -232,9 +231,20 @@ export async function uploadDirect(
             clearTimeout(timeout);
             if (xhr.status >= 200 && xhr.status < 300) {
                 try {
-                    resolve(JSON.parse(xhr.responseText));
+                    const parsed = JSON.parse(xhr.responseText);
+                    // Default successful HTTP responses to success: true, while
+                    // still allowing an explicit server-provided success value
+                    // (including false) to override the default.
+                    const success = Object.prototype.hasOwnProperty.call(parsed, "success")
+                        ? parsed.success
+                        : true;
+                    const parsedUploadId =
+                        typeof parsed.uploadId === "string" && parsed.uploadId.trim()
+                            ? parsed.uploadId
+                            : uploadId;
+                    resolve({ ...parsed, success, uploadId: parsedUploadId });
                 } catch {
-                    resolve({ success: true, raw: xhr.responseText });
+                    resolve({ success: true, uploadId, raw: xhr.responseText });
                 }
             } else {
                 reject(new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`));
@@ -318,7 +328,7 @@ export async function uploadTus(
             chunkSize: cfg.chunkSize,
             retryDelays: cfg.retryDelays,
             removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
-            checksumAlgorithm: "sha1",
+            checksumAlgorithm: "sha256",
             metadata: tusMetadata,
             headers,
 
@@ -333,7 +343,7 @@ export async function uploadTus(
                     clearTimeout(timeoutId);
                 }
                 settled = true;
-                resolve({ success: true, url: upload.url });
+                resolve({ success: true, url: upload.url, uploadId });
             },
 
             onError(err) {

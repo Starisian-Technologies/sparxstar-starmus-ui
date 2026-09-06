@@ -365,15 +365,41 @@ export function initRecorder(store, instanceId) {
     }
 
     // Subscribe to setup-mic and record commands
+
+    /**
+     * Dispatches a TIER_C_NO_MIC error and returns true when the current tier
+     * is "C", blocking any microphone command before the recorder runs.
+     *
+     * @returns {boolean} true if the command was blocked (Tier C), false otherwise
+     */
+    function blockIfTierC() {
+        if (store.getState().tier !== "C") {
+            return false;
+        }
+        store.dispatch({
+            type: "starmus/error",
+            error: {
+                code: "TIER_C_NO_MIC",
+                message: "Recording is not available on this device. Please upload a file.",
+                retryable: false,
+            },
+        });
+        return true;
+    }
+
     CommandBus.subscribe("starmus/setup-mic", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
-            startCalibration();
+            if (!blockIfTierC()) {
+                startCalibration();
+            }
         }
     });
 
     CommandBus.subscribe("starmus/mic-start", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
-            startRecording();
+            if (!blockIfTierC()) {
+                startRecording();
+            }
         }
     });
 

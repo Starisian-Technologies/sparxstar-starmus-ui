@@ -21,12 +21,26 @@
 
 "use strict";
 
-import "./starmus-hooks.js";
+import { CommandBus } from "./starmus-hooks.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
-const subscribe = window.StarmusHooks?.subscribe || function () {};
+/**
+ * Mutable capability flags populated after tier resolution.
+ * Sirus will overwrite these values at runtime in Phase 3.
+ * Do not hardcode feature logic outside of this object.
+ *
+ * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean, allowProsody: boolean }}
+ */
+export const starmusCapabilities = {
+    tier: "A",
+    allowRecording: true,
+    allowCalibration: true,
+    allowCanvas: true,
+    allowLiveTranscript: true,
+    allowProsody: true,
+};
 
 /**
  * Detects browser capability tier.
@@ -73,6 +87,14 @@ export function initCore(store, instanceId, env) {
                 sparxstar_available: sparxstarIntegration.isAvailable,
             };
 
+            // Populate mutable capabilities — Sirus will overwrite these in Phase 3
+            starmusCapabilities.tier = tier;
+            starmusCapabilities.allowRecording = tier !== "C";
+            starmusCapabilities.allowCalibration = tier !== "C";
+            starmusCapabilities.allowCanvas = tier !== "C";
+            starmusCapabilities.allowLiveTranscript = tier !== "C";
+            starmusCapabilities.allowProsody = tier !== "C";
+
             store.dispatch({
                 type: "starmus/tier-ready",
                 payload: { tier },
@@ -98,6 +120,16 @@ export function initCore(store, instanceId, env) {
         .catch((error) => {
             console.error("[Core] Environment initialisation failed:", error);
             const tier = detectTier();
+
+            // Populate mutable capabilities on the error path so consumers
+            // never observe stale Tier A defaults when init() rejects.
+            starmusCapabilities.tier = tier;
+            starmusCapabilities.allowRecording = tier !== "C";
+            starmusCapabilities.allowCalibration = tier !== "C";
+            starmusCapabilities.allowCanvas = tier !== "C";
+            starmusCapabilities.allowLiveTranscript = tier !== "C";
+            starmusCapabilities.allowProsody = tier !== "C";
+
             store.dispatch({ type: "starmus/tier-ready", payload: { tier } });
             window.dispatchEvent(
                 new CustomEvent("starmus-ready", { detail: { instanceId, tier } }),
@@ -163,8 +195,105 @@ export function initCore(store, instanceId, env) {
 
             store.dispatch({ type: "starmus/submit-complete", payload: result });
 
-            // Fire redirect if server provided one
+            // Emit starmus:complete — boundary between recording and server-side processing.
+            // Nothing downstream triggers until this event fires.
             if (result && result.success) {
+                const completedState = store.getState();
+                const completedSource = completedState.source || {};
+                const completedCalibration = completedState.calibration || {};
+                const mimeType = completedSource.metadata?.mimeType || audioBlob.type || "";
+                const normalizedMimeType = String(mimeType).trim().toLowerCase();
+                const normalizedFileName = String(fileName || "").trim().toLowerCase();
+                const resolvedExtension = normalizedFileName.includes(".")
+                    ? normalizedFileName.split(".").pop()
+                    : "";
+                const resolveUploadFormat = (detectedMimeType, detectedExtension) => {
+                    if (
+                        detectedMimeType.includes("audio/mp4") ||
+                        detectedMimeType.includes("audio/x-m4a") ||
+                        detectedMimeType.includes("audio/aac") ||
+                        detectedMimeType.includes("aac") ||
+                        detectedMimeType.includes("mp4a") ||
+                        detectedExtension === "m4a" ||
+                        detectedExtension === "mp4" ||
+                        detectedExtension === "aac"
+                    ) {
+                        return "aac-lc";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/ogg") ||
+                        detectedMimeType.includes("audio/opus") ||
+                        detectedMimeType.includes("opus") ||
+                        detectedExtension === "opus" ||
+                        detectedExtension === "ogg"
+                    ) {
+                        return "opus";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/wav") ||
+                        detectedMimeType.includes("audio/wave") ||
+                        detectedMimeType.includes("audio/x-wav") ||
+                        detectedExtension === "wav"
+                    ) {
+                        return "wav";
+                    }
+
+                    if (
+                        detectedMimeType.includes("audio/mpeg") ||
+                        detectedMimeType.includes("audio/mp3") ||
+                        detectedExtension === "mp3"
+                    ) {
+                        return "mp3";
+                    }
+
+                    return null;
+                };
+                const format = resolveUploadFormat(normalizedMimeType, resolvedExtension);
+
+                if (!format) {
+                    throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
+                }
+
+                const contributorConsent = (() => {
+                    try {
+                        const raw =
+                            typeof localStorage !== "undefined"
+                                ? localStorage.getItem("starmus_contributor_consent")
+                                : null;
+                        return raw ? JSON.parse(raw) : null;
+                    } catch {
+                        return null;
+                    }
+                })();
+                const resolvedUploadId = [
+                    result.uploadId,
+                    result.upload_id,
+                    result.data?.uploadId,
+                    result.data?.upload_id,
+                ].find((value) => typeof value === "string" && value.trim() !== "") || "";
+
+                document.dispatchEvent(
+                    new CustomEvent("starmus:complete", {
+                        detail: {
+                            sessionId: instanceId,
+                            uploadId: resolvedUploadId,
+                            durationMs: Math.round(
+                                (completedSource.metadata?.duration || 0) * 1000,
+                            ),
+                            sampleRate: 16000,
+                            channels: 1,
+                            format,
+                            language: completedSource.language || formFields?.language || "",
+                            contributorId:
+                                completedState.env?.identifiers?.visitorId || "",
+                            consentGranted: !!(contributorConsent && contributorConsent.granted),
+                            calibrationApplied: !!(completedCalibration.complete),
+                        },
+                    }),
+                );
+
                 const redirect = result.data?.redirect_url || result.redirect_url;
                 if (redirect) {
                     setTimeout(() => {
@@ -239,19 +368,19 @@ export function initCore(store, instanceId, env) {
         }
     }
 
-    subscribe("submit", (payload, meta) => {
+    CommandBus.subscribe("submit", (payload, meta) => {
         if (meta && meta.instanceId === instanceId) {
             handleSubmit(payload.formFields || {});
         }
     });
 
-    subscribe("reset", (_p, meta) => {
+    CommandBus.subscribe("reset", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
             store.dispatch({ type: "starmus/reset" });
         }
     });
 
-    subscribe("continue", (_p, meta) => {
+    CommandBus.subscribe("continue", (_p, meta) => {
         if (meta && meta.instanceId === instanceId) {
             store.dispatch({ type: "starmus/ui/step-continue" });
         }

@@ -102,6 +102,61 @@ if (fs.existsSync(mainFile)) {
     }
 }
 
+// ---- CHECK TUS CONSTRAINTS ----
+const tusFile = "src/js/starmus-tus.js";
+if (fs.existsSync(tusFile)) {
+    const tusContent = fs.readFileSync(tusFile, "utf8");
+
+    // Verify the runtime chunk size cap enforces ≤ 512 KB via Math.min.
+    // Use lazy [\s\S]*? so the match crosses newlines and function call parens.
+    const chunkCapPattern = /Math\.min\([\s\S]*?512\s*\*\s*1024/;
+    if (!chunkCapPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: Runtime chunk size cap not found. Expected Math.min(…, 512 * 1024).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ TUS chunk size runtime cap (Math.min ≤ 512 KB) enforced");
+    }
+
+    // Verify uploadTus is exported as a function (not just mentioned in a comment/import).
+    const exportTusPattern = /export\s+(?:async\s+)?function\s+uploadTus\b/;
+    if (!exportTusPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: Missing exported uploadTus function (primary chunked upload path).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ Exported uploadTus function is present");
+    }
+
+    // Verify checksumAlgorithm is explicitly configured to SHA-256 and not SHA-1.
+    const checksumSha256Pattern = /checksumAlgorithm\s*[:=]\s*["']sha256["']/;
+    const checksumSha1Pattern = /checksumAlgorithm\s*[:=]\s*["']sha1["']/;
+
+    if (checksumSha1Pattern.test(tusContent) || !checksumSha256Pattern.test(tusContent)) {
+        console.log(
+            '❌ starmus-tus.js: checksumAlgorithm must be explicitly set to "sha256" and must not use "sha1".',
+        );
+        ok = false;
+    } else {
+        console.log('✅ TUS checksumAlgorithm is "sha256"');
+    }
+
+    // Verify uploadDirect is NOT exported (full-file uploads violate chunked-only constraint).
+    // The function may remain as a module-private internal fallback, but it must never
+    // be part of the public API surface that external callers can invoke directly.
+    const exportDirectPattern = /export\s+(?:async\s+)?function\s+uploadDirect\b/;
+    if (exportDirectPattern.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: uploadDirect must not be exported. Full-file upload violates the chunked-only constraint (AGENTS.md: 'Full-file upload endpoint present' is a FAIL).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ No exported full-file upload endpoint (chunked-only constraint satisfied)");
+    }
+}
+
 // ---- FINAL EXIT ----
 if (!ok) {
     console.log("\n⚠️  Validation failed. Fix the issues above before bundling.");

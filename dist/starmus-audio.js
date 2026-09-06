@@ -17440,7 +17440,7 @@
      */
     function _startRecording() {
       _startRecording = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2() {
-        var constraints, stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterConstraints, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t4, _t5, _t6;
+        var constraints, stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterSampleRate, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t4, _t5, _t6;
         return _regenerator().w(function (_context2) {
           while (1) switch (_context2.p = _context2.n) {
             case 0:
@@ -17607,10 +17607,14 @@
               }
               // The meter must not force a rate the capture profile did not ask
               // for; let the context follow the device for unconstrained profiles.
-              meterConstraints = getAudioConstraints(activeCaptureProfileName());
-              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterConstraints.sampleRate ? {
-                sampleRate: meterConstraints.sampleRate
-              } : {});
+              // Take the rate from the profile, not from
+              // getAudioConstraints(): those are MediaTrackConstraints,
+              // where sampleRate is `{ ideal: n }`. AudioContext wants a
+              // plain number and would throw or ignore the object.
+              meterSampleRate = resolveCaptureProfile(activeCaptureProfileName()).sampleRate;
+              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterSampleRate === null ? {} : {
+                sampleRate: meterSampleRate
+              });
               _context2.n = 12;
               break;
             case 11:

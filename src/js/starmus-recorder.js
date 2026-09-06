@@ -30,6 +30,7 @@ import {
     describeAttainment,
     getAudioConstraints,
     getRecorderOptions,
+    resolveCaptureProfile,
 } from "./starmus-capture-profiles.js";
 
 /**
@@ -263,9 +264,13 @@ export function initRecorder(store, instanceId) {
                 if (!sharedAudioContext) {
                     // The meter must not force a rate the capture profile did not ask
                     // for; let the context follow the device for unconstrained profiles.
-                    const meterConstraints = getAudioConstraints(activeCaptureProfileName());
+                    // Take the rate from the profile, not from
+                    // getAudioConstraints(): those are MediaTrackConstraints,
+                    // where sampleRate is `{ ideal: n }`. AudioContext wants a
+                    // plain number and would throw or ignore the object.
+                    const meterSampleRate = resolveCaptureProfile(activeCaptureProfileName()).sampleRate;
                     sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(
-                        meterConstraints.sampleRate ? { sampleRate: meterConstraints.sampleRate } : {}
+                        meterSampleRate === null ? {} : { sampleRate: meterSampleRate }
                     );
                 } else if (sharedAudioContext.state === "suspended") {
                     await sharedAudioContext.resume();

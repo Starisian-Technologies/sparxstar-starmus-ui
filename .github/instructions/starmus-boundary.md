@@ -6,22 +6,19 @@
 Role assignment lives here; the reason lives in the ADR. Do not restate the
 rationale in this repository — cite the ADR number.
 
-## Merge gate
+## Decision status
 
-ADR-034, ADR-035 and ADR-036 are **Proposed**, on
-[registry#41](https://github.com/Starisian-Technologies/sparxstar-architecture-governance-registry/pull/41).
-They are not yet on the registry's default branch, so the links above will 404
-until that PR merges.
+ADR-034, ADR-035 and ADR-036 are on the registry's default branch as of
+[registry#41](https://github.com/Starisian-Technologies/sparxstar-architecture-governance-registry/pull/41),
+so the links above resolve. The restructure they govern is implemented here.
 
-The restructure they govern is implemented in this repository's
-`claude/starmus-repo-split-cleanup-uxbw74` branch. **That branch must not merge
-before registry#41 merges.** Code that implements a Proposed decision is a
-proposal; code that ships one is the decision. The gate is the merge, not the
-writing — writing the change is how the ADR gets reviewed against something
-real rather than against a description of itself.
+Their recorded **Status is still `Proposed`**. Merging distributed the records;
+it did not by itself ratify them. Ratification is the owner's act and is made
+by a metadata-only header edit in the registry, which ADR-021 permits.
 
-If registry#41 is rejected or materially altered, this branch is revised or
-abandoned with it. It carries no independent authority.
+If any of the three is later superseded, this repository's role assignment
+changes with it — a superseding ADR is the only thing that moves this boundary,
+not a decision taken inside this repository.
 
 ## What this repository owns
 

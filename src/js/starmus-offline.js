@@ -401,9 +401,13 @@ class OfflineQueue {
             console.error("[Offline] Queue fatal:", fatal);
         } finally {
             this.isProcessing = false;
-            const nextDelay = await this._getNextProcessDelay();
-            if (nextDelay !== null) {
-                this._scheduleProcessQueue(nextDelay);
+            try {
+                const nextDelay = await this._getNextProcessDelay();
+                if (nextDelay !== null) {
+                    this._scheduleProcessQueue(nextDelay);
+                }
+            } catch (error) {
+                console.error("[Offline] Failed to schedule next queue processing:", error);
             }
         }
     }

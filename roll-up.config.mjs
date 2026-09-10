@@ -68,7 +68,6 @@ export default function URLParse(address, location) {
                     },
                     useBuiltIns: "usage",
                     corejs: 3,
-                    exclude: ["transform-block-scoping"],
                 },
             ],
         ],

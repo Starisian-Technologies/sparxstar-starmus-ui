@@ -1,10 +1,31 @@
-# Starmus Audio Recorder — Architecture & Separation of Concerns
+# Starmus Capture UI — Architecture & Separation of Concerns
 
-## Purpose
+## What this package is
 
-The Starmus Audio Recorder is the **frontline acquisition system** in the Starisian stack. It
-captures audio, enforces consent, normalises metadata, and produces artefacts that later graduate
-into the **AiWA corpus**. No data flows into AiWA until Starmus certifies it.
+This package is the **capture UI package** under ADR-034: an embeddable,
+Africa-first browser recorder. It owns **browser microphone capture, local and
+offline handling, the chunked-upload client, playback, recording-status
+components, and capture UX** — and nothing else.
+
+Any product can embed it without inheriting a CMS.
+
+## What it does not own
+
+| Concern | Owner |
+| --- | --- |
+| Server-side ingestion, validation, integrity, immutable storage, derivatives, processing jobs | Spoken Audio Node |
+| **Acoustic measurement** — pitch, formant, intensity, duration | Spoken Audio Node |
+| Canonical transcription, translation, linguistic interpretation, human correction | ESU |
+| Elicitation script presentation, pacing, reader position | elicitation pacing package |
+
+The paced reader ("prosody engine") and the transcript-sync controller were
+removed from this package; they were never the capture UI's. Acoustic
+measurement has never lived here and must not arrive.
+
+The seams are contracts, not conventions — see the governance registry's
+`contracts/spoken-audio-capture-to-ingestion.md` for what crosses the wire on
+upload, and `contracts/elicitation-pacing-sync.md` for how a paced reader
+synchronizes with this recorder.
 
 ---
 
@@ -19,8 +40,14 @@ window.STARMUS_BOOTSTRAP = {
   restUrl:  string,
   mode:     string,
   canCommit: boolean,
-  transcript: array | null,
   audioUrl:  string | null,
+  // ADR-035: the capture profile this product wants for this session.
+  // 'conversation' | 'documentation' | 'import'. Omitted means 'conversation'.
+  captureProfile: string | undefined,
+  // Upload endpoint is injected by the host. This package ships no default
+  // and holds no CMS path: with no `restUrl`, uploads throw
+  // NO_UPLOAD_ENDPOINT rather than posting to a guessed route.
+  uploadEndpoint: string | undefined,
 }
 ```
 
@@ -74,7 +101,7 @@ initRecorder(store, instanceId)
 
 - TUS chunked uploads (resume-safe)
 - Offline IndexedDB FIFO queue
-- REST calls with capability + nonce
+- Upload endpoint and auth are injected by the host; no CMS path is hard-coded
 - Metadata composition from UI + Bootstrap
 - Delete / rollback capabilities
 
@@ -114,29 +141,47 @@ Everything here is **idempotent**.
 
 ---
 
-### 7. `starmus-transcript-controller.js` — Transcript Sync
+### 7. `starmus-capture-profiles.js` — Capture Profiles
 
-**Responsibility**: Karaoke-style word highlighting synchronised with Peaks.js audio playback.
+**Responsibility**: Resolve audio constraints from the named profile the
+product chose (ADR-035).
 
-- Binary search for O(log n) word lookup at current time
-- Click-to-seek on individual word tokens
-- Auto-scroll with user-scroll detection
-- Confidence indicators for low-accuracy words
-- Clean destroy() for memory management
+- `conversation` carries the low-bandwidth numbers, and only that profile does
+- `documentation` and `import` constrain nothing this package has authority to set
+- Echo cancellation and noise suppression are `conversation`'s, not the package's:
+  they are non-invertible processing, and material captured for measurement must
+  not arrive already processed
+- Limits are requested as `ideal`, never as `exact`/`max`. A mandatory constraint
+  the device cannot meet makes `getUserMedia` throw and the speaker cannot record
+  at all, which ADR-011's unconditional-capture rule forbids
+- Reports what the device actually delivered; never silently substitutes a profile.
+  A setting the device does not report is `unverified`, not attained
+- The `documentation` floor is OQ-021, owned by AIWA and the analysis owner
 
-**Requires**: Peaks.js instance (provided by consuming plugin/editor page).
+**Public API**
+
+```js
+activeCaptureProfileName()
+resolveCaptureProfile(name)
+getAudioConstraints(name)
+getRecorderOptions(name, mimeType)
+describeAttainment(name, track)
+```
 
 ---
 
-### 8. `prosody/starmus-prosody-engine.js` — Prosody Mode
+### 8. `starmus-completion-event.js` — Completion Boundary
 
-**Responsibility**: Rhythm-paced text display synchronised with the recorder state.
+**Responsibility**: The one home for `starmus:complete`, the boundary between
+capture and the platform audio lifecycle (ADR-034).
 
-- Tap-based BPM calibration
-- Text segmented into `prosodic-unit` spans
-- O(1) DOM updates (only mutates previous + current nodes)
-- Connects to `window.StarmusStore` to auto-play/stop with recording
-- AJAX pace persistence with offline guard
+- Builds the event detail from the upload result and the metadata that
+  travelled with the asset
+- Audio details come from the capture attainment record, never from constants
+- Emitted on every path that ends in a stored recording — an immediate upload
+  and a queued upload that later drains
+- Lives apart from `starmus-core.js` so the offline queue can emit the same
+  event without duplicating it, and without a circular import
 
 ---
 
@@ -155,21 +200,26 @@ Everything here is **idempotent**.
 ## Data Flow
 
 ```
-USER → UI Controller → Recorder Engine → Core / Submission Handler
-         │                   │                   │
-         ▼                   ▼                   ▼
-     Bootstrap          Audio Blobs         TUS / REST / Queue
-                                                  │
-                                             WordPress
+USER → UI Controller → Recorder Engine → Offline Queue → TUS Upload Client
+         │                   │                                   │
+         ▼                   ▼                                   ▼
+     Bootstrap        Audio Blob + capture profile      host-injected endpoint
+                                                                 │
+                                                                 ▼
+                                                     Spoken Audio Node (ingestion)
 ```
 
-Graduation into **AiWA** happens only after a human or AI approves the transcript.
+This package's responsibility **ends at a successfully uploaded chunk**.
+Ingestion, integrity, storage, derivatives and measurement are the Spoken
+Audio Node's; the reviewed transcript and its translation are ESU's. This
+package does not know whether a recording was later approved, and must not
+grow a way to find out.
 
 ---
 
 ## Security Model
 
-1. Nonce + capability checks for every POST/PUT
+1. Auth for uploads is host-supplied; this package holds no CMS nonce or path
 2. Sanitised inputs before DOM insertion
 3. Escaped outputs before rendering
 4. Upload MIME checks + allowed types enforcement

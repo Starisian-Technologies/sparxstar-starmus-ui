@@ -23,6 +23,7 @@
 "use strict";
 
 import { debugLog } from "./starmus-hooks.js";
+import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
 import { uploadWithPriority } from "./starmus-tus.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
@@ -81,7 +82,22 @@ function createOfflineSubmissionId() {
     throw new Error("Secure UUID generation is not available in this runtime");
 }
 
-/** @private */
+/**
+ * @private
+ * Offline submission queue backed by IndexedDB.
+ *
+ * Eviction policy (currently implemented):
+ * - Entries are removed on successful upload.
+ * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
+ *   next processQueue run (they are not left orphaned indefinitely).
+ *
+ * Target eviction policy (Phase 3 — not yet implemented):
+ * - LRU, 20 MB maximum total queue size.
+ * - Entries older than 7 days are eligible for automatic eviction.
+ * - Eviction will run on queue initialization and after each successful upload.
+ *
+ * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
+ */
 class OfflineQueue {
     constructor() {
         /** @type {IDBDatabase|null} */
@@ -298,6 +314,8 @@ class OfflineQueue {
                     item;
 
                 if (retryCount >= CONFIG.maxRetries) {
+                    // Remove exhausted items so they do not accumulate indefinitely.
+                    await this.remove(id);
                     continue;
                 }
 
@@ -310,13 +328,55 @@ class OfflineQueue {
                 }
 
                 try {
-                    await uploadWithPriority({
+                    const result = await uploadWithPriority({
                         blob: audioBlob,
                         fileName,
                         formFields,
                         metadata,
                         instanceId,
                     });
+
+                    // `starmus:complete` is the boundary before any
+                    // server-side processing (ADR-034). A queued upload that
+                    // drains is as complete as an immediate one, so it fires
+                    // here too — and it fires before `remove()`, because
+                    // removal destroys the metadata the event is built from.
+                    const detail = buildCompletionDetail({
+                        instanceId,
+                        result,
+                        metadata,
+                        formFields,
+                        fileName,
+                        mimeType: metadata?.mimeType || audioBlob.type || "",
+                        durationMs: metadata?.durationMs ?? 0,
+                        language: formFields?.language,
+                        contributorId: metadata?.env?.identifiers?.visitorId || "",
+                        calibrationApplied: !!metadata?.calibration,
+                    });
+
+                    if (detail) {
+                        emitCompletionEvent(detail);
+                    } else {
+                        // The upload succeeded but the format cannot be named,
+                        // so no consumer can be told this asset exists. The
+                        // entry is still removed — the asset is on the server
+                        // and re-uploading it on every future drain would burn
+                        // bandwidth the contributor is paying for without ever
+                        // producing a nameable format. What must not happen is
+                        // this passing in silence, so it is reported.
+                        console.error(
+                            "[Offline] Uploaded but could not build starmus:complete:",
+                            { id, fileName, mimeType: metadata?.mimeType || audioBlob.type || "" }
+                        );
+                        sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                            submissionId: id,
+                            instanceId,
+                            fileName,
+                            mimeType: metadata?.mimeType || audioBlob.type || "",
+                            captureProfile: metadata?.captureProfile || null,
+                        });
+                    }
+
                     await this.remove(id);
                 } catch (err) {
                     const msg = err && err.message ? err.message : String(err);

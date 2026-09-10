@@ -18,7 +18,7 @@
 
     /* Semantic colour */
     --sparxstar-text: var(--wp--preset--color--foreground, #1a1a1a);
-    --sparxstar-theme-base: var(--wp--preset--color--background, #ffffff);
+    --sparxstar-theme-base: var(--wp--preset--color--background, #fff);
     --sparxstar-danger: #d63638;
     --sparxstar-success: #00a32a;
     --sparxstar-warning: #dba617;
@@ -72,6 +72,7 @@
     max-width: 100%;
     padding: var(--starmus-spacing);
     box-sizing: border-box;
+
     /* Single column always */
     display: grid;
     grid-template-columns: 1fr;
@@ -156,8 +157,10 @@
     cursor: pointer;
     margin: 12px auto;
     box-shadow: var(--sparxstar-shd);
+
     /* transform only — no width/height animation */
     transition: transform var(--starmus-transition), box-shadow var(--starmus-transition);
+
     /* Prevent tap highlight on Android */
     -webkit-tap-highlight-color: transparent;
 }
@@ -191,8 +194,15 @@
     }
 
     @keyframes starmus-ring-pulse {
-        0% { transform: scale(1); opacity: 0.7; }
-        100% { transform: scale(1.5); opacity: 0; }
+        0% {
+            transform: scale(1);
+            opacity: 0.7;
+        }
+
+        100% {
+            transform: scale(1.5);
+            opacity: 0;
+        }
     }
 }
 
@@ -345,6 +355,7 @@
     font-size: 0.875rem;
     line-height: 1.6;
     color: var(--sparxstar-text);
+
     /* Smooth scroll on supported devices */
     scroll-behavior: smooth;
 }
@@ -383,6 +394,7 @@
     height: 10px;
     border-radius: 50%;
     flex-shrink: 0;
+
     /* Colour set by modifier */
     background-color: var(--sparxstar-border-color);
 }
@@ -446,6 +458,7 @@
     font-weight: 600;
     line-height: 1.5;
     position: relative;
+
     /* Banner is always above recorder content */
     order: -1;
 }

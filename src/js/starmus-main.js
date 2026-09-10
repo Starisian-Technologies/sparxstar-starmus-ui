@@ -27,7 +27,7 @@
 
 import "./starmus-hooks.js";
 import { createStore } from "./starmus-state-store.js";
-import { initCore } from "./starmus-core.js";
+import { initCore, starmusCapabilities } from "./starmus-core.js";
 import { initInstance as initUI } from "./starmus-ui.js";
 import { initRecorder } from "./starmus-recorder.js";
 import { initOffline, queueSubmission, getOfflineQueue } from "./starmus-offline.js";
@@ -107,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
         window.StarmusStoreInstance = store;
         window.StarmusRuntime = window.StarmusRuntime || {};
         window.StarmusRuntime.store = store;
+        window.StarmusRuntime.capabilities = starmusCapabilities;
 
         initOffline().catch((error) => {
             console.warn("[StarmusMain] Offline queue unavailable, continuing:", error);
@@ -132,3 +133,4 @@ window.StarmusRecorder = starmusRecorderApi;
 window.StarmusTus = { queueSubmission };
 window.StarmusOfflineQueue = getOfflineQueue;
 window.SparxstarIntegration = sparxstarIntegration;
+window.StarmusCapabilities = starmusCapabilities;

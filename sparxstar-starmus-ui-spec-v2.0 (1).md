@@ -1,3 +1,25 @@
+> [!WARNING]
+> **Superseded — historical. Do not build from this document.**
+>
+> This spec describes a React PWA with an on-screen prosody/teleprompter mode
+> and CMS prosody REST endpoints. None of those are this repository:
+>
+> * This package is **vanilla JS and CSS**, not a React PWA — see `package.json`.
+> * The paced reader and its CMS pace-save call **moved out** to the
+>   elicitation pacing package (ADR-036). The `/starmus/v1/prosody/*` endpoints
+>   below are not "a blocking PHP task"; they are not this repository's at all.
+> * The transcript controller **moved out**. The reviewed transcript and its
+>   translation are ESU's (ADR-034).
+> * The audio limits below are the platform-wide ceiling that **ADR-035
+>   removes**. Constraints come from a named capture profile.
+>
+> The authoritative homes are `ARCHITECTURE.md` (what this package is),
+> `AGENTS.md` (rules that bind its code), and the governance registry's ADRs
+> and contracts (what holds between repositories). Where this document and the
+> code disagree, **the code is correct** and this document is not.
+>
+> Retained only for the intent it records. It is not maintained.
+
 **SPARXSTAR**
 
 sparxstar-starmus-ui
@@ -466,13 +488,9 @@ Pull these files from https://github.com/Starisian-Technologies/sparxstar-starmu
 
 * src/js/starmus-main.js
 
-* src/js/starmus-transcript-controller.js
-
 * src/js/starmus-integrator.js
 
 * src/js/consent/starmus-legal.js
-
-* src/js/prosody/starmus-prosody-engine.js
 
 * src/js/appmode/starmus-audio.js
 
@@ -481,8 +499,6 @@ Pull these files from https://github.com/Starisian-Technologies/sparxstar-starmu
 ## **CSS (rewrite as component CSS modules)**
 
 * src/css/starmus-audio-recorder.css
-
-* src/css/starmus-prosody-engine.css
 
 * src/css/consent/starmus-consent.css
 

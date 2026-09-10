@@ -2566,7 +2566,7 @@
    * @param {function} handler - Handler called with (payload, meta)
    * @returns {function} Unsubscribe function
    */
-  function subscribe$1(command, handler) {
+  function subscribe(command, handler) {
     if (!registry[command]) {
       registry[command] = [];
     }
@@ -2614,7 +2614,7 @@
     /* console.log(..._args); */
   }
   var Bus = {
-    subscribe: subscribe$1,
+    subscribe: subscribe,
     dispatch: dispatch,
     debugLog: debugLog
   };
@@ -2748,7 +2748,14 @@
           duration: 0,
           mimeType: "",
           fileSize: 0
-        }
+        },
+        // ADR-035: the capture profile travels with the asset. The whole
+        // attainment record is kept — profile name, what was requested,
+        // what the device actually delivered — because a consumer needs
+        // all three to judge whether a measurement from this asset is
+        // admissible. Two derived booleans would not carry that.
+        captureProfile: null,
+        captureAttainment: null
       },
       calibration: {
         phase: null,
@@ -2788,6 +2795,7 @@
       return out;
     }
     function reducer(state, action) {
+      var _action$attainment$pr, _action$attainment, _action$attainment2;
       if (!action || !action.type) {
         return state;
       }
@@ -2858,6 +2866,13 @@
             calibration: merge(state.calibration, merge(action.payload.calibration || {}, {
               complete: true
             }))
+          });
+        case "starmus/capture-profile":
+          return merge(state, {
+            source: merge(state.source, {
+              captureProfile: (_action$attainment$pr = (_action$attainment = action.attainment) === null || _action$attainment === void 0 ? void 0 : _action$attainment.profile) !== null && _action$attainment$pr !== void 0 ? _action$attainment$pr : null,
+              captureAttainment: (_action$attainment2 = action.attainment) !== null && _action$attainment2 !== void 0 ? _action$attainment2 : null
+            })
           });
         case "starmus/mic-start":
           return merge(state, {
@@ -6555,6 +6570,39 @@
   }
 
   requireEs_array_concat();
+
+  var es_array_find = {};
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
+  }
+
+  requireEs_array_find();
 
   var es_array_from = {};
 
@@ -13691,8 +13739,7 @@
       var hex = Array.from(values, function (value) {
         return value.toString(16).padStart(2, "0");
       }).join("");
-      var suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
-      return "starmus-upload-".concat(suffix);
+      return "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
     }
     throw new Error("Secure UUID generation is not available in this runtime");
   }
@@ -13714,9 +13761,7 @@
   function uploadDirect(_x2, _x3) {
     return _uploadDirect.apply(this, arguments);
   }
-
   /* ---- TUS Upload ---- */
-
   /**
    * Uploads a recording blob using the TUS resumable-upload protocol.
    *
@@ -13757,15 +13802,25 @@
             onProgress = _args2.length > 5 ? _args2[5] : undefined;
             cfg = getConfig();
             nonce = cfg.nonce || "";
-            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
-            endpoint = ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload) || "/wp-json/star-starmus-audio-recorder/v1/upload-fallback";
-            fields = normalizeFormFields(formFields);
-            if (blob instanceof Blob) {
+            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000; // ADR-034: this package holds no CMS path. The host injects the endpoint
+            // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
+            // package silently CMS-coupled and contradicted its own architecture doc.
+            // Failing loudly is correct — a default that posts a speaker's recording
+            // to a guessed URL is worse than not uploading it.
+            endpoint = (_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload;
+            if (endpoint) {
               _context2.n = 1;
               break;
             }
-            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
           case 1:
+            fields = normalizeFormFields(formFields);
+            if (blob instanceof Blob) {
+              _context2.n = 2;
+              break;
+            }
+            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+          case 2:
             fd = new FormData();
             uploadId = createUploadId();
             fd.append("audio_file", blob, fileName);
@@ -13804,10 +13859,28 @@
                 clearTimeout(timeout);
                 if (xhr.status >= 200 && xhr.status < 300) {
                   try {
-                    resolve(JSON.parse(xhr.responseText));
+                    var _parsed$data, _parsed$data2;
+                    var parsed = JSON.parse(xhr.responseText);
+                    // Default successful HTTP responses to success: true, while
+                    // still allowing an explicit server-provided success value
+                    // (including false) to override the default.
+                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
+                    // The server's identifier wins over the client-generated
+                    // one, in whichever spelling it arrives. Checking only
+                    // `uploadId` and writing the local id into that field made
+                    // the local id outrank a server `upload_id` downstream,
+                    // because completion reads `uploadId` first.
+                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
+                      return typeof value === "string" && value.trim() !== "";
+                    }) || uploadId;
+                    resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
+                      success: success,
+                      uploadId: parsedUploadId
+                    }));
                   } catch (_unused) {
                     resolve({
                       success: true,
+                      uploadId: uploadId,
                       raw: xhr.responseText
                     });
                   }
@@ -13881,8 +13954,14 @@
             instanceId = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : "";
             _onProgress = _args3.length > 5 ? _args3[5] : undefined;
             cfg = getConfig();
-            nonce = cfg.nonce || "";
-            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus) || "/wp-json/star-starmus-audio-recorder/v1/tus";
+            nonce = cfg.nonce || ""; // ADR-034: host-injected, never a CMS path held by this package.
+            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus);
+            if (tusEndpoint) {
+              _context3.n = 1;
+              break;
+            }
+            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
+          case 1:
             fields = normalizeFormFields(formFields);
             uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
@@ -13911,7 +13990,7 @@
                 chunkSize: cfg.chunkSize,
                 retryDelays: cfg.retryDelays,
                 removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
-                checksumAlgorithm: "sha1",
+                checksumAlgorithm: "sha256",
                 metadata: tusMetadata,
                 headers: headers,
                 onProgress: function onProgress(bytesUploaded, bytesTotal) {
@@ -13926,7 +14005,8 @@
                   settled = true;
                   resolve({
                     success: true,
-                    url: upload.url
+                    url: upload.url,
+                    uploadId: uploadId
                   });
                 },
                 onError: function onError(err) {
@@ -14003,6 +14083,286 @@
       }, _callee5);
     }));
     return _uploadWithPriority.apply(this, arguments);
+  }
+
+  var es_array_includes = {};
+
+  var hasRequiredEs_array_includes;
+
+  function requireEs_array_includes () {
+  	if (hasRequiredEs_array_includes) return es_array_includes;
+  	hasRequiredEs_array_includes = 1;
+  	var $ = require_export();
+  	var $includes = requireArrayIncludes().includes;
+  	var fails = requireFails();
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	// FF99+ bug
+  	var BROKEN_ON_SPARSE = fails(function () {
+  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
+  	  return !Array(1).includes();
+  	});
+
+  	// Safari 26.4- bug
+  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
+  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
+  	  return [, 1].includes(undefined, 1);
+  	});
+
+  	// `Array.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.includes
+  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
+  	  includes: function includes(el /* , fromIndex = 0 */) {
+  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables('includes');
+  	return es_array_includes;
+  }
+
+  requireEs_array_includes();
+
+  var es_string_includes = {};
+
+  var isRegexp;
+  var hasRequiredIsRegexp;
+
+  function requireIsRegexp () {
+  	if (hasRequiredIsRegexp) return isRegexp;
+  	hasRequiredIsRegexp = 1;
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	// `IsRegExp` abstract operation
+  	// https://tc39.es/ecma262/#sec-isregexp
+  	isRegexp = function (it) {
+  	  var isRegExp;
+  	  return isObject(it) && ((isRegExp = it[MATCH]) !== undefined ? !!isRegExp : classof(it) === 'RegExp');
+  	};
+  	return isRegexp;
+  }
+
+  var notARegexp;
+  var hasRequiredNotARegexp;
+
+  function requireNotARegexp () {
+  	if (hasRequiredNotARegexp) return notARegexp;
+  	hasRequiredNotARegexp = 1;
+  	var isRegExp = requireIsRegexp();
+
+  	var $TypeError = TypeError;
+
+  	notARegexp = function (it) {
+  	  if (isRegExp(it)) {
+  	    throw new $TypeError("The method doesn't accept regular expressions");
+  	  } return it;
+  	};
+  	return notARegexp;
+  }
+
+  var correctIsRegexpLogic;
+  var hasRequiredCorrectIsRegexpLogic;
+
+  function requireCorrectIsRegexpLogic () {
+  	if (hasRequiredCorrectIsRegexpLogic) return correctIsRegexpLogic;
+  	hasRequiredCorrectIsRegexpLogic = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var MATCH = wellKnownSymbol('match');
+
+  	correctIsRegexpLogic = function (METHOD_NAME) {
+  	  var regexp = /./;
+  	  try {
+  	    '/./'[METHOD_NAME](regexp);
+  	  } catch (error1) {
+  	    try {
+  	      regexp[MATCH] = false;
+  	      return '/./'[METHOD_NAME](regexp);
+  	    } catch (error2) { /* empty */ }
+  	  } return false;
+  	};
+  	return correctIsRegexpLogic;
+  }
+
+  var hasRequiredEs_string_includes;
+
+  function requireEs_string_includes () {
+  	if (hasRequiredEs_string_includes) return es_string_includes;
+  	hasRequiredEs_string_includes = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var notARegExp = requireNotARegexp();
+  	var requireObjectCoercible = requireRequireObjectCoercible();
+  	var toString = requireToString();
+  	var correctIsRegExpLogic = requireCorrectIsRegexpLogic();
+
+  	var stringIndexOf = uncurryThis(''.indexOf);
+
+  	// `String.prototype.includes` method
+  	// https://tc39.es/ecma262/#sec-string.prototype.includes
+  	$({ target: 'String', proto: true, forced: !correctIsRegExpLogic('includes') }, {
+  	  includes: function includes(searchString /* , position = 0 */) {
+  	    return !!~stringIndexOf(
+  	      toString(requireObjectCoercible(this)),
+  	      toString(notARegExp(searchString)),
+  	      arguments.length > 1 ? arguments[1] : undefined
+  	    );
+  	  }
+  	});
+  	return es_string_includes;
+  }
+
+  requireEs_string_includes();
+
+  /**
+   * @file starmus-completion-event.js
+   * @summary The single home for the `starmus:complete` event.
+   *
+   * `starmus:complete` is the boundary between capture and the platform audio
+   * lifecycle (ADR-034): nothing server-side begins until it fires. It therefore
+   * has to fire on every path that ends in a stored recording — an immediate
+   * upload and a queued upload that later drains — and it has to describe the
+   * asset that was actually captured.
+   *
+   * It lives here rather than in `starmus-core.js` so the offline queue can emit
+   * the same event without duplicating how it is built, and without a circular
+   * import between core and offline.
+   */
+
+  /**
+   * Map a captured MIME type or file extension to the format name the
+   * capture-to-ingestion contract uses.
+   *
+   * @param {string} mimeType
+   * @param {string} fileName
+   * @returns {string|null} null when the format is not one this package can name.
+   */
+  function resolveUploadFormat(mimeType, fileName) {
+    var type = String(mimeType || "").trim().toLowerCase();
+    var name = String(fileName || "").trim().toLowerCase();
+    var ext = name.includes(".") ? name.split(".").pop() : "";
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || type.includes("audio/aac") || type.includes("aac") || type.includes("mp4a") || ext === "m4a" || ext === "mp4" || ext === "aac") {
+      return "aac-lc";
+    }
+    if (type.includes("audio/ogg") || type.includes("audio/opus") || type.includes("opus") || ext === "opus" || ext === "ogg") {
+      return "opus";
+    }
+
+    // WAV and MP3 are reported as themselves. ADR-035 holds the container and
+    // codec restriction pending OQ-021, so this package does not decide that
+    // an arriving format is inadmissible — it names what it has and lets the
+    // Spoken Audio Node rule on it. Silently mapping these onto `opus` would
+    // be worse: it would misdescribe the asset.
+    if (type.includes("audio/wav") || type.includes("audio/wave") || type.includes("audio/x-wav") || ext === "wav") {
+      return "wav";
+    }
+    if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
+      return "mp3";
+    }
+    return null;
+  }
+
+  /**
+   * Read the contributor's stored consent record, if any.
+   *
+   * @returns {{granted?: boolean}|null}
+   */
+  function readContributorConsent() {
+    try {
+      var raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
+      return raw ? JSON.parse(raw) : null;
+    } catch (_unused) {
+      return null;
+    }
+  }
+
+  /**
+   * Pick the upload identifier out of a result, in whichever spelling it
+   * arrived, or an empty string when the result carries none.
+   *
+   * This cannot tell a server-issued identifier from a client-generated one:
+   * `uploadDirect` already writes the client's UUID into `uploadId` when the
+   * server returns no identifier of its own, so by the time a result reaches
+   * here the two are indistinguishable. That fallback is deliberate — the same
+   * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
+   * handle rather than a guess — but this function does not verify the origin,
+   * and callers must not assume it did.
+   *
+   * @param {Object} result
+   * @returns {string}
+   */
+  function resolveUploadId(result) {
+    var _result$data, _result$data2;
+    return [result === null || result === void 0 ? void 0 : result.uploadId, result === null || result === void 0 ? void 0 : result.upload_id, result === null || result === void 0 || (_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.uploadId, result === null || result === void 0 || (_result$data2 = result.data) === null || _result$data2 === void 0 ? void 0 : _result$data2.upload_id].find(function (value) {
+      return typeof value === "string" && value.trim() !== "";
+    }) || "";
+  }
+
+  /**
+   * Build the `starmus:complete` detail from an upload result and the metadata
+   * that travelled with the asset.
+   *
+   * Audio details come from the capture attainment record, never from constants:
+   * a `documentation` session at 48 kHz stereo must not be announced as 16 kHz
+   * mono. `null` means the device did not report the value.
+   *
+   * @param {Object} input
+   * @param {string} input.instanceId
+   * @param {Object} input.result       Upload result.
+   * @param {Object} input.metadata     Metadata that travelled with the asset.
+   * @param {Object} [input.formFields]
+   * @param {string} [input.fileName]
+   * @param {string} [input.mimeType]
+   * @param {string} [input.language]
+   * @param {string} [input.contributorId]
+   * @param {boolean} [input.calibrationApplied]
+   * @param {number} [input.durationMs]
+   * @returns {Object|null} null when the format cannot be named.
+   */
+  function buildCompletionDetail(input) {
+    var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
+    var format = resolveUploadFormat(input.mimeType, input.fileName);
+    if (!format) {
+      return null;
+    }
+    var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
+    var consent = readContributorConsent();
+    return {
+      sessionId: input.instanceId,
+      uploadId: resolveUploadId(input.result),
+      durationMs: (_input$durationMs = input.durationMs) !== null && _input$durationMs !== void 0 ? _input$durationMs : 0,
+      sampleRate: (_attainment$actual$sa = attainment === null || attainment === void 0 || (_attainment$actual = attainment.actual) === null || _attainment$actual === void 0 ? void 0 : _attainment$actual.sampleRate) !== null && _attainment$actual$sa !== void 0 ? _attainment$actual$sa : null,
+      channels: (_attainment$actual$ch = attainment === null || attainment === void 0 || (_attainment$actual2 = attainment.actual) === null || _attainment$actual2 === void 0 ? void 0 : _attainment$actual2.channelCount) !== null && _attainment$actual$ch !== void 0 ? _attainment$actual$ch : null,
+      captureProfile: ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) || null,
+      captureProfileAttained: (_attainment$attained = attainment === null || attainment === void 0 ? void 0 : attainment.attained) !== null && _attainment$attained !== void 0 ? _attainment$attained : null,
+      format: format,
+      language: input.language || ((_input$formFields = input.formFields) === null || _input$formFields === void 0 ? void 0 : _input$formFields.language) || "",
+      contributorId: input.contributorId || "",
+      consentGranted: !!(consent && consent.granted),
+      calibrationApplied: !!input.calibrationApplied
+    };
+  }
+
+  /**
+   * Dispatch `starmus:complete`. No-op when the detail could not be built or
+   * there is no document to dispatch on.
+   *
+   * @param {Object|null} detail
+   * @returns {boolean} whether the event was dispatched.
+   */
+  function emitCompletionEvent(detail) {
+    if (!detail || typeof document === "undefined") {
+      return false;
+    }
+    document.dispatchEvent(new CustomEvent("starmus:complete", {
+      detail: detail
+    }));
+    return true;
   }
 
   var es_array_map = {};
@@ -14099,7 +14459,22 @@
     throw new Error("Secure UUID generation is not available in this runtime");
   }
 
-  /** @private */
+  /**
+   * @private
+   * Offline submission queue backed by IndexedDB.
+   *
+   * Eviction policy (currently implemented):
+   * - Entries are removed on successful upload.
+   * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
+   *   next processQueue run (they are not left orphaned indefinitely).
+   *
+   * Target eviction policy (Phase 3 — not yet implemented):
+   * - LRU, 20 MB maximum total queue size.
+   * - Entries older than 7 days are eligible for automatic eviction.
+   * - Eviction will run on queue initialization and after each successful upload.
+   *
+   * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
+   */
   var OfflineQueue = /*#__PURE__*/function () {
     function OfflineQueue() {
       _classCallCheck$9(this, OfflineQueue);
@@ -14393,7 +14768,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
+          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.p = _context6.n) {
               case 0:
@@ -14427,30 +14802,33 @@
                 _iterator.s();
               case 7:
                 if ((_step = _iterator.n()).done) {
-                  _context6.n = 16;
+                  _context6.n = 17;
                   break;
                 }
                 item = _step.value;
                 id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId;
                 if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context6.n = 8;
+                  _context6.n = 9;
                   break;
                 }
-                return _context6.a(3, 15);
+                _context6.n = 8;
+                return this.remove(id);
               case 8:
+                return _context6.a(3, 16);
+              case 9:
                 if (!(item.lastAttempt !== null)) {
-                  _context6.n = 9;
+                  _context6.n = 10;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context6.n = 9;
+                  _context6.n = 10;
                   break;
                 }
-                return _context6.a(3, 15);
-              case 9:
-                _context6.p = 9;
-                _context6.n = 10;
+                return _context6.a(3, 16);
+              case 10:
+                _context6.p = 10;
+                _context6.n = 11;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -14458,59 +14836,100 @@
                   metadata: metadata,
                   instanceId: instanceId
                 });
-              case 10:
-                _context6.n = 11;
-                return this.remove(id);
               case 11:
-                _context6.n = 15;
-                break;
+                result = _context6.v;
+                // `starmus:complete` is the boundary before any
+                // server-side processing (ADR-034). A queued upload that
+                // drains is as complete as an immediate one, so it fires
+                // here too — and it fires before `remove()`, because
+                // removal destroys the metadata the event is built from.
+                detail = buildCompletionDetail({
+                  instanceId: instanceId,
+                  result: result,
+                  metadata: metadata,
+                  formFields: formFields,
+                  fileName: fileName,
+                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                  durationMs: (_metadata$durationMs = metadata === null || metadata === void 0 ? void 0 : metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                  language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
+                  contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
+                  calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
+                });
+                if (detail) {
+                  emitCompletionEvent(detail);
+                } else {
+                  // The upload succeeded but the format cannot be named,
+                  // so no consumer can be told this asset exists. The
+                  // entry is still removed — the asset is on the server
+                  // and re-uploading it on every future drain would burn
+                  // bandwidth the contributor is paying for without ever
+                  // producing a nameable format. What must not happen is
+                  // this passing in silence, so it is reported.
+                  console.error("[Offline] Uploaded but could not build starmus:complete:", {
+                    id: id,
+                    fileName: fileName,
+                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
+                  });
+                  sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                    submissionId: id,
+                    instanceId: instanceId,
+                    fileName: fileName,
+                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                  });
+                }
+                _context6.n = 12;
+                return this.remove(id);
               case 12:
-                _context6.p = 12;
+                _context6.n = 16;
+                break;
+              case 13:
+                _context6.p = 13;
                 _t = _context6.v;
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context6.n = 14;
+                  _context6.n = 15;
                   break;
                 }
-                _context6.n = 13;
+                _context6.n = 14;
                 return this.remove(id);
-              case 13:
-                _context6.n = 15;
-                break;
               case 14:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context6.n = 15;
-                return this._updateRetry(id, nextRetryCount, msg);
+                _context6.n = 16;
+                break;
               case 15:
+                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                _context6.n = 16;
+                return this._updateRetry(id, nextRetryCount, msg);
+              case 16:
                 _context6.n = 7;
                 break;
-              case 16:
-                _context6.n = 18;
-                break;
               case 17:
-                _context6.p = 17;
-                _t2 = _context6.v;
-                _iterator.e(_t2);
+                _context6.n = 19;
+                break;
               case 18:
                 _context6.p = 18;
-                _iterator.f();
-                return _context6.f(18);
+                _t2 = _context6.v;
+                _iterator.e(_t2);
               case 19:
-                _context6.n = 21;
-                break;
+                _context6.p = 19;
+                _iterator.f();
+                return _context6.f(19);
               case 20:
-                _context6.p = 20;
-                _t3 = _context6.v;
-                console.error("[Offline] Queue fatal:", _t3);
+                _context6.n = 22;
+                break;
               case 21:
                 _context6.p = 21;
-                this.isProcessing = false;
-                return _context6.f(21);
+                _t3 = _context6.v;
+                console.error("[Offline] Queue fatal:", _t3);
               case 22:
+                _context6.p = 22;
+                this.isProcessing = false;
+                return _context6.f(22);
+              case 23:
                 return _context6.a(2);
             }
-          }, _callee6, this, [[9, 12], [6, 17, 18, 19], [3, 20, 21, 22]]);
+          }, _callee6, this, [[10, 13], [6, 18, 19, 20], [3, 21, 22, 23]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14727,8 +15146,21 @@
    * See the LICENSE file in the repository root for full license terms.
    */
 
-  var _window$StarmusHooks;
-  var subscribe = ((_window$StarmusHooks = window.StarmusHooks) === null || _window$StarmusHooks === void 0 ? void 0 : _window$StarmusHooks.subscribe) || function () {};
+
+  /**
+   * Mutable capability flags populated after tier resolution.
+   * Sirus will overwrite these values at runtime in Phase 3.
+   * Do not hardcode feature logic outside of this object.
+   *
+   * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean }}
+   */
+  var starmusCapabilities = {
+    tier: "A",
+    allowRecording: true,
+    allowCalibration: true,
+    allowCanvas: true,
+    allowLiveTranscript: true
+  };
 
   /**
    * Converts a server-provided redirect into a safe same-origin HTTP(S) URL.
@@ -14789,6 +15221,13 @@
         tier: tier,
         sparxstar_available: sparxstarIntegration.isAvailable
       });
+
+      // Populate mutable capabilities — Sirus will overwrite these in Phase 3
+      starmusCapabilities.tier = tier;
+      starmusCapabilities.allowRecording = tier !== "C";
+      starmusCapabilities.allowCalibration = tier !== "C";
+      starmusCapabilities.allowCanvas = tier !== "C";
+      starmusCapabilities.allowLiveTranscript = tier !== "C";
       store.dispatch({
         type: "starmus/tier-ready",
         payload: {
@@ -14814,6 +15253,14 @@
     }).catch(function (error) {
       console.error("[Core] Environment initialisation failed:", error);
       var tier = detectTier();
+
+      // Populate mutable capabilities on the error path so consumers
+      // never observe stale Tier A defaults when init() rejects.
+      starmusCapabilities.tier = tier;
+      starmusCapabilities.allowRecording = tier !== "C";
+      starmusCapabilities.allowCalibration = tier !== "C";
+      starmusCapabilities.allowCanvas = tier !== "C";
+      starmusCapabilities.allowLiveTranscript = tier !== "C";
       store.dispatch({
         type: "starmus/tier-ready",
         payload: {
@@ -14839,8 +15286,8 @@
     }
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
-        var _source$transcript;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, metadata, result, _result$data, _result$data2, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var _source$transcript, _source$metadata, _source$metadata2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -14860,12 +15307,26 @@
               console.error("[Core] No audio recording found.");
               return _context.a(2);
             case 1:
+              // ADR-035 / capture-to-ingestion contract: the capture profile travels
+              // with the asset. This object is what the direct and TUS serializers
+              // send and what the offline queue persists for later retry, so the
+              // profile has to be in it here or it reaches ingestion on no path at
+              // all. `null` means the recorder never reported one (a file upload via
+              // the Tier C fallback), which is itself information the consumer needs.
+              captureAttainment = source.captureAttainment || null;
               metadata = {
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 calibration: calibration.complete ? {
                   gain: calibration.gain,
                   speechLevel: calibration.speechLevel
                 } : null,
+                captureProfile: source.captureProfile || null,
+                captureAttainment: captureAttainment,
+                // Persisted so a queued upload that drains hours later can still
+                // describe the asset it sent. The store state it came from is long
+                // gone by then.
+                durationMs: Math.round((((_source$metadata = source.metadata) === null || _source$metadata === void 0 ? void 0 : _source$metadata.duration) || 0) * 1000),
+                mimeType: ((_source$metadata2 = source.metadata) === null || _source$metadata2 === void 0 ? void 0 : _source$metadata2.mimeType) || audioBlob.type || "",
                 env: stateEnv,
                 tier: stateEnv.tier || (currentEnvData === null || currentEnvData === void 0 ? void 0 : currentEnvData.tier) || "C"
               };
@@ -14900,35 +15361,62 @@
                 payload: result
               });
 
-              // Fire redirect if server provided one
-              if (result && result.success) {
-                redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
-                if (redirect) {
-                  setTimeout(function () {
-                    window.location.href = redirect;
-                  }, 1500);
-                }
+              // Emit starmus:complete — boundary between recording and server-side processing.
+              // Nothing downstream triggers until this event fires.
+              if (!(result && result.success)) {
+                _context.n = 6;
+                break;
+              }
+              completedState = store.getState();
+              completedSource = completedState.source || {};
+              completedCalibration = completedState.calibration || {};
+              detail = buildCompletionDetail({
+                instanceId: instanceId,
+                result: result,
+                metadata: metadata,
+                formFields: formFields,
+                fileName: fileName,
+                mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
+                durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
+                language: completedSource.language,
+                contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
+                calibrationApplied: !!completedCalibration.complete
+              });
+              if (detail) {
+                _context.n = 5;
+                break;
+              }
+              throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
+            case 5:
+              emitCompletionEvent(detail);
+              emitCompletionEvent(detail);
+              redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
+              if (redirect) {
+                setTimeout(function () {
+                  window.location.href = redirect;
+                }, 1500);
+              }
 
-                // Notify parent frame (modal context) safely
-                if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
-                  try {
-                    if (window.parent && window.parent !== window) {
-                      void window.parent.location.href; // Throws if cross-origin
-                      if (window.parent.jQuery) {
-                        window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
-                          audioPostId: result.data.post_id
-                        }]);
-                      }
+              // Notify parent frame (modal context) safely
+              if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
+                try {
+                  if (window.parent && window.parent !== window) {
+                    void window.parent.location.href; // Throws if cross-origin
+                    if (window.parent.jQuery) {
+                      window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
+                        audioPostId: result.data.post_id
+                      }]);
                     }
-                  } catch (_unused2) {
-                    // Cross-origin — silently skip
                   }
+                } catch (_unused2) {
+                  // Cross-origin — silently skip
                 }
               }
-              _context.n = 12;
+            case 6:
+              _context.n = 14;
               break;
-            case 5:
-              _context.p = 5;
+            case 7:
+              _context.p = 7;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -14941,31 +15429,31 @@
               message = _t && _t.message ? _t.message : String(_t);
               retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
               if (!retryableUploadError) {
-                _context.n = 11;
+                _context.n = 13;
                 break;
               }
-              _context.p = 6;
-              _context.n = 7;
+              _context.p = 8;
+              _context.n = 9;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
-            case 7:
+            case 9:
               submissionId = _context.v;
               store.dispatch({
                 type: "starmus/submit-queued",
                 submissionId: submissionId
               });
-              _context.n = 8;
+              _context.n = 10;
               return getPendingCount();
-            case 8:
+            case 10:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
                   count: pending
                 });
               }
-              _context.n = 10;
+              _context.n = 12;
               break;
-            case 9:
-              _context.p = 9;
+            case 11:
+              _context.p = 11;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
               store.dispatch({
@@ -14975,10 +15463,10 @@
                   retryable: false
                 }
               });
-            case 10:
-              _context.n = 12;
+            case 12:
+              _context.n = 14;
               break;
-            case 11:
+            case 13:
               store.dispatch({
                 type: "starmus/error",
                 error: {
@@ -14986,26 +15474,26 @@
                   retryable: false
                 }
               });
-            case 12:
+            case 14:
               return _context.a(2);
           }
-        }, _callee, null, [[6, 9], [2, 5]]);
+        }, _callee, null, [[8, 11], [2, 7]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }
-    subscribe("submit", function (payload, meta) {
+    Bus.subscribe("submit", function (payload, meta) {
       if (meta && meta.instanceId === instanceId) {
         handleSubmit(payload.formFields || {});
       }
     });
-    subscribe("reset", function (_p, meta) {
+    Bus.subscribe("reset", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
         store.dispatch({
           type: "starmus/reset"
         });
       }
     });
-    subscribe("continue", function (_p, meta) {
+    Bus.subscribe("continue", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
         store.dispatch({
           type: "starmus/ui/step-continue"
@@ -15019,45 +15507,6 @@
   if (typeof window !== "undefined") {
     window.initCore = initCore;
   }
-
-  var es_array_includes = {};
-
-  var hasRequiredEs_array_includes;
-
-  function requireEs_array_includes () {
-  	if (hasRequiredEs_array_includes) return es_array_includes;
-  	hasRequiredEs_array_includes = 1;
-  	var $ = require_export();
-  	var $includes = requireArrayIncludes().includes;
-  	var fails = requireFails();
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	// FF99+ bug
-  	var BROKEN_ON_SPARSE = fails(function () {
-  	  // eslint-disable-next-line es/no-array-prototype-includes -- detection
-  	  return !Array(1).includes();
-  	});
-
-  	// Safari 26.4- bug
-  	var BROKEN_ON_SPARSE_WITH_FROM_INDEX = fails(function () {
-  	  // eslint-disable-next-line no-sparse-arrays, es/no-array-prototype-includes -- detection
-  	  return [, 1].includes(undefined, 1);
-  	});
-
-  	// `Array.prototype.includes` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.includes
-  	$({ target: 'Array', proto: true, forced: BROKEN_ON_SPARSE || BROKEN_ON_SPARSE_WITH_FROM_INDEX }, {
-  	  includes: function includes(el /* , fromIndex = 0 */) {
-  	    return $includes(this, el, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables('includes');
-  	return es_array_includes;
-  }
-
-  requireEs_array_includes();
 
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
@@ -16137,6 +16586,280 @@
 
   requireEs_math_log10();
 
+  var es_object_freeze = {};
+
+  var hasRequiredEs_object_freeze;
+
+  function requireEs_object_freeze () {
+  	if (hasRequiredEs_object_freeze) return es_object_freeze;
+  	hasRequiredEs_object_freeze = 1;
+  	var $ = require_export();
+  	var FREEZING = requireFreezing();
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var onFreeze = requireInternalMetadata().onFreeze;
+
+  	// eslint-disable-next-line es/no-object-freeze -- safe
+  	var $freeze = Object.freeze;
+  	var FAILS_ON_PRIMITIVES = fails(function () { $freeze(1); });
+
+  	// `Object.freeze` method
+  	// https://tc39.es/ecma262/#sec-object.freeze
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES, sham: !FREEZING }, {
+  	  freeze: function freeze(it) {
+  	    return $freeze && isObject(it) ? $freeze(onFreeze(it)) : it;
+  	  }
+  	});
+  	return es_object_freeze;
+  }
+
+  requireEs_object_freeze();
+
+  /**
+   * @file starmus-capture-profiles.js
+   * @summary Named capture profiles. Audio constraints belong to a profile the
+   *          calling product chooses — never to a platform-wide ceiling.
+   *
+   * Governed by ADR-035. The 16 kHz / mono / 32 kbps limits that used to be
+   * applied to every recording in this package are a low-bandwidth
+   * conversational transport profile; held platform-wide they destroy the source
+   * material that documentation, sound-to-IPA, tone and prosody work depend on.
+   *
+   * The profile travels with the asset. A consumer reads it to decide whether a
+   * measurement taken from that asset is admissible.
+   *
+   * The numeric floor for `documentation` is deliberately NOT set here. It is
+   * OQ-021 in the governance registry, owned by AIWA and the acoustic-analysis
+   * owner. `null` means "do not constrain" — the device's own default is used
+   * and the real capability is reported back, rather than this package inventing
+   * a floor it has no authority to set.
+   */
+
+  /** @typedef {"conversation"|"documentation"|"import"} CaptureProfileName */
+
+  /**
+   * @typedef {Object} CaptureProfile
+   * @property {CaptureProfileName} name
+   * @property {number|null} sampleRate           Ceiling in Hz, or null to leave unconstrained.
+   * @property {number|null} channelCount         Ceiling in channels, or null to leave unconstrained.
+   * @property {number|null} audioBitsPerSecond   Encoder bitrate, or null to let the browser choose.
+   * @property {boolean} voiceProcessing          Request browser echo cancellation and noise suppression.
+   * @property {boolean} allowLossless
+   * @property {boolean} transcode
+   * @property {boolean} admissibleForMeasurement
+   * @property {string} description
+   */
+
+  /** @type {Record<CaptureProfileName, CaptureProfile>} */
+  var CAPTURE_PROFILES = Object.freeze({
+    /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
+    conversation: Object.freeze({
+      name: "conversation",
+      sampleRate: 16000,
+      channelCount: 1,
+      audioBitsPerSecond: 32000,
+      // Echo cancellation and noise suppression make conversational speech
+      // intelligible at this bitrate. They are voice-telephony processing,
+      // so they belong to this profile and to no other.
+      voiceProcessing: true,
+      allowLossless: false,
+      transcode: true,
+      admissibleForMeasurement: false,
+      description: "Low-bandwidth conversational capture for interactive use."
+    }),
+    /**
+     * Highest quality the device can safely sustain, for material that will be
+     * measured. Not downsampled to a transport ceiling; not denied a lossless
+     * container. Floors are OQ-021 and not set in this package.
+     */
+    documentation: Object.freeze({
+      name: "documentation",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      // Off deliberately. Echo cancellation and noise suppression are
+      // non-linear, non-invertible processing applied before the sample
+      // reaches this package. Pitch, formant and intensity measurements
+      // taken downstream would be measurements of the browser's voice
+      // processing, not of the speaker.
+      voiceProcessing: false,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Highest safe source quality for material that will be measured."
+    }),
+    /** Prerecorded material, preserved unchanged. No transcode, resample or fold-down. */
+    import: Object.freeze({
+      name: "import",
+      sampleRate: null,
+      channelCount: null,
+      audioBitsPerSecond: null,
+      voiceProcessing: false,
+      allowLossless: true,
+      transcode: false,
+      admissibleForMeasurement: true,
+      description: "Prerecorded material preserved byte-for-byte."
+    })
+  });
+
+  /** @type {CaptureProfileName} */
+  var DEFAULT_CAPTURE_PROFILE = "conversation";
+
+  /**
+   * Resolve a profile by name. An unknown name is a caller error and is not
+   * silently coerced into a different profile — ADR-035 forbids satisfying a
+   * request with something other than what was asked for.
+   *
+   * Only an absent value (`undefined` or `null`) selects the default. An empty
+   * string is an explicit request for a profile that does not exist, and throws.
+   *
+   * @param {CaptureProfileName|undefined|null} name
+   * @returns {CaptureProfile}
+   */
+  function resolveCaptureProfile(name) {
+    if (name === undefined || name === null) {
+      return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
+    }
+    var profile = Object.prototype.hasOwnProperty.call(CAPTURE_PROFILES, name) ? CAPTURE_PROFILES[name] : undefined;
+    if (!profile) {
+      throw new Error("Unknown capture profile \"".concat(String(name), "\". Expected one of: ").concat(Object.keys(CAPTURE_PROFILES).join(", "), "."));
+    }
+    return profile;
+  }
+
+  /**
+   * The capture profile for this session, chosen by the calling product.
+   *
+   * The product sets `window.STARMUS_BOOTSTRAP.captureProfile`; absent that,
+   * `conversation` is used, which preserves this package's previous behaviour
+   * exactly. `??` rather than `||`: an explicitly supplied empty string is an
+   * invalid request and must reach `resolveCaptureProfile()` to be rejected,
+   * not be silently upgraded into a working profile.
+   *
+   * @returns {CaptureProfileName}
+   */
+  function activeCaptureProfileName() {
+    var _bootstrap$capturePro;
+    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    return (_bootstrap$capturePro = bootstrap === null || bootstrap === void 0 ? void 0 : bootstrap.captureProfile) !== null && _bootstrap$capturePro !== void 0 ? _bootstrap$capturePro : DEFAULT_CAPTURE_PROFILE;
+  }
+
+  /**
+   * Build getUserMedia audio constraints for a profile. Keys the profile does
+   * not constrain are omitted entirely rather than sent as a null, so the
+   * browser applies its own default instead of failing the request.
+   *
+   * Numeric limits are sent as `{ ideal: n }`, not as `{ max: n }` or
+   * `{ exact: n }`. A mandatory constraint the device cannot meet makes
+   * `getUserMedia` reject with `OverconstrainedError`, and the speaker cannot
+   * record at all — which ADR-011's unconditional-capture rule forbids. The
+   * package therefore asks, then reports what it actually got through
+   * `describeAttainment()`; enforcing a ceiling on the resulting asset is the
+   * Spoken Audio Node's, where refusing does not cost the recording.
+   *
+   * @param {CaptureProfileName} [name]
+   * @returns {MediaTrackConstraints}
+   */
+  function getAudioConstraints(name) {
+    var profile = resolveCaptureProfile(name);
+    /** @type {MediaTrackConstraints} */
+    var constraints = {
+      echoCancellation: profile.voiceProcessing,
+      noiseSuppression: profile.voiceProcessing
+    };
+    if (profile.sampleRate !== null) {
+      constraints.sampleRate = {
+        ideal: profile.sampleRate
+      };
+    }
+    if (profile.channelCount !== null) {
+      constraints.channelCount = {
+        ideal: profile.channelCount
+      };
+    }
+    return constraints;
+  }
+
+  /**
+   * MediaRecorder options for a profile. An unconstrained bitrate lets the
+   * browser choose, which is what `documentation` and `import` want.
+   *
+   * @param {CaptureProfileName} [name]
+   * @param {string} [mimeType]
+   * @returns {MediaRecorderOptions}
+   */
+  function getRecorderOptions(name, mimeType) {
+    var profile = resolveCaptureProfile(name);
+    /** @type {MediaRecorderOptions} */
+    var options = {};
+    if (mimeType) {
+      options.mimeType = mimeType;
+    }
+    if (profile.audioBitsPerSecond !== null) {
+      options.audioBitsPerSecond = profile.audioBitsPerSecond;
+    }
+    return options;
+  }
+
+  /**
+   * @typedef {Object} CaptureAttainment
+   * @property {CaptureProfileName} profile
+   * @property {{sampleRate: number|null, channelCount: number|null}} requested
+   * @property {{sampleRate?: number, channelCount?: number}} actual
+   * @property {boolean} attained    True only when every constrained value was verified within its limit.
+   * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
+   * @property {string[]} unverified Constrained values the device did not report at all.
+   */
+
+  /**
+   * Report what the device actually delivered against what the profile asked
+   * for. ADR-035: an unattainable profile is reported to the product, never
+   * silently satisfied by substituting a different one.
+   *
+   * A profile's numbers are ceilings, so a value is within limit when it is at
+   * or below the requested one. A value the device does not report is
+   * `unverified`, never assumed to be fine — an unreported rate is exactly the
+   * case where a 44.1 or 48 kHz stream would otherwise pass unnoticed.
+   *
+   * @param {CaptureProfileName} name
+   * @param {MediaStreamTrack} track
+   * @returns {CaptureAttainment}
+   */
+  function describeAttainment(name, track) {
+    var profile = resolveCaptureProfile(name);
+    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    var requested = {
+      sampleRate: profile.sampleRate,
+      channelCount: profile.channelCount
+    };
+
+    /** @type {string[]} */
+    var exceeded = [];
+    /** @type {string[]} */
+    var unverified = [];
+    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
+      var key = _arr[_i];
+      var limit = profile[key];
+      if (limit === null) {
+        continue;
+      }
+      var reported = actual[key];
+      if (typeof reported !== "number") {
+        unverified.push(key);
+      } else if (reported > limit) {
+        exceeded.push(key);
+      }
+    }
+    return {
+      profile: profile.name,
+      requested: requested,
+      actual: actual,
+      attained: exceeded.length === 0 && unverified.length === 0,
+      exceeded: exceeded,
+      unverified: unverified
+    };
+  }
+
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
    *
@@ -16162,8 +16885,6 @@
       phases: 3,
       noiseThreshold: 5,
       speechThreshold: 20,
-      sampleRate: 16000,
-      // Runtime policy: cap all tiers to 16kHz for upload compatibility
       fftSize: 2048,
       smoothing: 0.8,
       gainRange: [0.5, 2.0],
@@ -16174,8 +16895,6 @@
       phases: 2,
       noiseThreshold: 8,
       speechThreshold: 15,
-      sampleRate: 16000,
-      // Runtime policy: cap all tiers to 16kHz for upload compatibility
       fftSize: 1024,
       smoothing: 0.6,
       gainRange: [0.7, 1.5],
@@ -16186,7 +16905,6 @@
       phases: 1,
       noiseThreshold: 12,
       speechThreshold: 10,
-      sampleRate: 16000,
       fftSize: 512,
       smoothing: 0.4,
       gainRange: [0.8, 1.2],
@@ -16251,15 +16969,30 @@
       key: "performCalibration",
       value: (function () {
         var _performCalibration = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(stream, onUpdate) {
-          var settings, result, _t;
+          var _options$captureProfi;
+          var options,
+            settings,
+            profile,
+            analysisSampleRate,
+            result,
+            _args2 = arguments,
+            _t;
           return _regenerator().w(function (_context2) {
             while (1) switch (_context2.p = _context2.n) {
               case 0:
-                settings = this.getTierSettings();
+                options = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
+                settings = this.getTierSettings(); // ADR-035: the analysis rate comes from the capture profile, never
+                // from the tier. A profile that constrains nothing (documentation,
+                // import) gets the device's own rate, so calibration measures the
+                // signal the recorder will actually capture.
+                profile = resolveCaptureProfile((_options$captureProfi = options.captureProfile) !== null && _options$captureProfi !== void 0 ? _options$captureProfi : activeCaptureProfileName());
+                analysisSampleRate = profile.sampleRate;
                 _context2.p = 1;
                 try {
-                  this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: settings.sampleRate,
+                  this.audioContext = new (window.AudioContext || window.webkitAudioContext)(analysisSampleRate === null ? {
+                    latencyHint: "interactive"
+                  } : {
+                    sampleRate: analysisSampleRate,
                     latencyHint: "interactive"
                   });
                 } catch (_sampleRateError) {
@@ -16268,7 +17001,8 @@
                   });
                   sparxstarIntegration.reportError("calibration_samplerate_fallback", {
                     tier: this.tier,
-                    requestedSampleRate: settings.sampleRate,
+                    captureProfile: profile.name,
+                    requestedSampleRate: analysisSampleRate,
                     error: _sampleRateError.message
                   });
                 }
@@ -16636,48 +17370,65 @@
      */
     function _startCalibration() {
       _startCalibration = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee() {
-        var stream, calibration, result, _t, _t2;
+        var constraints, stream, calibration, result, _t, _t2, _t3;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
               store.dispatch({
                 type: "starmus/calibration-start"
               });
+
+              // Resolve constraints before touching the microphone. An unknown
+              // profile name throws, and inside the getUserMedia try/catch that
+              // throw would be reported as MIC_DENIED — sending someone to check
+              // browser permissions for what is a bootstrap typo.
               _context.p = 1;
-              _context.n = 2;
-              return navigator.mediaDevices.getUserMedia({
-                audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  sampleRate: 16000,
-                  // Runtime policy: cap all tiers to 16kHz
-                  channelCount: 1
+              constraints = getAudioConstraints(activeCaptureProfileName());
+              _context.n = 3;
+              break;
+            case 2:
+              _context.p = 2;
+              _t = _context.v;
+              console.error("[Recorder] Invalid capture profile:", _t);
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  code: "INVALID_CAPTURE_PROFILE",
+                  message: _t.message,
+                  retryable: false
                 }
               });
-            case 2:
-              stream = _context.v;
-              _context.n = 4;
-              break;
+              return _context.a(2);
             case 3:
               _context.p = 3;
-              _t = _context.v;
-              console.error("[Recorder] Microphone access denied:", _t);
+              _context.n = 4;
+              return navigator.mediaDevices.getUserMedia({
+                audio: constraints
+              });
+            case 4:
+              stream = _context.v;
+              _context.n = 6;
+              break;
+            case 5:
+              _context.p = 5;
+              _t2 = _context.v;
+              console.error("[Recorder] Microphone access denied:", _t2);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MIC_DENIED",
-                  message: _t.message,
+                  message: _t2.message,
                   retryable: true
                 }
               });
               return _context.a(2);
-            case 4:
+            case 6:
               calibration = new EnhancedCalibration();
-              _context.n = 5;
+              _context.n = 7;
               return calibration.init();
-            case 5:
-              _context.p = 5;
-              _context.n = 6;
+            case 7:
+              _context.p = 7;
+              _context.n = 8;
               return calibration.performCalibration(stream, function (msg, vol, done, data) {
                 if (done) {
                   store.dispatch({
@@ -16693,20 +17444,22 @@
                     volumePercent: vol
                   });
                 }
+              }, {
+                captureProfile: activeCaptureProfileName()
               });
-            case 6:
+            case 8:
               result = _context.v;
               // Store the calibrated stream for recording
               recorderRegistry.set(instanceId, _objectSpread2(_objectSpread2({}, recorderRegistry.get(instanceId) || {}), {}, {
                 calibrationResult: result,
                 stream: stream
               }));
-              _context.n = 8;
+              _context.n = 10;
               break;
-            case 7:
-              _context.p = 7;
-              _t2 = _context.v;
-              console.error("[Recorder] Calibration failed:", _t2);
+            case 9:
+              _context.p = 9;
+              _t3 = _context.v;
+              console.error("[Recorder] Calibration failed:", _t3);
               // Fallback: mark calibration complete with defaults
               store.dispatch({
                 type: "starmus/calibration-complete",
@@ -16721,24 +17474,30 @@
               recorderRegistry.set(instanceId, _objectSpread2(_objectSpread2({}, recorderRegistry.get(instanceId) || {}), {}, {
                 stream: stream
               }));
-            case 8:
+            case 10:
               // Stop calibration stream tracks — a new stream is opened at record start
               stream.getTracks().forEach(function (t) {
                 return t.stop();
               });
-            case 9:
+            case 11:
               return _context.a(2);
           }
-        }, _callee, null, [[5, 7], [1, 3]]);
+        }, _callee, null, [[7, 9], [3, 5], [1, 2]]);
       }));
       return _startCalibration.apply(this, arguments);
     }
     function startRecording() {
       return _startRecording.apply(this, arguments);
     } // Subscribe to setup-mic and record commands
+    /**
+     * Dispatches a TIER_C_NO_MIC error and returns true when the current tier
+     * is "C", blocking any microphone command before the recorder runs.
+     *
+     * @returns {boolean} true if the command was blocked (Tier C), false otherwise
+     */
     function _startRecording() {
       _startRecording = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2() {
-        var stream, mimeType, mediaRecorder, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t3, _t4;
+        var constraints, stream, mimeType, captureProfile, mediaRecorder, attainment, chunks, startTime, elapsedBeforePause, rafId, analyser, analyserData, meterSampleRate, source, getAmplitude, tick, maxDurationTimeout, pauseRecording, resumeRecording, stopRecording, paused, resumed, stopped, _t4, _t5, _t6;
         return _regenerator().w(function (_context2) {
           while (1) switch (_context2.p = _context2.n) {
             case 0:
@@ -16807,49 +17566,64 @@
                 return Math.min(100, Math.sqrt(sumSq / analyserData.length) * 200);
               };
               _context2.p = 1;
-              _context2.n = 2;
-              return navigator.mediaDevices.getUserMedia({
-                audio: {
-                  echoCancellation: true,
-                  noiseSuppression: true,
-                  sampleRate: 16000,
-                  channelCount: 1
+              constraints = getAudioConstraints(activeCaptureProfileName());
+              _context2.n = 3;
+              break;
+            case 2:
+              _context2.p = 2;
+              _t4 = _context2.v;
+              console.error("[Recorder] Invalid capture profile:", _t4);
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  code: "INVALID_CAPTURE_PROFILE",
+                  message: _t4.message,
+                  retryable: false
                 }
               });
-            case 2:
-              stream = _context2.v;
-              _context2.n = 4;
-              break;
+              return _context2.a(2);
             case 3:
               _context2.p = 3;
-              _t3 = _context2.v;
-              console.error("[Recorder] Cannot open microphone for recording:", _t3);
+              _context2.n = 4;
+              return navigator.mediaDevices.getUserMedia({
+                audio: constraints
+              });
+            case 4:
+              stream = _context2.v;
+              _context2.n = 6;
+              break;
+            case 5:
+              _context2.p = 5;
+              _t5 = _context2.v;
+              console.error("[Recorder] Cannot open microphone for recording:", _t5);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MIC_DENIED",
-                  message: _t3.message,
+                  message: _t5.message,
                   retryable: true
                 }
               });
               return _context2.a(2);
-            case 4:
-              mimeType = getSupportedMimeType();
-              _context2.p = 5;
-              mediaRecorder = new MediaRecorder(stream, mimeType ? {
-                mimeType: mimeType
-              } : {});
-              _context2.n = 7;
-              break;
             case 6:
-              _context2.p = 6;
-              _t4 = _context2.v;
-              console.error("[Recorder] MediaRecorder creation failed:", _t4);
+              mimeType = getSupportedMimeType();
+              captureProfile = activeCaptureProfileName();
+              _context2.p = 7;
+              // ADR-035: the profile's encoder options are applied here, not
+              // merely declared. Constructing with only { mimeType } left
+              // `conversation`'s 32 kbps ceiling as dead configuration.
+              mediaRecorder = new MediaRecorder(stream, getRecorderOptions(captureProfile, mimeType));
+              _context2.n = 9;
+              break;
+            case 8:
+              _context2.p = 8;
+              _t6 = _context2.v;
+              console.error("[Recorder] MediaRecorder creation failed:", _t6);
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   code: "MEDIARECORDER_FAILED",
-                  message: _t4.message,
+                  message: _t6.message,
                   retryable: false
                 }
               });
@@ -16857,7 +17631,19 @@
                 return t.stop();
               });
               return _context2.a(2);
-            case 7:
+            case 9:
+              // ADR-035: an unattainable profile is reported to the product, never
+              // silently satisfied by substituting a different one. The capture
+              // profile travels with the asset so a consumer can tell whether a
+              // measurement taken from it is admissible.
+              attainment = describeAttainment(captureProfile, stream.getAudioTracks()[0]);
+              store.dispatch({
+                type: "starmus/capture-profile",
+                attainment: attainment
+              });
+              if (!attainment.attained) {
+                console.warn("[Recorder] Capture profile \"".concat(attainment.profile, "\" not attained by this device."), attainment);
+              }
               store.dispatch({
                 type: "starmus/mic-start"
               });
@@ -16868,39 +17654,46 @@
               analyser = null;
               analyserData = null;
               if (!(tier !== "C")) {
+                _context2.n = 14;
+                break;
+              }
+              _context2.p = 10;
+              if (sharedAudioContext) {
+                _context2.n = 11;
+                break;
+              }
+              // The meter must not force a rate the capture profile did not ask
+              // for; let the context follow the device for unconstrained profiles.
+              // Take the rate from the profile, not from
+              // getAudioConstraints(): those are MediaTrackConstraints,
+              // where sampleRate is `{ ideal: n }`. AudioContext wants a
+              // plain number and would throw or ignore the object.
+              meterSampleRate = resolveCaptureProfile(activeCaptureProfileName()).sampleRate;
+              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)(meterSampleRate === null ? {} : {
+                sampleRate: meterSampleRate
+              });
+              _context2.n = 12;
+              break;
+            case 11:
+              if (!(sharedAudioContext.state === "suspended")) {
                 _context2.n = 12;
                 break;
               }
-              _context2.p = 8;
-              if (sharedAudioContext) {
-                _context2.n = 9;
-                break;
-              }
-              sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 16000
-              });
-              _context2.n = 10;
-              break;
-            case 9:
-              if (!(sharedAudioContext.state === "suspended")) {
-                _context2.n = 10;
-                break;
-              }
-              _context2.n = 10;
+              _context2.n = 12;
               return sharedAudioContext.resume();
-            case 10:
+            case 12:
               source = sharedAudioContext.createMediaStreamSource(stream);
               analyser = sharedAudioContext.createAnalyser();
               analyser.fftSize = 256;
               analyser.smoothingTimeConstant = 0.6;
               source.connect(analyser);
               analyserData = new Uint8Array(analyser.fftSize);
-              _context2.n = 12;
+              _context2.n = 14;
               break;
-            case 11:
-              _context2.p = 11;
+            case 13:
+              _context2.p = 13;
               _context2.v;
-            case 12:
+            case 14:
               mediaRecorder.addEventListener("dataavailable", function (e) {
                 if (e.data && e.data.size > 0) {
                   chunks.push(e.data);
@@ -16961,21 +17754,39 @@
                   stopped();
                 }
               });
-            case 13:
+            case 15:
               return _context2.a(2);
           }
-        }, _callee2, null, [[8, 11], [5, 6], [1, 3]]);
+        }, _callee2, null, [[10, 13], [7, 8], [3, 5], [1, 2]]);
       }));
       return _startRecording.apply(this, arguments);
     }
+    function blockIfTierC() {
+      if (store.getState().tier !== "C") {
+        return false;
+      }
+      store.dispatch({
+        type: "starmus/error",
+        error: {
+          code: "TIER_C_NO_MIC",
+          message: "Recording is not available on this device. Please upload a file.",
+          retryable: false
+        }
+      });
+      return true;
+    }
     Bus.subscribe("starmus/setup-mic", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
-        startCalibration();
+        if (!blockIfTierC()) {
+          startCalibration();
+        }
       }
     });
     Bus.subscribe("starmus/mic-start", function (_p, meta) {
       if (meta && meta.instanceId === instanceId) {
-        startRecording();
+        if (!blockIfTierC()) {
+          startRecording();
+        }
       }
     });
 
@@ -17376,6 +18187,7 @@
       window.StarmusStoreInstance = store;
       window.StarmusRuntime = window.StarmusRuntime || {};
       window.StarmusRuntime.store = store;
+      window.StarmusRuntime.capabilities = starmusCapabilities;
       initOffline().catch(function (error) {
         console.warn("[StarmusMain] Offline queue unavailable, continuing:", error);
       });
@@ -17398,5 +18210,6 @@
   };
   window.StarmusOfflineQueue = getOfflineQueue;
   window.SparxstarIntegration = sparxstarIntegration;
+  window.StarmusCapabilities = starmusCapabilities;
 
 })();

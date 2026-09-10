@@ -13,6 +13,24 @@
  */
 
 /**
+ * @deprecated SIRUS_REPLACEMENT_PENDING
+ *
+ * This file is a transitional shim for environment resolution.
+ * It will be replaced by the Sirus context client
+ * (starisian/sparxstar-sirus-context) in Phase 3.
+ *
+ * DO NOT add new functionality to this file.
+ * DO NOT extend the API surface of this file.
+ * DO NOT import this file from new modules.
+ *
+ * Existing callers: starmus-core.js, starmus-enhanced-calibration.js,
+ * starmus-main.js, starmus-offline.js, starmus-recorder.js, starmus-tus.js
+ * Replacement: SirusClientInterface from sparxstar-sirus-context
+ *
+ * See: https://github.com/Starisian-Technologies/sparxstar-sirus-context
+ */
+
+/**
  * @file starmus-sparxstar-integration.js
  * @version 7.1.5
  * @description Integration layer between Sparxstar UEC and the Starmus recorder.

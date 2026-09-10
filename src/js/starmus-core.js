@@ -54,7 +54,7 @@ function getSafeRedirect(candidate) {
     }
 
     try {
-        const redirect = new URL(candidate, window.location.origin);
+        const redirect = new URL(candidate, window.location.href);
         const isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
         return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
     } catch {

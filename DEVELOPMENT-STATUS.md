@@ -31,7 +31,7 @@ to the present vanilla IIFE bundle increases migration work.
 ### What is already valuable
 
 - The bundle observes its legacy bootstrap guard before creating the recorder runtime.
-- Recording is explicitly user initiated, and audio constraints target mono 16 kHz capture.
+- Recording is explicitly user initiated, and the `conversation` capture profile targets mono 16 kHz while `documentation` and `import` preserve device-provided sample rate and channels.
 - The upload layer supplies UUID metadata, limits TUS chunks to 512 KB, requests checksums, caps
   retries, and applies request timeouts.
 - IndexedDB queue items are size-limited by tier and retry no more than three times.

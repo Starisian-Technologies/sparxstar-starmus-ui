@@ -44,6 +44,8 @@ const CONFIG = {
 
 /** Tracks whether the singleton queue has installed its network listener. */
 let networkListenerInstalled = false;
+/** Tracks whether the singleton queue has installed its battery listener. */
+let batteryListenerInstalled = false;
 
 /**
  * Resolves the maximum blob size permitted for the given metadata's tier.
@@ -302,20 +304,19 @@ class OfflineQueue {
         }
 
         this._clearScheduledProcessQueue();
+        const pending = await this.getAll();
+        if (pending.length === 0) {
+            return;
+        }
+
         if (sparxstarIntegration.isBatteryCritical?.()) {
             debugLog("[Offline] Battery critical — deferring queue processing");
-            this._scheduleProcessQueue(CONFIG.retryDelays[1]);
             return;
         }
 
         this.isProcessing = true;
 
         try {
-            const pending = await this.getAll();
-            if (pending.length === 0) {
-                return;
-            }
-
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
@@ -427,11 +428,34 @@ class OfflineQueue {
         window.addEventListener("online", () => {
             this._scheduleProcessQueue(0);
         });
+        this._setupBatteryListeners();
 
         // Flush pending items on startup when already online.
         if (navigator.onLine) {
             this._scheduleProcessQueue(0);
         }
+    }
+    /** @private */
+    _setupBatteryListeners() {
+        if (
+            batteryListenerInstalled ||
+            typeof navigator === "undefined" ||
+            typeof navigator.getBattery !== "function"
+        ) {
+            return;
+        }
+
+        batteryListenerInstalled = true;
+        navigator.getBattery().then((battery) => {
+            const handleBatteryChange = () => {
+                if (!sparxstarIntegration.isBatteryCritical?.()) {
+                    this._scheduleProcessQueue(0);
+                }
+            };
+
+            battery.addEventListener("levelchange", handleBatteryChange);
+            battery.addEventListener("chargingchange", handleBatteryChange);
+        });
     }
     /** @private */
     _clearScheduledProcessQueue() {

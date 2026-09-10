@@ -353,7 +353,7 @@ class OfflineQueue {
         if (navigator.onLine) {
             void this.processQueue();
         }
-
+    }
     /** @private */
     _notifyQueueUpdate() {
         const BUS = window.CommandBus || window.StarmusHooks;

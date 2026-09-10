@@ -18,10 +18,16 @@ const sharedPlugins = [
         return new URL(address, location);
     }
 
-    const anchor = document.createElement("a");
-    if (location) {
-        anchor.href = location;
-    }
+    const resolver = document.createElement("a");
+    resolver.href = location || window.location.href;
+
+    const doc = document.implementation.createHTMLDocument("");
+    const base = doc.createElement("base");
+    const anchor = doc.createElement("a");
+
+    doc.head.appendChild(base);
+    doc.body.appendChild(anchor);
+    base.href = resolver.href;
     anchor.href = address;
 
     return {

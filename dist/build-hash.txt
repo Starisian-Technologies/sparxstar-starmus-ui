@@ -1,2 +1,2 @@
 starmus-audio.css: 89ad1dac
-starmus-audio.js: 362dc317
+starmus-audio.js: 3e362370

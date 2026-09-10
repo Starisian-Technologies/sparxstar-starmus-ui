@@ -14482,6 +14482,10 @@
       this.db = null;
       /** @type {boolean} */
       this.isProcessing = false;
+      /** @type {number|null} */
+      this.processQueueTimeoutId = null;
+      /** @type {number|null} */
+      this.processQueueDueAt = null;
     }
 
     /**
@@ -14622,6 +14626,9 @@
                   tx.oncomplete = function () {
                     debugLog("[Offline] Queued:", item.id);
                     _this2._notifyQueueUpdate();
+                    if (navigator.onLine) {
+                      _this2._scheduleProcessQueue(0);
+                    }
                     resolve(item.id);
                   };
                   tx.onerror = function (ev) {
@@ -14768,7 +14775,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, _t, _t2, _t3;
+          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.p = _context6.n) {
               case 0:
@@ -14778,6 +14785,7 @@
                 }
                 return _context6.a(2);
               case 1:
+                this._clearScheduledProcessQueue();
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
                   _context6.n = 2;
                   break;
@@ -14925,11 +14933,18 @@
               case 22:
                 _context6.p = 22;
                 this.isProcessing = false;
-                return _context6.f(22);
+                _context6.n = 23;
+                return this._getNextProcessDelay();
               case 23:
+                nextDelay = _context6.v;
+                if (nextDelay !== null) {
+                  this._scheduleProcessQueue(nextDelay);
+                }
+                return _context6.f(22);
+              case 24:
                 return _context6.a(2);
             }
-          }, _callee6, this, [[10, 13], [6, 18, 19, 20], [3, 21, 22, 23]]);
+          }, _callee6, this, [[10, 13], [6, 18, 19, 20], [3, 21, 22, 24]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14951,15 +14966,110 @@
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          return void _this6.processQueue();
+          _this6._scheduleProcessQueue(0);
         });
 
         // Flush pending items on startup when already online.
         if (navigator.onLine) {
-          void this.processQueue();
+          this._scheduleProcessQueue(0);
         }
       }
       /** @private */
+    }, {
+      key: "_clearScheduledProcessQueue",
+      value: function _clearScheduledProcessQueue() {
+        if (this.processQueueTimeoutId !== null) {
+          window.clearTimeout(this.processQueueTimeoutId);
+          this.processQueueTimeoutId = null;
+        }
+        this.processQueueDueAt = null;
+      }
+      /** @private */
+    }, {
+      key: "_scheduleProcessQueue",
+      value: function _scheduleProcessQueue(delayMs) {
+        var _this7 = this;
+        if (!navigator.onLine) {
+          return;
+        }
+        var safeDelay = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
+        var dueAt = Date.now() + safeDelay;
+        if (this.processQueueTimeoutId !== null && this.processQueueDueAt !== null && this.processQueueDueAt <= dueAt) {
+          return;
+        }
+        this._clearScheduledProcessQueue();
+        this.processQueueDueAt = dueAt;
+        this.processQueueTimeoutId = window.setTimeout(function () {
+          _this7.processQueueTimeoutId = null;
+          _this7.processQueueDueAt = null;
+          void _this7.processQueue();
+        }, safeDelay);
+      }
+      /** @private */
+    }, {
+      key: "_getNextProcessDelay",
+      value: (function () {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
+          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t4;
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.p = _context7.n) {
+              case 0:
+                _context7.n = 1;
+                return this.getAll();
+              case 1:
+                pending = _context7.v;
+                if (!(pending.length === 0)) {
+                  _context7.n = 2;
+                  break;
+                }
+                return _context7.a(2, null);
+              case 2:
+                nextDelay = null;
+                now = Date.now();
+                _iterator2 = _createForOfIteratorHelper$1(pending);
+                _context7.p = 3;
+                _iterator2.s();
+              case 4:
+                if ((_step2 = _iterator2.n()).done) {
+                  _context7.n = 7;
+                  break;
+                }
+                item = _step2.value;
+                if (!(item.retryCount >= CONFIG.maxRetries)) {
+                  _context7.n = 5;
+                  break;
+                }
+                return _context7.a(2, 0);
+              case 5:
+                retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
+                remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
+                if (nextDelay === null || remainingDelay < nextDelay) {
+                  nextDelay = remainingDelay;
+                }
+              case 6:
+                _context7.n = 4;
+                break;
+              case 7:
+                _context7.n = 9;
+                break;
+              case 8:
+                _context7.p = 8;
+                _t4 = _context7.v;
+                _iterator2.e(_t4);
+              case 9:
+                _context7.p = 9;
+                _iterator2.f();
+                return _context7.f(9);
+              case 10:
+                return _context7.a(2, nextDelay);
+            }
+          }, _callee7, this, [[3, 8, 9, 10]]);
+        }));
+        function _getNextProcessDelay() {
+          return _getNextProcessDelay2.apply(this, arguments);
+        }
+        return _getNextProcessDelay;
+      }() /** @private */)
     }, {
       key: "_notifyQueueUpdate",
       value: function _notifyQueueUpdate() {
@@ -15051,22 +15161,22 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
-      return _regenerator().w(function (_context7) {
-        while (1) switch (_context7.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
+      return _regenerator().w(function (_context8) {
+        while (1) switch (_context8.n) {
           case 0:
             if (offlineQueue.db) {
-              _context7.n = 2;
+              _context8.n = 2;
               break;
             }
-            _context7.n = 1;
+            _context8.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context7.a(2, offlineQueue);
+            return _context8.a(2, offlineQueue);
         }
-      }, _callee7);
+      }, _callee8);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
@@ -15080,18 +15190,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context8) {
-        while (1) switch (_context8.n) {
+      return _regenerator().w(function (_context9) {
+        while (1) switch (_context9.n) {
           case 0:
-            _context8.n = 1;
+            _context9.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context8.v;
-            return _context8.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context9.v;
+            return _context9.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee8);
+      }, _callee9);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -15105,22 +15215,22 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
       var q, list;
-      return _regenerator().w(function (_context9) {
-        while (1) switch (_context9.n) {
+      return _regenerator().w(function (_context0) {
+        while (1) switch (_context0.n) {
           case 0:
-            _context9.n = 1;
+            _context0.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context9.v;
-            _context9.n = 2;
+            q = _context0.v;
+            _context0.n = 2;
             return q.getAll();
           case 2:
-            list = _context9.v;
-            return _context9.a(2, list.length);
+            list = _context0.v;
+            return _context0.a(2, list.length);
         }
-      }, _callee9);
+      }, _callee0);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -15388,7 +15498,6 @@
               }
               throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
             case 5:
-              emitCompletionEvent(detail);
               emitCompletionEvent(detail);
               redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
               if (redirect) {

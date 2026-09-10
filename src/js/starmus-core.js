@@ -251,7 +251,6 @@ export function initCore(store, instanceId, env) {
                     throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
                 }
                 emitCompletionEvent(detail);
-                emitCompletionEvent(detail);
 
                 const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
                 if (redirect) {

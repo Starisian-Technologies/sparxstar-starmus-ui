@@ -26,6 +26,7 @@ const sharedPlugins = [
                     },
                     useBuiltIns: "usage",
                     corejs: 3,
+                    exclude: ["transform-block-scoping"],
                 },
             ],
         ],

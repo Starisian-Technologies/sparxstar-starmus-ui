@@ -2553,11 +2553,11 @@
    * See the LICENSE file in the repository root for full license terms.
    */
 
-  var globalScope = typeof window !== "undefined" ? window : globalThis;
+  const globalScope = typeof window !== "undefined" ? window : globalThis;
   if (!globalScope.StarmusRegistry) {
     globalScope.StarmusRegistry = {};
   }
-  var registry = globalScope.StarmusRegistry;
+  const registry = globalScope.StarmusRegistry;
 
   /**
    * Subscribes a handler to a named command.
@@ -2572,7 +2572,7 @@
     }
     registry[command].push(handler);
     return function unsubscribe() {
-      var idx = registry[command].indexOf(handler);
+      const idx = registry[command].indexOf(handler);
       if (idx > -1) {
         registry[command].splice(idx, 1);
       }
@@ -2588,9 +2588,9 @@
    * @returns {void}
    */
   function dispatch(command) {
-    var payload = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-    var meta = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-    var handlers = registry[command];
+    let payload = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
+    let meta = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
+    const handlers = registry[command];
     if (!handlers || handlers.length === 0) {
       console.warn("[Bus] Dispatched '".concat(command, "' but nobody is listening."));
       return;
@@ -2613,7 +2613,7 @@
   function debugLog() {
     /* console.log(..._args); */
   }
-  var Bus = {
+  const Bus = {
     subscribe: subscribe,
     dispatch: dispatch,
     debugLog: debugLog
@@ -2721,7 +2721,7 @@
      * Default initial state for new store instances.
      * @type {Object}
      */
-    var DEFAULT_INITIAL_STATE = {
+    const DEFAULT_INITIAL_STATE = {
       instanceId: null,
       tier: null,
       status: "uninitialized",
@@ -2777,8 +2777,8 @@
       }
     };
     function shallowClone(obj) {
-      var out = {};
-      for (var k in obj) {
+      const out = {};
+      for (const k in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, k)) {
           out[k] = obj[k];
         }
@@ -2786,8 +2786,8 @@
       return out;
     }
     function merge(a, b) {
-      var out = shallowClone(a);
-      for (var k in b) {
+      const out = shallowClone(a);
+      for (const k in b) {
         if (Object.prototype.hasOwnProperty.call(b, k)) {
           out[k] = b[k];
         }
@@ -2812,7 +2812,7 @@
           }));
         case "starmus/env-update":
           {
-            var newEnv = merge(state.env, action.payload || {});
+            const newEnv = merge(state.env, action.payload || {});
             if (!newEnv.errors) {
               newEnv.errors = state.env.errors || [];
             }
@@ -2822,15 +2822,15 @@
           }
         case "starmus/error":
           {
-            var errObj = action.error || action.payload;
-            var currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
+            const errObj = action.error || action.payload;
+            const currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
             currentErrors.push({
               code: errObj.code || "RUNTIME_ERROR",
               message: errObj.message || "Unknown",
               timestamp: Date.now(),
               severity: errObj.retryable === false ? "hard" : "soft"
             });
-            var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+            const shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
             return merge(state, {
               status: shouldResetStatus ? "ready" : state.status,
               error: errObj,
@@ -2994,22 +2994,22 @@
      * @returns {Object} Store with getState, dispatch, subscribe
      */
     function createStore(initial) {
-      var state = merge(DEFAULT_INITIAL_STATE, initial || {});
-      var listeners = [];
+      let state = merge(DEFAULT_INITIAL_STATE, initial || {});
+      const listeners = [];
       return {
         getState: function getState() {
           return state;
         },
         dispatch: function dispatch(action) {
           state = reducer(state, action);
-          for (var i = 0; i < listeners.length; i++) {
+          for (let i = 0; i < listeners.length; i++) {
             listeners[i](state);
           }
         },
         subscribe: function subscribe(fn) {
           listeners.push(fn);
           return function () {
-            var index = listeners.indexOf(fn);
+            const index = listeners.indexOf(fn);
             if (index >= 0) {
               listeners.splice(index, 1);
             }
@@ -3027,7 +3027,7 @@
       };
     }
   })(typeof window !== "undefined" ? window : globalThis);
-  var runtimeGlobal = typeof window !== "undefined" ? window : globalThis;
+  const runtimeGlobal = typeof window !== "undefined" ? window : globalThis;
 
   /**
    * @exports createStore
@@ -13470,7 +13470,7 @@
    * See the LICENSE file in the repository root for full license terms.
    */
 
-  var sparxstarIntegration = {
+  const sparxstarIntegration = {
     /**
      * Whether the integration layer is active.
      * @type {boolean}
@@ -13499,7 +13499,7 @@
      * @returns {Object} Environment payload with tier, network, recordingSettings
      */
     getEnvironmentData: function getEnvironmentData() {
-      var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : undefined;
+      const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : undefined;
       if (bootstrap && bootstrap.tier) {
         return {
           tier: bootstrap.tier,
@@ -13513,10 +13513,10 @@
           browser: {}
         };
       }
-      var hasMediaRecorder = typeof MediaRecorder !== "undefined";
-      var hasGetUserMedia = typeof navigator !== "undefined" && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function";
-      var hasAudioContext = typeof window !== "undefined" && (typeof window.AudioContext === "function" || typeof window.webkitAudioContext === "function");
-      var fallbackTier = !hasMediaRecorder || !hasGetUserMedia ? "C" : hasAudioContext ? "A" : "B";
+      const hasMediaRecorder = typeof MediaRecorder !== "undefined";
+      const hasGetUserMedia = typeof navigator !== "undefined" && navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function";
+      const hasAudioContext = typeof window !== "undefined" && (typeof window.AudioContext === "function" || typeof window.webkitAudioContext === "function");
+      const fallbackTier = !hasMediaRecorder || !hasGetUserMedia ? "C" : hasAudioContext ? "A" : "B";
       return {
         tier: fallbackTier,
         recordingSettings: {
@@ -13549,7 +13549,7 @@
      * @returns {boolean}
      */
     isBatteryCritical: function isBatteryCritical() {
-      var b = this._battery;
+      const b = this._battery;
       return b !== null && b.level < 0.2 && !b.charging;
     },
     /**
@@ -13609,7 +13609,7 @@
    * Simple circuit breaker that opens after repeated upload failures.
    * Prevents hammering a broken endpoint while offline or during server errors.
    */
-  var UploadCircuitBreaker = /*#__PURE__*/function () {
+  let UploadCircuitBreaker = /*#__PURE__*/function () {
     function UploadCircuitBreaker() {
       _classCallCheck$9(this, UploadCircuitBreaker);
       this.failures = 0;
@@ -13671,7 +13671,7 @@
       }()
     }]);
   }();
-  var uploadCircuitBreaker = new UploadCircuitBreaker();
+  const uploadCircuitBreaker = new UploadCircuitBreaker();
 
   /* ---- Config ---- */
 
@@ -13681,10 +13681,10 @@
    * @returns {Object} Upload configuration
    */
   function getConfig() {
-    var envData = sparxstarIntegration.getEnvironmentData();
-    var settings = (envData === null || envData === void 0 ? void 0 : envData.recordingSettings) || {};
-    var bootstrap = typeof window !== "undefined" && window.STARMUS_BOOTSTRAP ? window.STARMUS_BOOTSTRAP : {};
-    var defaults = {
+    const envData = sparxstarIntegration.getEnvironmentData();
+    const settings = (envData === null || envData === void 0 ? void 0 : envData.recordingSettings) || {};
+    const bootstrap = typeof window !== "undefined" && window.STARMUS_BOOTSTRAP ? window.STARMUS_BOOTSTRAP : {};
+    const defaults = {
       chunkSize: settings.uploadChunkSize || 512 * 1024,
       // max 512 KB per AGENTS.md
       retryDelays: [0, 2000, 4000],
@@ -13698,8 +13698,8 @@
         directUpload: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/upload-fallback")
       } : {}
     };
-    var globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
-    var merged = Object.assign({}, defaults, globalCfg);
+    const globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
+    const merged = Object.assign({}, defaults, globalCfg);
     merged.chunkSize = Math.min(Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024, 512 * 1024);
     return merged;
   }
@@ -13714,7 +13714,7 @@
    * @returns {string}
    */
   function sanitizeMetadata(value) {
-    var raw = _typeof$9(value) === "object" ? JSON.stringify(value) : String(value || "");
+    const raw = _typeof$9(value) === "object" ? JSON.stringify(value) : String(value || "");
     return raw.replace(/[\r\n\t]/g, " ");
   }
 
@@ -13732,11 +13732,11 @@
       return crypto.randomUUID();
     }
     if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-      var values = new Uint8Array(16);
+      const values = new Uint8Array(16);
       crypto.getRandomValues(values);
       values[6] = values[6] & 0x0f | 0x40; // RFC 4122 version 4
       values[8] = values[8] & 0x3f | 0x80; // RFC 4122 variant
-      var hex = Array.from(values, function (value) {
+      const hex = Array.from(values, function (value) {
         return value.toString(16).padStart(2, "0");
       }).join("");
       return "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
@@ -13845,8 +13845,8 @@
               fd.append("instanceId", instanceId);
             }
             return _context2.a(2, new Promise(function (resolve, reject) {
-              var xhr = new XMLHttpRequest();
-              var timeout = setTimeout(function () {
+              const xhr = new XMLHttpRequest();
+              const timeout = setTimeout(function () {
                 xhr.abort();
                 reject(new Error("Direct upload timed out after ".concat(requestTimeoutMs, "ms")));
               }, requestTimeoutMs);
@@ -13860,17 +13860,17 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                   try {
                     var _parsed$data, _parsed$data2;
-                    var parsed = JSON.parse(xhr.responseText);
+                    const parsed = JSON.parse(xhr.responseText);
                     // Default successful HTTP responses to success: true, while
                     // still allowing an explicit server-provided success value
                     // (including false) to override the default.
-                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
+                    const success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
                     // The server's identifier wins over the client-generated
                     // one, in whichever spelling it arrives. Checking only
                     // `uploadId` and writing the local id into that field made
                     // the local id outrank a server `upload_id` downstream,
                     // because completion reads `uploadId` first.
-                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
+                    const parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
                       return typeof value === "string" && value.trim() !== "";
                     }) || uploadId;
                     resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
@@ -13983,9 +13983,9 @@
               headers["X-WP-Nonce"] = nonce;
             }
             return _context3.a(2, new Promise(function (resolve, reject) {
-              var settled = false;
-              var timeoutId = null;
-              var upload = new Upload(blob, {
+              let settled = false;
+              let timeoutId = null;
+              const upload = new Upload(blob, {
                 endpoint: tusEndpoint,
                 chunkSize: cfg.chunkSize,
                 retryDelays: cfg.retryDelays,
@@ -14023,7 +14023,7 @@
                   reject(err);
                 }
               });
-              var requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
+              const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
               timeoutId = setTimeout(function () {
                 if (settled) {
                   return;
@@ -14243,9 +14243,9 @@
    * @returns {string|null} null when the format is not one this package can name.
    */
   function resolveUploadFormat(mimeType, fileName) {
-    var type = String(mimeType || "").trim().toLowerCase();
-    var name = String(fileName || "").trim().toLowerCase();
-    var ext = name.includes(".") ? name.split(".").pop() : "";
+    const type = String(mimeType || "").trim().toLowerCase();
+    const name = String(fileName || "").trim().toLowerCase();
+    const ext = name.includes(".") ? name.split(".").pop() : "";
     if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || type.includes("audio/aac") || type.includes("aac") || type.includes("mp4a") || ext === "m4a" || ext === "mp4" || ext === "aac") {
       return "aac-lc";
     }
@@ -14274,7 +14274,7 @@
    */
   function readContributorConsent() {
     try {
-      var raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
+      const raw = typeof localStorage !== "undefined" ? localStorage.getItem("starmus_contributor_consent") : null;
       return raw ? JSON.parse(raw) : null;
     } catch (_unused) {
       return null;
@@ -14326,12 +14326,12 @@
    */
   function buildCompletionDetail(input) {
     var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
-    var format = resolveUploadFormat(input.mimeType, input.fileName);
+    const format = resolveUploadFormat(input.mimeType, input.fileName);
     if (!format) {
       return null;
     }
-    var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
-    var consent = readContributorConsent();
+    const attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
+    const consent = readContributorConsent();
     return {
       sessionId: input.instanceId,
       uploadId: resolveUploadId(input.result),
@@ -14407,7 +14407,7 @@
 
 
   /** @type {Object} Queue configuration constants */
-  var CONFIG = {
+  const CONFIG = {
     dbName: "StarmusSubmissions",
     storeName: "pendingSubmissions",
     dbVersion: 1,
@@ -14424,7 +14424,7 @@
   };
 
   /** Tracks whether the singleton queue has installed its network listener. */
-  var networkListenerInstalled = false;
+  let networkListenerInstalled = false;
 
   /**
    * Resolves the maximum blob size permitted for the given metadata's tier.
@@ -14434,8 +14434,8 @@
    */
   function getMaxBlobSize() {
     var _metadata$tier, _metadata$env;
-    var metadata = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
-    var rawTier = metadata && _typeof$9(metadata) === "object" ? (_metadata$tier = metadata.tier) !== null && _metadata$tier !== void 0 ? _metadata$tier : (_metadata$env = metadata.env) === null || _metadata$env === void 0 ? void 0 : _metadata$env.tier : undefined;
+    let metadata = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
+    const rawTier = metadata && _typeof$9(metadata) === "object" ? (_metadata$tier = metadata.tier) !== null && _metadata$tier !== void 0 ? _metadata$tier : (_metadata$env = metadata.env) === null || _metadata$env === void 0 ? void 0 : _metadata$env.tier : undefined;
     if (typeof rawTier === "string" && Object.prototype.hasOwnProperty.call(CONFIG.maxBlobSizes, rawTier)) {
       return CONFIG.maxBlobSizes[rawTier];
     }
@@ -14446,14 +14446,14 @@
       return "starmus-offline-".concat(crypto.randomUUID());
     }
     if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-      var values = new Uint8Array(16);
+      const values = new Uint8Array(16);
       crypto.getRandomValues(values);
       values[6] = values[6] & 0x0f | 0x40;
       values[8] = values[8] & 0x3f | 0x80;
-      var hex = Array.from(values, function (value) {
+      const hex = Array.from(values, function (value) {
         return value.toString(16).padStart(2, "0");
       }).join("");
-      var suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
+      const suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
       return "starmus-offline-".concat(suffix);
     }
     throw new Error("Secure UUID generation is not available in this runtime");
@@ -14475,7 +14475,7 @@
    *
    * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
    */
-  var OfflineQueue = /*#__PURE__*/function () {
+  let OfflineQueue = /*#__PURE__*/function () {
     function OfflineQueue() {
       _classCallCheck$9(this, OfflineQueue);
       /** @type {IDBDatabase|null} */
@@ -14512,9 +14512,9 @@
                 throw error;
               case 1:
                 return _context.a(2, new Promise(function (resolve, reject) {
-                  var req = indexedDB.open(CONFIG.dbName, CONFIG.dbVersion);
+                  const req = indexedDB.open(CONFIG.dbName, CONFIG.dbVersion);
                   req.onerror = function (e) {
-                    var error = e.target.error;
+                    const error = e.target.error;
                     console.error("[Offline] CRITICAL: DB open failed:", error);
                     _this._reportStorageFailure("db_open_failed", error, {
                       name: error.name,
@@ -14524,7 +14524,7 @@
                     reject(error);
                   };
                   req.onblocked = function () {
-                    var error = new Error("DB open blocked — close other tabs");
+                    const error = new Error("DB open blocked — close other tabs");
                     console.error("[Offline] CRITICAL:", error.message);
                     _this._reportStorageFailure("db_blocked", error);
                     reject(error);
@@ -14542,9 +14542,9 @@
                     resolve();
                   };
                   req.onupgradeneeded = function (e) {
-                    var db = e.target.result;
+                    const db = e.target.result;
                     if (!db.objectStoreNames.contains(CONFIG.storeName)) {
-                      var store = db.createObjectStore(CONFIG.storeName, {
+                      const store = db.createObjectStore(CONFIG.storeName, {
                         keyPath: "id"
                       });
                       store.createIndex("timestamp", "timestamp", {
@@ -14620,8 +14620,8 @@
                   error: null
                 };
                 return _context2.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
-                  var store = tx.objectStore(CONFIG.storeName);
+                  const tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
+                  const store = tx.objectStore(CONFIG.storeName);
                   store.add(item);
                   tx.oncomplete = function () {
                     debugLog("[Offline] Queued:", item.id);
@@ -14664,8 +14664,8 @@
                 return _context3.a(2, []);
               case 1:
                 return _context3.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this3.db.transaction([CONFIG.storeName], "readonly");
-                  var req = tx.objectStore(CONFIG.storeName).getAll();
+                  const tx = _this3.db.transaction([CONFIG.storeName], "readonly");
+                  const req = tx.objectStore(CONFIG.storeName).getAll();
                   req.onsuccess = function () {
                     return resolve(req.result || []);
                   };
@@ -14703,7 +14703,7 @@
                 return _context4.a(2);
               case 1:
                 return _context4.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this4.db.transaction([CONFIG.storeName], "readwrite");
+                  const tx = _this4.db.transaction([CONFIG.storeName], "readwrite");
                   tx.objectStore(CONFIG.storeName).delete(id);
                   tx.oncomplete = function () {
                     _this4._notifyQueueUpdate();
@@ -14736,11 +14736,11 @@
                 return _context5.a(2);
               case 1:
                 return _context5.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
-                  var store = tx.objectStore(CONFIG.storeName);
-                  var req = store.get(id);
+                  const tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
+                  const store = tx.objectStore(CONFIG.storeName);
+                  const req = store.get(id);
                   req.onsuccess = function () {
-                    var item = req.result;
+                    const item = req.result;
                     if (item) {
                       item.retryCount = retryCount;
                       item.lastAttempt = Date.now();
@@ -14992,8 +14992,8 @@
         if (!navigator.onLine) {
           return;
         }
-        var safeDelay = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
-        var dueAt = Date.now() + safeDelay;
+        const safeDelay = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
+        const dueAt = Date.now() + safeDelay;
         if (this.processQueueTimeoutId !== null && this.processQueueDueAt !== null && this.processQueueDueAt <= dueAt) {
           return;
         }
@@ -15073,7 +15073,7 @@
     }, {
       key: "_notifyQueueUpdate",
       value: function _notifyQueueUpdate() {
-        var BUS = window.CommandBus || window.StarmusHooks;
+        const BUS = window.CommandBus || window.StarmusHooks;
         if (!BUS || typeof BUS.dispatch !== "function") {
           return;
         }
@@ -15095,8 +15095,8 @@
     }, {
       key: "_reportStorageFailure",
       value: function _reportStorageFailure(type, error) {
-        var details = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-        var errorData = {
+        let details = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
+        const errorData = {
           type: "offline_storage_".concat(type),
           error: error.message,
           details: _objectSpread2(_objectSpread2({}, details), {}, {
@@ -15121,13 +15121,13 @@
     }, {
       key: "_showUserError",
       value: function _showUserError(type) {
-        var messages = {
+        const messages = {
           no_indexeddb: "Your browser doesn't support offline storage. Recordings will upload immediately.",
           db_open_failed: "Storage initialisation failed. Please check your browser settings.",
           db_blocked: "Please close other tabs and try again.",
           quota_exceeded: "Storage full. Please free up space or upload pending recordings."
         };
-        var message = messages[type] || "Storage error occurred.";
+        const message = messages[type] || "Storage error occurred.";
         console.error("[Offline] User message:", message);
         if (window.CommandBus) {
           window.CommandBus.dispatch("starmus/storage-error", {
@@ -15138,7 +15138,7 @@
       }
     }]);
   }();
-  var offlineQueue = new OfflineQueue();
+  const offlineQueue = new OfflineQueue();
 
   /**
    * Returns the initialised OfflineQueue instance.
@@ -15264,7 +15264,7 @@
    *
    * @type {{ tier: string, allowRecording: boolean, allowCalibration: boolean, allowCanvas: boolean, allowLiveTranscript: boolean }}
    */
-  var starmusCapabilities = {
+  const starmusCapabilities = {
     tier: "A",
     allowRecording: true,
     allowCalibration: true,
@@ -15283,8 +15283,8 @@
       return null;
     }
     try {
-      var redirect = new URL(candidate, window.location.origin);
-      var isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
+      const redirect = new URL(candidate, window.location.origin);
+      const isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
       return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
     } catch (_unused) {
       return null;
@@ -15299,7 +15299,7 @@
    * @returns {'A'|'B'|'C'} Tier classification
    */
   function detectTier() {
-    var environmentData = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : null;
+    let environmentData = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : null;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       return "C";
     }
@@ -15326,8 +15326,8 @@
   function initCore(store, instanceId, env) {
     sparxstarIntegration.init().then(function (environmentData) {
       var _enhancedEnv$network;
-      var tier = detectTier(environmentData);
-      var enhancedEnv = _objectSpread2(_objectSpread2(_objectSpread2({}, env), environmentData), {}, {
+      const tier = detectTier(environmentData);
+      const enhancedEnv = _objectSpread2(_objectSpread2(_objectSpread2({}, env), environmentData), {}, {
         tier: tier,
         sparxstar_available: sparxstarIntegration.isAvailable
       });
@@ -15362,7 +15362,7 @@
       });
     }).catch(function (error) {
       console.error("[Core] Environment initialisation failed:", error);
-      var tier = detectTier();
+      const tier = detectTier();
 
       // Populate mutable capabilities on the error path so consumers
       // never observe stale Tier A defaults when init() rejects.
@@ -15631,7 +15631,7 @@
    * See the LICENSE file in the repository root for full license terms.
    */
 
-  var currentAudio = null;
+  let currentAudio = null;
 
   /**
    * Formats seconds to MM'm SS's string.
@@ -15643,8 +15643,8 @@
     if (!Number.isFinite(seconds)) {
       return "00m 00s";
     }
-    var m = Math.floor(seconds / 60);
-    var s = Math.floor(seconds % 60);
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
     return "".concat(m < 10 ? "0" + m : m, "m ").concat(s < 10 ? "0" + s : s, "s");
   }
 
@@ -15686,12 +15686,12 @@
     if (!elements) {
       return;
     }
-    var status = state.status,
+    const status = state.status,
       step = state.step,
       tier = state.tier;
-    var recorder = state.recorder || {};
-    var calibration = state.calibration || {};
-    var submission = state.submission || {};
+    const recorder = state.recorder || {};
+    const calibration = state.calibration || {};
+    const submission = state.submission || {};
 
     /* --- Tier C: show file upload fallback, hide recorder UI --- */
     if (tier === "C") {
@@ -15701,7 +15701,7 @@
       if (elements.setupContainer) {
         elements.setupContainer.style.display = "none";
       }
-      var fallback = document.querySelector("[data-starmus-fallback-container]");
+      const fallback = document.querySelector("[data-starmus-fallback-container]");
       if (fallback) {
         fallback.style.display = "block";
       }
@@ -15709,7 +15709,7 @@
     }
 
     /* --- Amplitude meter --- */
-    var vol = status === "calibrating" ? calibration.volumePercent || 0 : status === "recording" ? recorder.amplitude || 0 : 0;
+    const vol = status === "calibrating" ? calibration.volumePercent || 0 : status === "recording" ? recorder.amplitude || 0 : 0;
     if (elements.volumeMeter) {
       elements.volumeMeter.style.setProperty("--starmus-audio-level", "".concat(vol, "%"));
     }
@@ -15721,21 +15721,21 @@
 
     /* --- Duration progress bar --- */
     if (elements.durationProgress) {
-      var maxDuration = 1200;
-      var pct = Math.min(100, (recorder.duration || 0) / maxDuration * 100);
+      const maxDuration = 1200;
+      const pct = Math.min(100, (recorder.duration || 0) / maxDuration * 100);
       elements.durationProgress.style.setProperty("--starmus-recording-progress", "".concat(pct, "%"));
     }
 
     /* --- Step visibility --- */
     if (elements.step1 && elements.step2) {
-      var activeStatuses = ["recording", "paused", "processing", "ready_to_submit", "submitting", "calibrating", "ready", "complete"];
-      var showStep2 = step === 2 || activeStatuses.includes(status);
+      const activeStatuses = ["recording", "paused", "processing", "ready_to_submit", "submitting", "calibrating", "ready", "complete"];
+      const showStep2 = step === 2 || activeStatuses.includes(status);
       elements.step1.style.display = showStep2 ? "none" : "block";
       elements.step2.style.display = showStep2 ? "block" : "none";
     }
 
     /* --- Calibration / setup container --- */
-    var isCalibrated = calibration.complete === true;
+    const isCalibrated = calibration.complete === true;
     if (elements.setupContainer) {
       elements.setupContainer.style.display = !isCalibrated || status === "calibrating" ? "block" : "none";
       if (elements.setupMicBtn) {
@@ -15753,10 +15753,10 @@
     }
 
     /* --- Recording control buttons --- */
-    var isRec = status === "recording";
-    var isPaused = status === "paused";
-    var isDone = status === "ready_to_submit";
-    var isReady = (status === "ready" || status === "ready_to_record" || status === "idle") && isCalibrated;
+    const isRec = status === "recording";
+    const isPaused = status === "paused";
+    const isDone = status === "ready_to_submit";
+    const isReady = (status === "ready" || status === "ready_to_record" || status === "idle") && isCalibrated;
     if (elements.recordBtn) {
       elements.recordBtn.style.display = isReady && !isRec && !isPaused && !isDone ? "inline-flex" : "none";
     }
@@ -15801,7 +15801,7 @@
 
     /* --- Mode indicator text --- */
     if (elements.modeIndicator) {
-      var modeLabels = {
+      const modeLabels = {
         uninitialized: i18n("modeLoading", "Loading…"),
         idle: i18n("modeReady", "Ready"),
         calibrating: i18n("modeCalibrating", "Calibrating microphone…"),
@@ -15828,21 +15828,21 @@
    */
   function initInstance(store, _incomingElements, forcedInstanceId) {
     var _window$STARMUS_BOOTS;
-    var instId = forcedInstanceId || store.getState().instanceId;
-    var root = document;
+    const instId = forcedInstanceId || store.getState().instanceId;
+    let root = document;
     if (instId) {
-      var found = document.querySelector("form[data-starmus-instance=\"".concat(instId, "\"]"));
+      const found = document.querySelector("form[data-starmus-instance=\"".concat(instId, "\"]"));
       if (found) {
         root = found;
       }
     }
-    var BUS = window.CommandBus;
-    var bootstrapI18n = ((_window$STARMUS_BOOTS = window.STARMUS_BOOTSTRAP) === null || _window$STARMUS_BOOTS === void 0 ? void 0 : _window$STARMUS_BOOTS.i18n) || {};
-    var i18n = function i18n(key, fallback) {
-      var value = bootstrapI18n[key];
+    const BUS = window.CommandBus;
+    const bootstrapI18n = ((_window$STARMUS_BOOTS = window.STARMUS_BOOTSTRAP) === null || _window$STARMUS_BOOTS === void 0 ? void 0 : _window$STARMUS_BOOTS.i18n) || {};
+    const i18n = function i18n(key, fallback) {
+      const value = bootstrapI18n[key];
       return typeof value === "string" && value.trim() !== "" ? value : fallback;
     };
-    var el = {
+    const el = {
       step1: root.querySelector('[data-starmus-step="1"]'),
       step2: root.querySelector('[data-starmus-step="2"]'),
       setupContainer: root.querySelector("[data-starmus-setup-container]"),
@@ -15868,8 +15868,8 @@
 
     /* --- Continue button (step 1 → step 2) --- */
     safeBind(el.continueBtn, "click", function () {
-      var inputs = el.step1 ? el.step1.querySelectorAll("[required]") : [];
-      var valid = true;
+      const inputs = el.step1 ? el.step1.querySelectorAll("[required]") : [];
+      let valid = true;
       if (el.messageBox) {
         el.messageBox.style.display = "none";
         el.messageBox.textContent = "";
@@ -15878,9 +15878,9 @@
         _step;
       try {
         for (_iterator.s(); !(_step = _iterator.n()).done;) {
-          var input = _step.value;
-          var isCheckbox = input.type === "checkbox" || input.type === "radio";
-          var isValid = isCheckbox ? input.checked : input.value.trim() !== "";
+          const input = _step.value;
+          const isCheckbox = input.type === "checkbox" || input.type === "radio";
+          const isValid = isCheckbox ? input.checked : input.value.trim() !== "";
           if (!isValid) {
             valid = false;
             input.style.outlineColor = "var(--sparxstar-danger, #d63638)";
@@ -15951,8 +15951,8 @@
     /* --- Play review audio --- */
     safeBind(el.playBtn, "click", function () {
       var _state$source;
-      var state = store.getState();
-      var blob = (_state$source = state.source) === null || _state$source === void 0 ? void 0 : _state$source.blob;
+      const state = store.getState();
+      const blob = (_state$source = state.source) === null || _state$source === void 0 ? void 0 : _state$source.blob;
       if (!blob) {
         return;
       }
@@ -15962,7 +15962,7 @@
         el.playBtn.textContent = i18n("play", "Play");
         return;
       }
-      var url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       currentAudio = new Audio(url);
       el.playBtn.textContent = i18n("stop", "Stop");
       currentAudio.addEventListener("ended", function () {
@@ -15993,14 +15993,14 @@
 
     /* --- Submit --- */
     safeBind(el.submitBtn, "click", function () {
-      var formRoot = root instanceof HTMLFormElement ? root : root.querySelector("form");
-      var formData = formRoot ? new FormData(formRoot) : new FormData();
-      var fields = {};
+      const formRoot = root instanceof HTMLFormElement ? root : root.querySelector("form");
+      const formData = formRoot ? new FormData(formRoot) : new FormData();
+      const fields = {};
       var _iterator2 = _createForOfIteratorHelper$1(formData.entries()),
         _step2;
       try {
         for (_iterator2.s(); !(_step2 = _iterator2.n()).done;) {
-          var _step2$value = _slicedToArray$1(_step2.value, 2),
+          const _step2$value = _slicedToArray$1(_step2.value, 2),
             key = _step2$value[0],
             val = _step2$value[1];
           fields[key] = val;
@@ -16020,10 +16020,10 @@
     });
 
     /* --- File input (Tier C fallback) --- */
-    var fileInput = root.querySelector('[data-starmus-file-input]');
+    const fileInput = root.querySelector('[data-starmus-file-input]');
     if (fileInput) {
       fileInput.addEventListener("change", function () {
-        var file = fileInput.files[0];
+        const file = fileInput.files[0];
         if (file) {
           store.dispatch({
             type: "starmus/file-attached",
@@ -16034,7 +16034,7 @@
     }
 
     /* --- Offline banner dismiss --- */
-    var dismissOfflineBtn = root.querySelector("[data-starmus-offline-dismiss]");
+    const dismissOfflineBtn = root.querySelector("[data-starmus-offline-dismiss]");
     if (dismissOfflineBtn) {
       dismissOfflineBtn.addEventListener("click", function () {
         if (el.offlineBanner) {
@@ -16046,7 +16046,7 @@
     /* --- Offline queue badge --- */
     if (BUS) {
       BUS.subscribe("starmus/offline/queue_updated", function (payload) {
-        var badge = root.querySelector("[data-starmus-queue-count]");
+        const badge = root.querySelector("[data-starmus-queue-count]");
         if (badge) {
           badge.textContent = payload.count > 0 ? "".concat(payload.count, " queued") : "";
           badge.style.display = payload.count > 0 ? "inline" : "none";
@@ -16069,7 +16069,7 @@
         instanceId: instId
       }
     });
-    var unsubscribe = store.subscribe(function (state) {
+    const unsubscribe = store.subscribe(function (state) {
       return render(state, el, i18n);
     });
     render(store.getState(), el, i18n);
@@ -16760,7 +16760,7 @@
    */
 
   /** @type {Record<CaptureProfileName, CaptureProfile>} */
-  var CAPTURE_PROFILES = Object.freeze({
+  const CAPTURE_PROFILES = Object.freeze({
     /** Efficient interactive use. The old platform-wide numbers live here, and only here. */
     conversation: Object.freeze({
       name: "conversation",
@@ -16812,7 +16812,7 @@
   });
 
   /** @type {CaptureProfileName} */
-  var DEFAULT_CAPTURE_PROFILE = "conversation";
+  const DEFAULT_CAPTURE_PROFILE = "conversation";
 
   /**
    * Resolve a profile by name. An unknown name is a caller error and is not
@@ -16829,7 +16829,7 @@
     if (name === undefined || name === null) {
       return CAPTURE_PROFILES[DEFAULT_CAPTURE_PROFILE];
     }
-    var profile = Object.prototype.hasOwnProperty.call(CAPTURE_PROFILES, name) ? CAPTURE_PROFILES[name] : undefined;
+    const profile = Object.prototype.hasOwnProperty.call(CAPTURE_PROFILES, name) ? CAPTURE_PROFILES[name] : undefined;
     if (!profile) {
       throw new Error("Unknown capture profile \"".concat(String(name), "\". Expected one of: ").concat(Object.keys(CAPTURE_PROFILES).join(", "), "."));
     }
@@ -16849,7 +16849,7 @@
    */
   function activeCaptureProfileName() {
     var _bootstrap$capturePro;
-    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
+    const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : null;
     return (_bootstrap$capturePro = bootstrap === null || bootstrap === void 0 ? void 0 : bootstrap.captureProfile) !== null && _bootstrap$capturePro !== void 0 ? _bootstrap$capturePro : DEFAULT_CAPTURE_PROFILE;
   }
 
@@ -16870,9 +16870,9 @@
    * @returns {MediaTrackConstraints}
    */
   function getAudioConstraints(name) {
-    var profile = resolveCaptureProfile(name);
+    const profile = resolveCaptureProfile(name);
     /** @type {MediaTrackConstraints} */
-    var constraints = {
+    const constraints = {
       echoCancellation: profile.voiceProcessing,
       noiseSuppression: profile.voiceProcessing
     };
@@ -16898,9 +16898,9 @@
    * @returns {MediaRecorderOptions}
    */
   function getRecorderOptions(name, mimeType) {
-    var profile = resolveCaptureProfile(name);
+    const profile = resolveCaptureProfile(name);
     /** @type {MediaRecorderOptions} */
-    var options = {};
+    const options = {};
     if (mimeType) {
       options.mimeType = mimeType;
     }
@@ -16935,24 +16935,24 @@
    * @returns {CaptureAttainment}
    */
   function describeAttainment(name, track) {
-    var profile = resolveCaptureProfile(name);
-    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
-    var requested = {
+    const profile = resolveCaptureProfile(name);
+    const actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    const requested = {
       sampleRate: profile.sampleRate,
       channelCount: profile.channelCount
     };
 
     /** @type {string[]} */
-    var exceeded = [];
+    const exceeded = [];
     /** @type {string[]} */
-    var unverified = [];
+    const unverified = [];
     for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
-      var key = _arr[_i];
-      var limit = profile[key];
+      const key = _arr[_i];
+      const limit = profile[key];
       if (limit === null) {
         continue;
       }
-      var reported = actual[key];
+      const reported = actual[key];
       if (typeof reported !== "number") {
         unverified.push(key);
       } else if (reported > limit) {
@@ -16988,7 +16988,7 @@
    * Tier-based calibration settings.
    * @type {Object}
    */
-  var TIER_SETTINGS = {
+  const TIER_SETTINGS = {
     A: {
       duration: 15000,
       phases: 3,
@@ -17020,7 +17020,7 @@
       autoGainControl: false
     }
   };
-  var EnhancedCalibration = /*#__PURE__*/function () {
+  let EnhancedCalibration = /*#__PURE__*/function () {
     function EnhancedCalibration() {
       _classCallCheck$9(this, EnhancedCalibration);
       this.audioContext = null;
@@ -17187,28 +17187,28 @@
                 phaseDuration = settings.duration / settings.phases;
                 currentPhase = 0;
                 return _context3.a(2, new Promise(function (resolve) {
-                  var _loop = function loop() {
-                    var elapsed = Date.now() - startTime;
-                    var phaseElapsed = elapsed % phaseDuration;
-                    var newPhase = Math.floor(elapsed / phaseDuration);
+                  const _loop = function loop() {
+                    const elapsed = Date.now() - startTime;
+                    const phaseElapsed = elapsed % phaseDuration;
+                    const newPhase = Math.floor(elapsed / phaseDuration);
                     if (newPhase !== currentPhase) {
                       currentPhase = newPhase;
                     }
                     _this.analyser.getByteTimeDomainData(data);
-                    var sumSquares = 0;
-                    for (var i = 0; i < data.length; i++) {
-                      var centered = data[i] - 128;
+                    let sumSquares = 0;
+                    for (let i = 0; i < data.length; i++) {
+                      const centered = data[i] - 128;
                       sumSquares += centered * centered;
                     }
-                    var rms = Math.sqrt(sumSquares / data.length) / 128;
-                    var db = 20 * Math.log10(Math.max(rms, 1e-6));
-                    var volume = Math.min(100, Math.max(0, (db + 60) / 60 * 100));
+                    const rms = Math.sqrt(sumSquares / data.length) / 128;
+                    const db = 20 * Math.log10(Math.max(rms, 1e-6));
+                    const volume = Math.min(100, Math.max(0, (db + 60) / 60 * 100));
                     sampleCount++;
                     if (volume > maxVolume) {
                       maxVolume = volume;
                     }
-                    var progress = elapsed / settings.duration * 100;
-                    var message;
+                    const progress = elapsed / settings.duration * 100;
+                    let message;
                     switch (currentPhase) {
                       case 0:
                         if (volume < settings.noiseThreshold) {
@@ -17237,13 +17237,13 @@
                       });
                     }
                     if (elapsed >= settings.duration) {
-                      var avgSpeechLevel = speechPeaks.length > 0 ? speechPeaks.reduce(function (a, b) {
+                      const avgSpeechLevel = speechPeaks.length > 0 ? speechPeaks.reduce(function (a, b) {
                         return a + b;
                       }, 0) / speechPeaks.length : maxVolume;
-                      var dynamicRange = maxVolume - noiseFloor;
-                      var signalToNoise = avgSpeechLevel / Math.max(noiseFloor, 1);
-                      var optimalGain = _this._calculateOptimalGain(avgSpeechLevel, noiseFloor, dynamicRange, settings);
-                      var result = {
+                      const dynamicRange = maxVolume - noiseFloor;
+                      const signalToNoise = avgSpeechLevel / Math.max(noiseFloor, 1);
+                      const optimalGain = _this._calculateOptimalGain(avgSpeechLevel, noiseFloor, dynamicRange, settings);
+                      const result = {
                         complete: true,
                         tier: _this.tier,
                         gain: optimalGain,
@@ -17284,12 +17284,12 @@
       key: "_calculateOptimalGain",
       value: function _calculateOptimalGain(speechLevel, noiseFloor, _dynamicRange, settings) {
         var _this$environmentData2;
-        var targetLevel = 60;
-        var baseGain = targetLevel / Math.max(speechLevel, 1);
-        var _settings$gainRange = _slicedToArray$1(settings.gainRange, 2),
+        const targetLevel = 60;
+        const baseGain = targetLevel / Math.max(speechLevel, 1);
+        const _settings$gainRange = _slicedToArray$1(settings.gainRange, 2),
           minGain = _settings$gainRange[0],
           maxGain = _settings$gainRange[1];
-        var gain = Math.max(minGain, Math.min(maxGain, baseGain));
+        let gain = Math.max(minGain, Math.min(maxGain, baseGain));
         if (noiseFloor > 15) {
           gain *= 0.9;
         } else if (noiseFloor < 5) {
@@ -17308,7 +17308,7 @@
     }, {
       key: "_assessQuality",
       value: function _assessQuality(dynamicRange, signalToNoise, _settings) {
-        var score = 0;
+        let score = 0;
         if (dynamicRange > 40) {
           score += 3;
         } else if (dynamicRange > 20) {
@@ -17323,8 +17323,8 @@
         } else if (signalToNoise > 2) {
           score += 1;
         }
-        var maxScore = this.tier === "A" ? 6 : this.tier === "B" ? 5 : 4;
-        var pct = score / maxScore * 100;
+        const maxScore = this.tier === "A" ? 6 : this.tier === "B" ? 5 : 4;
+        const pct = score / maxScore * 100;
         if (pct >= 80) {
           return "excellent";
         }
@@ -17345,7 +17345,7 @@
       key: "_generateRecommendations",
       value: function _generateRecommendations(dynamicRange, signalToNoise, settings) {
         var _this$environmentData3;
-        var recs = [];
+        const recs = [];
         if (dynamicRange < 15) {
           recs.push("Consider moving to a quieter location");
         }
@@ -17406,13 +17406,13 @@
    * Registry of active recorder instances, keyed by instanceId.
    * @type {Map<string, Object>}
    */
-  var recorderRegistry = new Map();
+  const recorderRegistry = new Map();
 
   /**
    * Shared AudioContext reused across instances.
    * @type {AudioContext|null}
    */
-  var sharedAudioContext = null;
+  let sharedAudioContext = null;
 
   /**
    * Preferred MIME types in priority order.
@@ -17420,7 +17420,7 @@
    *
    * @type {string[]}
    */
-  var PREFERRED_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+  const PREFERRED_MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
 
   /**
    * Returns the first MIME type supported by MediaRecorder.
@@ -17432,7 +17432,7 @@
       _step;
     try {
       for (_iterator.s(); !(_step = _iterator.n()).done;) {
-        var mimeType = _step.value;
+        const mimeType = _step.value;
         if (MediaRecorder.isTypeSupported(mimeType)) {
           return mimeType;
         }
@@ -17450,7 +17450,7 @@
    * Enforced by a timeout to prevent orphaned recordings.
    * @type {number}
    */
-  var MAX_DURATION_SECONDS = 1200;
+  const MAX_DURATION_SECONDS = 1200;
 
   /**
    * Initialises a recorder instance for a given store and instance ID.
@@ -17461,8 +17461,8 @@
    * @returns {void}
    */
   function initRecorder(store, instanceId) {
-    var state = store.getState();
-    var tier = state.tier || "C";
+    const state = store.getState();
+    const tier = state.tier || "C";
 
     /**
      * Starts microphone calibration then transitions to recording-ready state.
@@ -17643,12 +17643,12 @@
                 }
               };
               tick = function _tick() {
-                var now = store.getState();
+                const now = store.getState();
                 if (now.status !== "recording") {
                   return;
                 }
-                var elapsed = elapsedBeforePause + (Date.now() - startTime) / 1000;
-                var amplitude = getAmplitude();
+                const elapsed = elapsedBeforePause + (Date.now() - startTime) / 1000;
+                const amplitude = getAmplitude();
                 store.dispatch({
                   type: "starmus/recorder-tick",
                   duration: elapsed,
@@ -17667,9 +17667,9 @@
                   return 0;
                 }
                 analyser.getByteTimeDomainData(analyserData);
-                var sumSq = 0;
-                for (var i = 0; i < analyserData.length; i++) {
-                  var v = (analyserData[i] - 128) / 128;
+                let sumSq = 0;
+                for (let i = 0; i < analyserData.length; i++) {
+                  const v = (analyserData[i] - 128) / 128;
                   sumSq += v * v;
                 }
                 return Math.min(100, Math.sqrt(sumSq / analyserData.length) * 200);
@@ -17816,11 +17816,11 @@
                 stream.getTracks().forEach(function (t) {
                   return t.stop();
                 });
-                var finalMime = mimeType || "audio/webm";
-                var blob = new Blob(chunks, {
+                const finalMime = mimeType || "audio/webm";
+                const blob = new Blob(chunks, {
                   type: finalMime
                 });
-                var fileName = "starmus-".concat(instanceId, "-").concat(Date.now(), ".webm");
+                const fileName = "starmus-".concat(instanceId, "-").concat(Date.now(), ".webm");
                 store.dispatch({
                   type: "starmus/recording-available",
                   payload: {
@@ -17900,7 +17900,7 @@
     });
 
     // Report environment data
-    var envData = sparxstarIntegration.getEnvironmentData();
+    const envData = sparxstarIntegration.getEnvironmentData();
     if (envData && envData.tier) {
       store.dispatch({
         type: "starmus/tier-ready",
@@ -17931,14 +17931,14 @@
    */
 
   function updateField(form, name, value) {
-    var input = form.querySelector("input[name=\"".concat(name, "\"]"));
+    let input = form.querySelector("input[name=\"".concat(name, "\"]"));
     if (!input) {
       input = document.createElement("input");
       input.type = "hidden";
       input.name = name;
       form.appendChild(input);
     }
-    var stringValue = _typeof$9(value) === "object" ? JSON.stringify(value) : String(value || "");
+    const stringValue = _typeof$9(value) === "object" ? JSON.stringify(value) : String(value || "");
 
     // Safety guard: do not overwrite a non-empty server-injected value with an empty one.
     if (input.value && input.value.trim() !== "" && (stringValue === "" || stringValue === "{}" || stringValue === "[]")) {
@@ -17957,10 +17957,10 @@
    * @returns {Object} Flat key→value map of form field names to state values
    */
   function buildMetadataMap(state) {
-    var env = state.env || {};
-    var cal = state.calibration || {};
-    var source = state.source || {};
-    var recorder = state.recorder || {};
+    const env = state.env || {};
+    const cal = state.calibration || {};
+    const source = state.source || {};
+    const recorder = state.recorder || {};
     return {
       starmus_title: source.title || "",
       starmus_language: source.language || "",
@@ -18008,8 +18008,8 @@
       return function () {};
     }
     function sync() {
-      var state = store.getState();
-      var map = buildMetadataMap(state);
+      const state = store.getState();
+      const map = buildMetadataMap(state);
 
       // Sync core fields
       updateField(formEl, "_starmus_calibration", map._starmus_calibration);
@@ -18020,7 +18020,7 @@
       if (map.transcript) {
         updateField(formEl, "transcription", map.transcript);
       }
-      var source = state.source || {};
+      const source = state.source || {};
       if (source.transcriptJson) {
         updateField(formEl, "transcription_json", source.transcriptJson);
       }
@@ -18109,23 +18109,23 @@
   window.addEventListener("sparxstar:environment-ready", function (e) {
     var _raw$identifiers, _raw$identifiers2;
     console.log("[StarmusIntegrator] 📡 Parsing UEC Payload...");
-    var runtimeStore = getRuntimeStore();
+    const runtimeStore = getRuntimeStore();
     if (!runtimeStore) {
       return;
     }
-    var raw = e.detail || {
+    const raw = e.detail || {
       /* intentionally empty */
     };
-    var tech = raw.technical || {
+    const tech = raw.technical || {
       /* intentionally empty */
     };
-    var rawTech = tech.raw || {
+    const rawTech = tech.raw || {
       /* intentionally empty */
     };
-    var profile = tech.profile || {
+    const profile = tech.profile || {
       /* intentionally empty */
     };
-    var idents = raw.identifiers || {
+    const idents = raw.identifiers || {
       /* intentionally empty */
     }; // Sometimes at root
     // Handle case where identifiers might be inside technical or separate (based on logs)
@@ -18143,7 +18143,7 @@
     // --- NORMALIZE TO STRICT SCHEMA ---
     // The server expects keys: 'device', 'browser', 'network', 'errors' at ROOT of _starmus_env
 
-    var normalizedEnv = {
+    const normalizedEnv = {
       // 1. Device Info (Merge Detector + Profile)
       device: _objectSpread2(_objectSpread2({}, rawTech.device || {
         /* intentionally empty */
@@ -18205,7 +18205,7 @@
   // 4. AUDIO CONTEXT WATCHDOG
   document.addEventListener("click", function () {
     try {
-      var ctx = window.StarmusAudioContext;
+      const ctx = window.StarmusAudioContext;
       if (ctx && ctx.state === "suspended") {
         ctx.resume();
       }
@@ -18233,7 +18233,7 @@
 
   /* --- Global error capture (Africa first: surface runtime errors clearly) --- */
   (function () {
-    var log = function log(type, data) {
+    const log = function log(type, data) {
       return console.warn("[STARMUS RUNTIME]", type, data);
     };
     window.addEventListener("error", function (e) {
@@ -18278,20 +18278,20 @@
 
   /* --- Bootstrap on DOM ready --- */
   document.addEventListener("DOMContentLoaded", function () {
-    var bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : undefined;
+    const bootstrap = typeof window !== "undefined" ? window.STARMUS_BOOTSTRAP : undefined;
     if (!bootstrap || _typeof$9(bootstrap) !== "object") {
       console.warn("[StarmusMain] STARMUS_BOOTSTRAP missing. Runtime not initialised.");
       return;
     }
     try {
-      var recorderForms = document.querySelectorAll("form[data-starmus-instance]");
+      const recorderForms = document.querySelectorAll("form[data-starmus-instance]");
       if (!recorderForms.length) {
         console.warn("[StarmusMain] No Starmus recorder form found.");
         return;
       }
 
       /* --- Store --- */
-      var store = createStore();
+      const store = createStore();
       window.__STARMUS_RUNTIME_INSTANCE__ = store;
       window.StarmusStoreInstance = store;
       window.StarmusRuntime = window.StarmusRuntime || {};
@@ -18301,8 +18301,8 @@
         console.warn("[StarmusMain] Offline queue unavailable, continuing:", error);
       });
       recorderForms.forEach(function (recorderForm, index) {
-        var rawInstanceId = recorderForm.getAttribute("data-starmus-instance");
-        var instanceId = rawInstanceId || "starmus-instance-".concat(index + 1);
+        const rawInstanceId = recorderForm.getAttribute("data-starmus-instance");
+        const instanceId = rawInstanceId || "starmus-instance-".concat(index + 1);
         initRecorderInstance(store, recorderForm, instanceId);
       });
     } catch (e) {
@@ -18311,7 +18311,7 @@
   });
 
   /* --- Global API exports --- */
-  var starmusRecorderApi = _typeof$9(window.StarmusRecorder) === "object" && window.StarmusRecorder !== null ? window.StarmusRecorder : {};
+  const starmusRecorderApi = _typeof$9(window.StarmusRecorder) === "object" && window.StarmusRecorder !== null ? window.StarmusRecorder : {};
   starmusRecorderApi.initRecorder = initRecorder;
   window.StarmusRecorder = starmusRecorderApi;
   window.StarmusTus = {

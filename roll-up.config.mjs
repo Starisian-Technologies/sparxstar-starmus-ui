@@ -3,6 +3,48 @@ import commonjs from "@rollup/plugin-commonjs";
 import babel from "@rollup/plugin-babel";
 
 const sharedPlugins = [
+    {
+        name: "starmus-native-url-parse",
+        resolveId(source) {
+            if (source === "url-parse") {
+                return "\0starmus-native-url-parse";
+            }
+            return null;
+        },
+        load(id) {
+            if (id === "\0starmus-native-url-parse") {
+                return `function createUrlResult(address, location) {
+    if (typeof URL === "function") {
+        return new URL(address, location);
+    }
+
+    const resolver = document.createElement("a");
+    resolver.href = location || window.location.href;
+
+    const doc = document.implementation.createHTMLDocument("");
+    const base = doc.createElement("base");
+    const anchor = doc.createElement("a");
+
+    doc.head.appendChild(base);
+    doc.body.appendChild(anchor);
+    base.href = resolver.href;
+    anchor.href = address;
+
+    return {
+        toString() {
+            return anchor.href;
+        },
+    };
+}
+
+export default function URLParse(address, location) {
+    return createUrlResult(address, location);
+}`;
+            }
+            return null;
+        },
+    },
+
     resolve({
         browser: true,
         preferBuiltins: false,

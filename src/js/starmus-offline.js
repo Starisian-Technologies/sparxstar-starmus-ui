@@ -42,6 +42,11 @@ const CONFIG = {
     defaultMaxBlobSize: 5 * 1024 * 1024,
 };
 
+/** Tracks whether the singleton queue has installed its network listener. */
+let networkListenerInstalled = false;
+/** Tracks whether the singleton queue has installed its battery listener. */
+let batteryListenerInstalled = false;
+
 /**
  * Resolves the maximum blob size permitted for the given metadata's tier.
  *
@@ -101,6 +106,10 @@ class OfflineQueue {
         this.db = null;
         /** @type {boolean} */
         this.isProcessing = false;
+        /** @type {number|null} */
+        this.processQueueTimeoutId = null;
+        /** @type {number|null} */
+        this.processQueueDueAt = null;
     }
 
     /**
@@ -210,6 +219,9 @@ class OfflineQueue {
             tx.oncomplete = () => {
                 debugLog("[Offline] Queued:", item.id);
                 this._notifyQueueUpdate();
+                if (navigator.onLine) {
+                    this._scheduleProcessQueue(0);
+                }
                 resolve(item.id);
             };
 
@@ -291,6 +303,12 @@ class OfflineQueue {
             return;
         }
 
+        this._clearScheduledProcessQueue();
+        const pending = await this.getAll();
+        if (pending.length === 0) {
+            return;
+        }
+
         if (sparxstarIntegration.isBatteryCritical?.()) {
             debugLog("[Offline] Battery critical — deferring queue processing");
             return;
@@ -299,11 +317,6 @@ class OfflineQueue {
         this.isProcessing = true;
 
         try {
-            const pending = await this.getAll();
-            if (pending.length === 0) {
-                return;
-            }
-
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
@@ -390,23 +403,119 @@ class OfflineQueue {
             console.error("[Offline] Queue fatal:", fatal);
         } finally {
             this.isProcessing = false;
+            try {
+                const nextDelay = await this._getNextProcessDelay();
+                if (nextDelay !== null) {
+                    this._scheduleProcessQueue(nextDelay);
+                }
+            } catch (error) {
+                console.error("[Offline] Failed to schedule next queue processing:", error);
+            }
         }
     }
 
     /**
-     * Sets up online/offline event listeners and a polling interval.
+     * Sets up the connectivity-restored listener once for the singleton queue.
      *
      * @returns {void}
      */
     setupNetworkListeners() {
-        window.addEventListener("online", () => this.processQueue());
-        setInterval(() => {
-            if (navigator.onLine) {
-                this.processQueue().catch(() => {});
-            }
-        }, 60 * 1000);
-    }
+        if (networkListenerInstalled) {
+            return;
+        }
 
+        networkListenerInstalled = true;
+        window.addEventListener("online", () => {
+            this._scheduleProcessQueue(0);
+        });
+        this._setupBatteryListeners();
+
+        // Flush pending items on startup when already online.
+        if (navigator.onLine) {
+            this._scheduleProcessQueue(0);
+        }
+    }
+    /** @private */
+    _setupBatteryListeners() {
+        if (
+            batteryListenerInstalled ||
+            typeof navigator === "undefined" ||
+            typeof navigator.getBattery !== "function"
+        ) {
+            return;
+        }
+
+        batteryListenerInstalled = true;
+        navigator.getBattery().then((battery) => {
+            const handleBatteryChange = () => {
+                if (!sparxstarIntegration.isBatteryCritical?.()) {
+                    this._scheduleProcessQueue(0);
+                }
+            };
+
+            battery.addEventListener("levelchange", handleBatteryChange);
+            battery.addEventListener("chargingchange", handleBatteryChange);
+        });
+    }
+    /** @private */
+    _clearScheduledProcessQueue() {
+        if (this.processQueueTimeoutId !== null) {
+            window.clearTimeout(this.processQueueTimeoutId);
+            this.processQueueTimeoutId = null;
+        }
+        this.processQueueDueAt = null;
+    }
+    /** @private */
+    _scheduleProcessQueue(delayMs) {
+        if (!navigator.onLine) {
+            return;
+        }
+        const safeDelay = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
+        const dueAt = Date.now() + safeDelay;
+
+        if (
+            this.processQueueTimeoutId !== null &&
+            this.processQueueDueAt !== null &&
+            this.processQueueDueAt <= dueAt
+        ) {
+            return;
+        }
+
+        this._clearScheduledProcessQueue();
+        this.processQueueDueAt = dueAt;
+        this.processQueueTimeoutId = window.setTimeout(() => {
+            this.processQueueTimeoutId = null;
+            this.processQueueDueAt = null;
+            void this.processQueue();
+        }, safeDelay);
+    }
+    /** @private */
+    async _getNextProcessDelay() {
+        const pending = await this.getAll();
+        if (pending.length === 0) {
+            return null;
+        }
+
+        let nextDelay = null;
+        const now = Date.now();
+
+        for (const item of pending) {
+            if (item.retryCount >= CONFIG.maxRetries) {
+                return 0;
+            }
+
+            const retryDelay =
+                CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
+            const remainingDelay =
+                item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
+
+            if (nextDelay === null || remainingDelay < nextDelay) {
+                nextDelay = remainingDelay;
+            }
+        }
+
+        return nextDelay;
+    }
     /** @private */
     _notifyQueueUpdate() {
         const BUS = window.CommandBus || window.StarmusHooks;

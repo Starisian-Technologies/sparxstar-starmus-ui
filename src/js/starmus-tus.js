@@ -105,7 +105,18 @@ function getConfig() {
 
     const globalCfg =
         (typeof window !== "undefined" && (window.starmusTus || window.starmusConfig)) || {};
-    const merged = Object.assign({}, defaults, globalCfg);
+    const merged = {};
+
+    for (const [key, val] of Object.entries(defaults)) {
+        merged[key] = val;
+    }
+
+    for (const [key, val] of Object.entries(globalCfg)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") {
+            continue;
+        }
+        merged[key] = val;
+    }
     merged.chunkSize = Math.min(
         Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024,
         512 * 1024,

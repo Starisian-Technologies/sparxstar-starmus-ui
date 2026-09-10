@@ -43,6 +43,26 @@ export const starmusCapabilities = {
 };
 
 /**
+ * Converts a server-provided redirect into a safe same-origin HTTP(S) URL.
+ *
+ * @param {unknown} candidate - Redirect value returned by the upload service
+ * @returns {string|null} Safe redirect URL, or null when the value is unsafe
+ */
+function getSafeRedirect(candidate) {
+    if (typeof candidate !== "string" || candidate.length === 0) {
+        return null;
+    }
+
+    try {
+        const redirect = new URL(candidate, window.location.href);
+        const isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
+        return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Detects browser capability tier.
  * Prefers the tier provided by SPARXSTAR environment data.
  *
@@ -230,10 +250,9 @@ export function initCore(store, instanceId, env) {
                 if (!detail) {
                     throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
                 }
-
                 emitCompletionEvent(detail);
 
-                const redirect = result.data?.redirect_url || result.redirect_url;
+                const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
                 if (redirect) {
                     setTimeout(() => {
                         window.location.href = redirect;
@@ -246,10 +265,11 @@ export function initCore(store, instanceId, env) {
                         if (window.parent && window.parent !== window) {
                             void window.parent.location.href; // Throws if cross-origin
                             if (window.parent.jQuery) {
-                                window.parent.jQuery(window.parent.document).trigger(
-                                    "starmusRecordingComplete",
-                                    [{ audioPostId: result.data.post_id }],
-                                );
+                                window.parent
+                                    .jQuery(window.parent.document)
+                                    .trigger("starmusRecordingComplete", [
+                                        { audioPostId: result.data.post_id },
+                                    ]);
                             }
                         }
                     } catch {

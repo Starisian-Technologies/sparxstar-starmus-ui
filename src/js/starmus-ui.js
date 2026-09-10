@@ -412,6 +412,9 @@ export function initInstance(store, _incomingElements, forcedInstanceId) {
         const formData = formRoot ? new FormData(formRoot) : new FormData();
         const fields = {};
         for (const [key, val] of formData.entries()) {
+            if (key === "__proto__" || key === "constructor" || key === "prototype") {
+                continue;
+            }
             fields[key] = val;
         }
 

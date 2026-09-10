@@ -3919,7 +3919,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3;
+          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3, _t4;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.p = _context6.n) {
               case 0:
@@ -3934,6 +3934,7 @@
                   _context6.n = 2;
                   break;
                 }
+                this._scheduleProcessQueue(CONFIG.retryDelays[0]);
                 return _context6.a(2);
               case 2:
                 this.isProcessing = true;
@@ -4077,18 +4078,26 @@
               case 22:
                 _context6.p = 22;
                 this.isProcessing = false;
-                _context6.n = 23;
+                _context6.p = 23;
+                _context6.n = 24;
                 return this._getNextProcessDelay();
-              case 23:
+              case 24:
                 nextDelay = _context6.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
+                _context6.n = 26;
+                break;
+              case 25:
+                _context6.p = 25;
+                _t4 = _context6.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t4);
+              case 26:
                 return _context6.f(22);
-              case 24:
+              case 27:
                 return _context6.a(2);
             }
-          }, _callee6, this, [[10, 13], [6, 18, 19, 20], [3, 21, 22, 24]]);
+          }, _callee6, this, [[23, 25], [10, 13], [6, 18, 19, 20], [3, 21, 22, 27]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -4154,7 +4163,7 @@
       key: "_getNextProcessDelay",
       value: (function () {
         var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
-          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t4;
+          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t5;
           return _regenerator().w(function (_context7) {
             while (1) switch (_context7.p = _context7.n) {
               case 0:
@@ -4198,8 +4207,8 @@
                 break;
               case 8:
                 _context7.p = 8;
-                _t4 = _context7.v;
-                _iterator2.e(_t4);
+                _t5 = _context7.v;
+                _iterator2.e(_t5);
               case 9:
                 _context7.p = 9;
                 _iterator2.f();

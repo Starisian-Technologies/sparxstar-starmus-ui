@@ -304,6 +304,7 @@ class OfflineQueue {
         this._clearScheduledProcessQueue();
         if (sparxstarIntegration.isBatteryCritical?.()) {
             debugLog("[Offline] Battery critical — deferring queue processing");
+            this._scheduleProcessQueue(CONFIG.retryDelays[0]);
             return;
         }
 

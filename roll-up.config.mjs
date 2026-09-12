@@ -83,10 +83,29 @@ const TRANSCRIPT_TARGETS = {
 };
 
 /**
+ * The transcript slot needs no core-js.
+ *
+ * Its source uses `Promise`, `Object.freeze`, `Array.prototype.includes` and
+ * `Array.prototype.findIndex` — every one of them native well below the target
+ * above. `useBuiltIns: "usage"` was injecting core-js internals regardless, so
+ * the bundle carried a polyfill for built-ins the browsers it runs on already
+ * have. Syntax is still transpiled; only the built-in shimming is off.
+ *
+ * Adding a built-in that the target lacks means turning this back on, not
+ * assuming it still holds.
+ */
+const TRANSCRIPT_NEEDS_POLYFILL = false;
+
+/**
  * @param {Object} targets A @babel/preset-env `targets` object.
+ * @param {boolean} [polyfill=true] Whether to inject core-js for missing
+ *        built-ins. Off for a bundle whose target already has everything its
+ *        source uses: `useBuiltIns: "usage"` still pulls in core-js internals,
+ *        and shipping a polyfill nobody needs costs bytes on metered
+ *        connections and puts vendored code into the review surface.
  * @returns {Array} Plugins for one bundle.
  */
-function pluginsFor(targets) {
+function pluginsFor(targets, polyfill = true) {
     return [
         ...sharedPlugins,
         babel({
@@ -97,8 +116,7 @@ function pluginsFor(targets) {
                     "@babel/preset-env",
                     {
                         targets,
-                        useBuiltIns: "usage",
-                        corejs: 3,
+                        ...(polyfill ? { useBuiltIns: "usage", corejs: 3 } : {}),
                     },
                 ],
             ],
@@ -138,7 +156,7 @@ export default [
 
         external: [],
 
-        plugins: pluginsFor(TRANSCRIPT_TARGETS),
+        plugins: pluginsFor(TRANSCRIPT_TARGETS, TRANSCRIPT_NEEDS_POLYFILL),
     },
 
     // The same slot as an ES module.
@@ -158,6 +176,6 @@ export default [
 
         external: [],
 
-        plugins: pluginsFor(TRANSCRIPT_TARGETS),
+        plugins: pluginsFor(TRANSCRIPT_TARGETS, TRANSCRIPT_NEEDS_POLYFILL),
     },
 ];

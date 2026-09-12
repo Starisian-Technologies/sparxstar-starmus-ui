@@ -19,13 +19,10 @@ ADR-034, ADR-035 and ADR-036 are on the registry's default branch as of
 so the links above resolve. The restructure they govern is implemented here.
 ADR-038 and ADR-039 were filed to the registry from the 2026-09-10 session.
 
-**All five have Status `Proposed`.** Merging distributed the records; it did not
-by itself ratify them. Ratification is the owner's act and is made by a
-metadata-only header edit in the registry, which ADR-021 permits.
-
-The rules further down that are marked as binding now bind now, because they
-restate limits this repository already had. The rest takes effect on
-ratification.
+**All five were ratified by the owner on 2026-09-12** and carry Status
+`Accepted`. Everything below binds — the rules marked as already binding did so
+before ratification because they restate limits this repository always had; the
+rest took effect on ratification.
 
 If any of the five is later superseded, this repository's role assignment
 changes with it — a superseding ADR is the only thing that moves this boundary,

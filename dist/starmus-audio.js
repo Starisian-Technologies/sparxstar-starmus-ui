@@ -6387,6 +6387,60 @@
 
   requireEs_promise();
 
+  var es_promise_finally = {};
+
+  var hasRequiredEs_promise_finally;
+
+  function requireEs_promise_finally () {
+  	if (hasRequiredEs_promise_finally) return es_promise_finally;
+  	hasRequiredEs_promise_finally = 1;
+  	var $ = require_export();
+  	var IS_PURE = requireIsPure();
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var fails = requireFails();
+  	var getBuiltIn = requireGetBuiltIn();
+  	var isCallable = requireIsCallable();
+  	var speciesConstructor = requireSpeciesConstructor();
+  	var promiseResolve = requirePromiseResolve();
+  	var defineBuiltIn = requireDefineBuiltIn();
+
+  	var NativePromisePrototype = NativePromiseConstructor && NativePromiseConstructor.prototype;
+
+  	// Safari bug https://bugs.webkit.org/show_bug.cgi?id=200829
+  	var NON_GENERIC = !!NativePromiseConstructor && fails(function () {
+  	  // eslint-disable-next-line unicorn/no-thenable -- required for testing
+  	  NativePromisePrototype['finally'].call({ then: function () { /* empty */ } }, function () { /* empty */ });
+  	});
+
+  	// `Promise.prototype.finally` method
+  	// https://tc39.es/ecma262/#sec-promise.prototype.finally
+  	$({ target: 'Promise', proto: true, real: true, forced: NON_GENERIC }, {
+  	  'finally': function (onFinally) {
+  	    var C = speciesConstructor(this, getBuiltIn('Promise'));
+  	    var isFunction = isCallable(onFinally);
+  	    return this.then(
+  	      isFunction ? function (x) {
+  	        return promiseResolve(C, onFinally()).then(function () { return x; });
+  	      } : onFinally,
+  	      isFunction ? function (e) {
+  	        return promiseResolve(C, onFinally()).then(function () { throw e; });
+  	      } : onFinally
+  	    );
+  	  }
+  	});
+
+  	// makes sure that native promise-based APIs `Promise#finally` properly works with patched `Promise#then`
+  	if (!IS_PURE && isCallable(NativePromiseConstructor)) {
+  	  var method = getBuiltIn('Promise').prototype['finally'];
+  	  if (NativePromisePrototype['finally'] !== method) {
+  	    defineBuiltIn(NativePromisePrototype, 'finally', method, { unsafe: true });
+  	  }
+  	}
+  	return es_promise_finally;
+  }
+
+  requireEs_promise_finally();
+
   var es_regexp_toString = {};
 
   var regexpFlagsDetection;
@@ -11855,10 +11909,11 @@
                * upload is taking a long time, which on these networks is normal.
                *
                * The abort deliberately leaves the TUS fingerprint in place
-               * (`removeFingerprintOnSuccess` only clears it on success), so the
-               * offline queue's next attempt resumes from the last acknowledged
-               * offset instead of re-sending the original from byte zero — which
-               * ADR-038 forbids.
+               * (`removeFingerprintOnSuccess` only clears it on success). The next
+               * attempt then finds the stored upload — see the resume lookup before
+               * `start()` below — and continues from the last acknowledged offset
+               * instead of re-sending the original from byte zero, which ADR-038
+               * forbids.
                */
               function armStallWatchdog() {
                 clearStallWatchdog();
@@ -11923,8 +11978,34 @@
                   reject(err);
                 }
               });
-              armStallWatchdog();
-              upload.start();
+
+              // Resume before starting, or the fingerprint is a key nobody reads.
+              //
+              // `upload.start()` does not consult URL storage on its own: tus-js-client
+              // requires findPreviousUploads() then resumeFromPreviousUpload() first.
+              // Without this the stall watchdog's abort left a half-finished resource
+              // on the server and the next attempt began a new one from byte zero —
+              // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
+              // of what the comment above it claimed.
+              //
+              // A storage read that fails is not a reason to refuse the upload: the
+              // recording still needs to go. It starts fresh instead, which is the
+              // behaviour there was before, and the contributor is no worse off.
+              upload.findPreviousUploads().then(function (previous) {
+                if (Array.isArray(previous) && previous.length > 0) {
+                  // The most recent match: an earlier attempt on this exact
+                  // submission, since the fingerprint is the submission id.
+                  upload.resumeFromPreviousUpload(previous[previous.length - 1]);
+                }
+              }).catch(function (err) {
+                console.warn("[TUS] Could not read resumable uploads; starting fresh:", err.message);
+              }).finally(function () {
+                if (settled) {
+                  return;
+                }
+                armStallWatchdog();
+                upload.start();
+              });
             }));
         }
       }, _callee2);
@@ -13344,7 +13425,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, uploadId, metadata, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, uploadId, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -13395,6 +13476,12 @@
               store.dispatch({
                 type: "starmus/submit-start"
               });
+
+              // Whether the bytes reached the server. Everything after that point —
+              // naming the format, building the completion detail, notifying the
+              // host — can still fail, and none of those failures mean the recording
+              // needs sending again.
+              transferred = false;
               _context.p = 2;
               if (navigator.onLine) {
                 _context.n = 3;
@@ -13418,6 +13505,9 @@
               });
             case 4:
               result = _context.v;
+              if (result && result.success) {
+                transferred = true;
+              }
               store.dispatch({
                 type: "starmus/submit-complete",
                 payload: result
@@ -13488,15 +13578,34 @@
                 fileSize: audioBlob.size
               });
               message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message); // The recording is queued on every failure, retryable or not.
-              // Whether an error is worth retrying soon decides what the queue
-              // does next and what the contributor is told — it does not decide
-              // whether their recording survives. It used to: a misconfigured
-              // endpoint (`NO_UPLOAD_ENDPOINT`) classified as non-retryable
-              // dropped the blob on the floor with an error message. ADR-011
-              // keeps the material unconditionally, and ADR-038 forbids
-              // re-sending an original from scratch — both need the bytes still
-              // to be here.
+              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
+              if (!transferred) {
+                _context.n = 8;
+                break;
+              }
+              // The upload succeeded and something after it did not —
+              // `UNSUPPORTED_UPLOAD_FORMAT` is the one that throws here.
+              // Queueing now would send the same recording a second time,
+              // which costs the contributor bandwidth they have already
+              // spent and leaves the platform holding two copies of one
+              // take. The asset is on the server; what failed is this
+              // client's ability to describe it, and that is reported
+              // rather than retried.
+              console.error("[Core] Uploaded, but could not complete:", message);
+              sparxstarIntegration.reportError("post_upload_failure", {
+                error: message,
+                instanceId: instanceId,
+                tier: stateEnv.tier
+              });
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  message: message,
+                  retryable: false
+                }
+              });
+              return _context.a(2);
+            case 8:
               _context.p = 8;
               _context.n = 9;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);

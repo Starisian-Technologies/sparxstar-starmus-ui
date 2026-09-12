@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    MAX_PROVIDER_RESTARTS,
     TRANSCRIPT_AUTHORITY,
     clearTranscriptProviders,
     openTranscriptSlot,
@@ -41,6 +42,12 @@ function stubProvider({
         },
         stop() {
             captured.stopped += 1;
+            // A real engine reports `end` after being asked to stop, usually
+            // after one last final result. The stub does the same so the tests
+            // exercise the path production takes.
+            if (captured.context && !captured.suppressEnd) {
+                captured.context.ended("stopped");
+            }
         },
     }));
     return captured;
@@ -85,7 +92,7 @@ test("a slot without a tier is refused rather than guessed either way", () => {
     );
 });
 
-test("the draft says what a token is, and never overclaims word granularity", () => {
+test("the draft says what a token is, and never overclaims word granularity", async () => {
     clearTranscriptProviders();
     const captured = stubProvider();
     const slot = openTranscriptSlot({
@@ -100,7 +107,7 @@ test("the draft says what a token is, and never overclaims word granularity", ()
         "utterance",
         "an engine that does not claim word tokens must not be reported as producing them",
     );
-    slot.stop();
+    await slot.stop();
 
     clearTranscriptProviders();
     const worded = stubProvider({ tokenGranularity: "word" });
@@ -112,7 +119,7 @@ test("the draft says what a token is, and never overclaims word granularity", ()
     wordSlot.start();
     worded.context.emit({ text: "kori", isFinal: true });
     assert.equal(wordSlot.draft().tokenGranularity, "word");
-    wordSlot.stop();
+    await wordSlot.stop();
 });
 
 test("a provider that throws on start leaves the slot stopped, not stuck running", () => {
@@ -129,7 +136,7 @@ test("a provider that throws on start leaves the slot stopped, not stuck running
     assert.equal(slot.draft().segments.length, 0, "nothing is accepted afterwards");
 });
 
-test("the draft carries provenance and an original-timeline stamp", () => {
+test("the draft carries provenance and an original-timeline stamp", async () => {
     clearTranscriptProviders();
     const captured = stubProvider();
     let elapsed = 0;
@@ -155,10 +162,10 @@ test("the draft carries provenance and an original-timeline stamp", () => {
     assert.equal(draft.segments[0].startMs, 0);
     // The engine reported no word timings, so the slot does not claim any.
     assert.equal(draft.segments[0].timing, "approximate");
-    slot.stop();
+    await slot.stop();
 });
 
-test("an engine that exposes no model reports null rather than a placeholder", () => {
+test("an engine that exposes no model reports null rather than a placeholder", async () => {
     clearTranscriptProviders();
     const captured = stubProvider({ model: null });
     const slot = openTranscriptSlot({
@@ -169,10 +176,10 @@ test("an engine that exposes no model reports null rather than a placeholder", (
     slot.start();
     captured.context.emit({ text: "hello", isFinal: true });
     assert.equal(slot.draft().provenance.model, null);
-    slot.stop();
+    await slot.stop();
 });
 
-test("interim results replace the trailing interim and never survive stop", () => {
+test("interim results replace the trailing interim and never survive stop", async () => {
     clearTranscriptProviders();
     const captured = stubProvider();
     let elapsed = 0;
@@ -198,13 +205,13 @@ test("interim results replace the trailing interim and never survive stop", () =
     captured.context.emit({ text: "ib", isFinal: false });
     assert.equal(slot.draft().segments.length, 2);
 
-    const settled = slot.stop();
+    const settled = await slot.stop();
     assert.equal(settled.segments.length, 1);
     assert.equal(settled.segments[0].isFinal, true);
     assert.equal(slot.text(), "kori tanante");
 });
 
-test("segments do not accept text after the slot stops", () => {
+test("segments do not accept text after the slot stops", async () => {
     clearTranscriptProviders();
     const captured = stubProvider();
     const slot = openTranscriptSlot({
@@ -213,7 +220,7 @@ test("segments do not accept text after the slot stops", () => {
         tier: "A",
     });
     slot.start();
-    slot.stop();
+    await slot.stop();
     captured.context.emit({ text: "late", isFinal: true });
     assert.equal(slot.draft().segments.length, 0);
 });
@@ -282,4 +289,82 @@ test("a factory that cannot run in this environment is skipped", () => {
         tier: "A",
     });
     assert.equal(slot.draft().provenance.engine, "usable");
+});
+
+test("the engine's closing result is kept, not dropped on stop", async () => {
+    clearTranscriptProviders();
+    const captured = { context: null, stopped: 0 };
+    registerTranscriptProvider("closing", () => ({
+        engine: "closing-engine",
+        model: null,
+        start(context) {
+            captured.context = context;
+        },
+        stop() {
+            captured.stopped += 1;
+            // What a real speech engine does: one last final result for the
+            // audio it already heard, then `end`.
+            captured.context.emit({ text: "the last thing said", isFinal: true });
+            captured.context.ended("stopped");
+        },
+    }));
+
+    let elapsed = 0;
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => elapsed,
+        tier: "A",
+    });
+    slot.start();
+    elapsed = 500;
+    captured.context.emit({ text: "something earlier", isFinal: true });
+    elapsed = 900;
+
+    const settled = await slot.stop();
+    assert.equal(settled.segments.length, 2, "the closing utterance survives");
+    assert.equal(settled.segments[1]?.text, "the last thing said");
+    assert.equal(slot.text(), "something earlier the last thing said");
+});
+
+test("an engine that ends on its own is restarted, within a bound", async () => {
+    clearTranscriptProviders();
+    const captured = { context: null, starts: 0, stopped: 0 };
+    registerTranscriptProvider("flaky", () => ({
+        engine: "flaky-engine",
+        model: null,
+        start(context) {
+            captured.context = context;
+            captured.starts += 1;
+        },
+        stop() {
+            captured.stopped += 1;
+            captured.context.ended("stopped");
+        },
+    }));
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+    });
+    slot.start();
+    assert.equal(captured.starts, 1);
+
+    // The engine ends by itself; the slot puts it back.
+    captured.context.ended("engine-ended");
+    assert.equal(captured.starts, 2, "an engine that ended on its own is restarted");
+
+    // Keep ending. The slot gives up rather than looping forever, and settles
+    // the draft instead of sitting marked running with nothing arriving.
+    for (let i = 0; i < MAX_PROVIDER_RESTARTS + 2; i += 1) {
+        captured.context.ended("engine-ended");
+    }
+    assert.equal(
+        captured.starts,
+        MAX_PROVIDER_RESTARTS + 1,
+        "restarts are bounded",
+    );
+
+    const settled = await slot.stop();
+    assert.ok(settled, "the draft settles rather than hanging");
 });

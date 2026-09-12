@@ -55,6 +55,29 @@ export const TRANSCRIPT_AUTHORITY = "machine-draft";
 export const DEFAULT_MAX_PROVIDER_MS = 3600000;
 
 /**
+ * How many times the slot restarts an engine that ended on its own.
+ *
+ * Browser speech recognition ends spontaneously, so some restarting is
+ * ordinary. An unbounded loop against an engine that will never work is not:
+ * it holds the microphone pipeline open and produces nothing. After this many
+ * the draft settles and says so.
+ *
+ * @type {number}
+ */
+export const MAX_PROVIDER_RESTARTS = 5;
+
+/**
+ * How long `stop()` waits for the engine's closing result before settling.
+ *
+ * The engine delivers a final result for audio it already heard after being
+ * asked to stop. This bounds the wait so an engine that never reports ending
+ * does not hold the draft open.
+ *
+ * @type {number}
+ */
+export const SETTLE_GRACE_MS = 2000;
+
+/**
  * Registered provider factories, in preference order.
  *
  * @type {Array<{name: string, create: Function}>}
@@ -71,8 +94,12 @@ const providerFactories = [];
  *     model: string|null,      // engine's model/version identifier, or null
  *                              // when the engine does not expose one
  *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
- *     start(context): void,    // context.emit(segment), context.fail(error)
- *     stop(): void,
+ *     start(context): void,    // context.emit(segment)
+ *                              // context.fail(error)
+ *                              // context.ended(reason) — the engine stopped
+ *                              //   producing, whether asked to or not
+ *     stop(): void,            // ask the engine to finish; it may still
+ *                              //   deliver one last final result afterwards
  *   }
  *
  * The factory returns `null` when it cannot run in the current environment.
@@ -127,14 +154,18 @@ export function createBrowserSpeechProvider({ language } = {}) {
     }
 
     let recognition = null;
+    let stopping = false;
 
     return {
         engine: "browser-speech-recognition",
         // The Web Speech API exposes no model identifier. Reporting null is the
         // honest answer; a placeholder string would read as provenance.
         model: null,
+        // The engine emits whole utterances, not words.
+        tokenGranularity: "utterance",
 
         start(context) {
+            stopping = false;
             recognition = new Recognition();
             recognition.continuous = true;
             recognition.interimResults = true;
@@ -163,11 +194,21 @@ export function createBrowserSpeechProvider({ language } = {}) {
 
             recognition.addEventListener("error", (event) => {
                 // `no-speech` and `aborted` are ordinary during a recording and
-                // are not failures of the slot.
+                // are not failures of the slot. The `end` that follows them is
+                // handled below, so the slot is never left believing a dead
+                // engine is still listening.
                 if (event.error === "no-speech" || event.error === "aborted") {
                     return;
                 }
                 context.fail(new Error(`SPEECH_RECOGNITION_ERROR: ${event.error}`));
+            });
+
+            // The engine ends on its own — after a silence, after an error it
+            // recovered from, and on some platforms simply after a while. It
+            // also ends because we asked. Only the slot can tell those apart,
+            // so both are reported and it decides.
+            recognition.addEventListener("end", () => {
+                context.ended(stopping ? "stopped" : "engine-ended");
             });
 
             recognition.start();
@@ -177,7 +218,11 @@ export function createBrowserSpeechProvider({ language } = {}) {
             if (!recognition) {
                 return;
             }
+            stopping = true;
             try {
+                // `stop()` rather than `abort()`: it asks the engine to finish
+                // and deliver a final result for what it has already heard.
+                // `abort()` would discard the last utterance of the recording.
                 recognition.stop();
             } catch {
                 // Already stopped by the engine; nothing to undo.
@@ -255,8 +300,13 @@ export function openTranscriptSlot({
 
     const segments = [];
     let stopTimer = null;
+    let settleTimer = null;
     let running = false;
+    let stopping = false;
+    let restarts = 0;
     let lastStartMs = 0;
+    /** @type {Function|null} Resolves the promise `stop()` handed out. */
+    let resolveSettled = null;
 
     /**
      * @returns {Object} The draft in its current state.
@@ -276,7 +326,11 @@ export function openTranscriptSlot({
 
     const context = {
         emit(segment) {
-            if (!running) {
+            // Accepted while stopping as well as while running: the engine
+            // delivers a final result for the audio it already heard *after*
+            // being asked to stop, and refusing it here dropped the last
+            // utterance of every recording.
+            if (!running && !stopping) {
                 return;
             }
             const endMs = Math.max(0, Math.round(getElapsedMs()));
@@ -315,29 +369,107 @@ export function openTranscriptSlot({
             // continues, and the Node still produces boundaries and — through
             // ESU — a transcript of record.
             console.warn("[Transcript] Provider failed:", error.message);
-            stop();
+            void stop();
+        },
+
+        /**
+         * The engine stopped producing.
+         *
+         * @param {string} reason 'stopped' when it was asked to, anything else
+         *        when it ended on its own.
+         */
+        ended(reason) {
+            if (stopping) {
+                // The final result, if there was one, has arrived by now.
+                settle();
+                return;
+            }
+            if (!running) {
+                return;
+            }
+
+            // Browser speech recognition ends by itself — after a silence,
+            // after a recovered error, or just after a while. Left unhandled
+            // the slot sat marked running with nothing arriving until the
+            // one-hour sensor bound fired, which looks exactly like a
+            // recording with no speech in it.
+            if (restarts < MAX_PROVIDER_RESTARTS) {
+                restarts += 1;
+                try {
+                    provider.start(context);
+                    return;
+                } catch (error) {
+                    console.warn("[Transcript] Provider would not restart:", error.message);
+                }
+            }
+
+            console.warn(
+                `[Transcript] Provider ended (${reason}) and will not be restarted; settling the draft.`,
+            );
+            stopping = true;
+            settle();
         },
     };
 
     /**
+     * Finish: drop any trailing interim, and hand the draft to whoever is
+     * waiting on `stop()`.
+     *
+     * @returns {void}
+     */
+    function settle() {
+        if (settleTimer) {
+            clearTimeout(settleTimer);
+            settleTimer = null;
+        }
+        running = false;
+        stopping = false;
+        // Interim text is not a draft; drop a trailing interim on settle.
+        while (segments.length > 0 && !segments[segments.length - 1].isFinal) {
+            segments.pop();
+        }
+        if (resolveSettled) {
+            const resolve = resolveSettled;
+            resolveSettled = null;
+            resolve(draft());
+        }
+    }
+
+    /**
      * Stop the provider and settle the draft.
      *
-     * @returns {Object} The final draft.
+     * Asynchronous because the engine's last final result arrives after it is
+     * asked to stop. Settling synchronously discarded the closing utterance of
+     * every recording. The wait is bounded: an engine that never reports it has
+     * ended does not hold the draft open.
+     *
+     * @returns {Promise<Object>} The final draft.
      */
     function stop() {
         if (stopTimer) {
             clearTimeout(stopTimer);
             stopTimer = null;
         }
-        if (running) {
-            running = false;
+        if (!running && !stopping) {
+            return Promise.resolve(draft());
+        }
+
+        const settled = new Promise((resolve) => {
+            resolveSettled = resolve;
+        });
+
+        stopping = true;
+        running = false;
+        try {
             provider.stop();
+        } catch (error) {
+            console.warn("[Transcript] Provider would not stop cleanly:", error.message);
+            settle();
+            return settled;
         }
-        // Interim text is not a draft; drop a trailing interim on settle.
-        while (segments.length > 0 && !segments[segments.length - 1].isFinal) {
-            segments.pop();
-        }
-        return draft();
+
+        settleTimer = setTimeout(settle, SETTLE_GRACE_MS);
+        return settled;
     }
 
     return {
@@ -351,8 +483,10 @@ export function openTranscriptSlot({
                 return;
             }
             running = true;
+            stopping = false;
+            restarts = 0;
             lastStartMs = Math.max(0, Math.round(getElapsedMs()));
-            stopTimer = setTimeout(stop, maxDurationMs);
+            stopTimer = setTimeout(() => void stop(), maxDurationMs);
             try {
                 provider.start(context);
             } catch (error) {
@@ -360,7 +494,7 @@ export function openTranscriptSlot({
                 // the slot marked running with its auto-disable timer armed:
                 // every later start() would no-op and the sensor bound would
                 // fire against a provider that never started.
-                stop();
+                void stop();
                 console.warn("[Transcript] Provider failed to start:", error.message);
             }
         },

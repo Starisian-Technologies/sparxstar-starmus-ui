@@ -2445,6 +2445,1498 @@ var StarmusTranscript = (function (exports) {
 
   requireEs_object_toString();
 
+  var es_promise = {};
+
+  var es_promise_constructor = {};
+
+  var environment;
+  var hasRequiredEnvironment;
+
+  function requireEnvironment () {
+  	if (hasRequiredEnvironment) return environment;
+  	hasRequiredEnvironment = 1;
+  	/* global Bun, Deno -- detection */
+  	var globalThis = requireGlobalThis();
+  	var userAgent = requireEnvironmentUserAgent();
+  	var classof = requireClassofRaw();
+
+  	var userAgentStartsWith = function (string) {
+  	  return userAgent.slice(0, string.length) === string;
+  	};
+
+  	environment = (function () {
+  	  if (userAgentStartsWith('Bun/')) return 'BUN';
+  	  if (userAgentStartsWith('Cloudflare-Workers')) return 'CLOUDFLARE';
+  	  if (userAgentStartsWith('Deno/')) return 'DENO';
+  	  if (userAgentStartsWith('Node.js/')) return 'NODE';
+  	  if (globalThis.Bun && typeof Bun.version == 'string') return 'BUN';
+  	  if (globalThis.Deno && typeof Deno.version == 'object') return 'DENO';
+  	  if (classof(globalThis.process) === 'process') return 'NODE';
+  	  if (globalThis.window && globalThis.document) return 'BROWSER';
+  	  return 'REST';
+  	})();
+  	return environment;
+  }
+
+  var environmentIsNode;
+  var hasRequiredEnvironmentIsNode;
+
+  function requireEnvironmentIsNode () {
+  	if (hasRequiredEnvironmentIsNode) return environmentIsNode;
+  	hasRequiredEnvironmentIsNode = 1;
+  	var ENVIRONMENT = requireEnvironment();
+
+  	environmentIsNode = ENVIRONMENT === 'NODE';
+  	return environmentIsNode;
+  }
+
+  var path;
+  var hasRequiredPath;
+
+  function requirePath () {
+  	if (hasRequiredPath) return path;
+  	hasRequiredPath = 1;
+  	var globalThis = requireGlobalThis();
+
+  	path = globalThis;
+  	return path;
+  }
+
+  var functionUncurryThisAccessor;
+  var hasRequiredFunctionUncurryThisAccessor;
+
+  function requireFunctionUncurryThisAccessor () {
+  	if (hasRequiredFunctionUncurryThisAccessor) return functionUncurryThisAccessor;
+  	hasRequiredFunctionUncurryThisAccessor = 1;
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var aCallable = requireACallable();
+
+  	functionUncurryThisAccessor = function (object, key, method) {
+  	  try {
+  	    // eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
+  	    return uncurryThis(aCallable(Object.getOwnPropertyDescriptor(object, key)[method]));
+  	  } catch (error) { /* empty */ }
+  	};
+  	return functionUncurryThisAccessor;
+  }
+
+  var isPossiblePrototype;
+  var hasRequiredIsPossiblePrototype;
+
+  function requireIsPossiblePrototype () {
+  	if (hasRequiredIsPossiblePrototype) return isPossiblePrototype;
+  	hasRequiredIsPossiblePrototype = 1;
+  	var isObject = requireIsObject();
+
+  	isPossiblePrototype = function (argument) {
+  	  return isObject(argument) || argument === null;
+  	};
+  	return isPossiblePrototype;
+  }
+
+  var aPossiblePrototype;
+  var hasRequiredAPossiblePrototype;
+
+  function requireAPossiblePrototype () {
+  	if (hasRequiredAPossiblePrototype) return aPossiblePrototype;
+  	hasRequiredAPossiblePrototype = 1;
+  	var isPossiblePrototype = requireIsPossiblePrototype();
+
+  	var $String = String;
+  	var $TypeError = TypeError;
+
+  	aPossiblePrototype = function (argument) {
+  	  if (isPossiblePrototype(argument)) return argument;
+  	  throw new $TypeError("Can't set " + $String(argument) + ' as a prototype');
+  	};
+  	return aPossiblePrototype;
+  }
+
+  var objectSetPrototypeOf;
+  var hasRequiredObjectSetPrototypeOf;
+
+  function requireObjectSetPrototypeOf () {
+  	if (hasRequiredObjectSetPrototypeOf) return objectSetPrototypeOf;
+  	hasRequiredObjectSetPrototypeOf = 1;
+  	/* eslint-disable no-proto -- safe */
+  	var uncurryThisAccessor = requireFunctionUncurryThisAccessor();
+  	var isObject = requireIsObject();
+  	var requireObjectCoercible = requireRequireObjectCoercible();
+  	var aPossiblePrototype = requireAPossiblePrototype();
+
+  	// `Object.setPrototypeOf` method
+  	// https://tc39.es/ecma262/#sec-object.setprototypeof
+  	// Works with __proto__ only. Old v8 can't work with null proto objects.
+  	// eslint-disable-next-line es/no-object-setprototypeof -- safe
+  	objectSetPrototypeOf = Object.setPrototypeOf || ('__proto__' in {} ? function () {
+  	  var CORRECT_SETTER = false;
+  	  var test = {};
+  	  var setter;
+  	  try {
+  	    setter = uncurryThisAccessor(Object.prototype, '__proto__', 'set');
+  	    setter(test, []);
+  	    CORRECT_SETTER = test instanceof Array;
+  	  } catch (error) { /* empty */ }
+  	  return function setPrototypeOf(O, proto) {
+  	    requireObjectCoercible(O);
+  	    aPossiblePrototype(proto);
+  	    if (!isObject(O)) return O;
+  	    if (CORRECT_SETTER) setter(O, proto);
+  	    else O.__proto__ = proto;
+  	    return O;
+  	  };
+  	}() : undefined);
+  	return objectSetPrototypeOf;
+  }
+
+  var setToStringTag;
+  var hasRequiredSetToStringTag;
+
+  function requireSetToStringTag () {
+  	if (hasRequiredSetToStringTag) return setToStringTag;
+  	hasRequiredSetToStringTag = 1;
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var hasOwn = requireHasOwnProperty();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var TO_STRING_TAG = wellKnownSymbol('toStringTag');
+
+  	setToStringTag = function (target, TAG, STATIC) {
+  	  if (target && !STATIC) target = target.prototype;
+  	  if (target && !hasOwn(target, TO_STRING_TAG)) {
+  	    defineProperty(target, TO_STRING_TAG, { configurable: true, value: TAG });
+  	  }
+  	};
+  	return setToStringTag;
+  }
+
+  var defineBuiltInAccessor;
+  var hasRequiredDefineBuiltInAccessor;
+
+  function requireDefineBuiltInAccessor () {
+  	if (hasRequiredDefineBuiltInAccessor) return defineBuiltInAccessor;
+  	hasRequiredDefineBuiltInAccessor = 1;
+  	var makeBuiltIn = requireMakeBuiltIn();
+  	var defineProperty = requireObjectDefineProperty();
+
+  	defineBuiltInAccessor = function (target, name, descriptor) {
+  	  if (descriptor.get) makeBuiltIn(descriptor.get, name, { getter: true });
+  	  if (descriptor.set) makeBuiltIn(descriptor.set, name, { setter: true });
+  	  return defineProperty.f(target, name, descriptor);
+  	};
+  	return defineBuiltInAccessor;
+  }
+
+  var setSpecies;
+  var hasRequiredSetSpecies;
+
+  function requireSetSpecies () {
+  	if (hasRequiredSetSpecies) return setSpecies;
+  	hasRequiredSetSpecies = 1;
+  	var getBuiltIn = requireGetBuiltIn();
+  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var DESCRIPTORS = requireDescriptors();
+
+  	var SPECIES = wellKnownSymbol('species');
+
+  	setSpecies = function (CONSTRUCTOR_NAME) {
+  	  var Constructor = getBuiltIn(CONSTRUCTOR_NAME);
+
+  	  if (DESCRIPTORS && Constructor && !Constructor[SPECIES]) {
+  	    defineBuiltInAccessor(Constructor, SPECIES, {
+  	      configurable: true,
+  	      get: function () { return this; }
+  	    });
+  	  }
+  	};
+  	return setSpecies;
+  }
+
+  var anInstance;
+  var hasRequiredAnInstance;
+
+  function requireAnInstance () {
+  	if (hasRequiredAnInstance) return anInstance;
+  	hasRequiredAnInstance = 1;
+  	var isPrototypeOf = requireObjectIsPrototypeOf();
+
+  	var $TypeError = TypeError;
+
+  	anInstance = function (it, Prototype) {
+  	  if (isPrototypeOf(Prototype, it)) return it;
+  	  throw new $TypeError('Incorrect invocation');
+  	};
+  	return anInstance;
+  }
+
+  var aConstructor;
+  var hasRequiredAConstructor;
+
+  function requireAConstructor () {
+  	if (hasRequiredAConstructor) return aConstructor;
+  	hasRequiredAConstructor = 1;
+  	var isConstructor = requireIsConstructor();
+  	var tryToString = requireTryToString();
+
+  	var $TypeError = TypeError;
+
+  	// `Assert: IsConstructor(argument) is true`
+  	aConstructor = function (argument) {
+  	  if (isConstructor(argument)) return argument;
+  	  throw new $TypeError(tryToString(argument) + ' is not a constructor');
+  	};
+  	return aConstructor;
+  }
+
+  var speciesConstructor;
+  var hasRequiredSpeciesConstructor;
+
+  function requireSpeciesConstructor () {
+  	if (hasRequiredSpeciesConstructor) return speciesConstructor;
+  	hasRequiredSpeciesConstructor = 1;
+  	var anObject = requireAnObject();
+  	var aConstructor = requireAConstructor();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var SPECIES = wellKnownSymbol('species');
+
+  	// `SpeciesConstructor` abstract operation
+  	// https://tc39.es/ecma262/#sec-speciesconstructor
+  	speciesConstructor = function (O, defaultConstructor) {
+  	  var C = anObject(O).constructor;
+  	  var S;
+  	  return C === undefined || isNullOrUndefined(S = anObject(C)[SPECIES]) ? defaultConstructor : aConstructor(S);
+  	};
+  	return speciesConstructor;
+  }
+
+  var functionApply;
+  var hasRequiredFunctionApply;
+
+  function requireFunctionApply () {
+  	if (hasRequiredFunctionApply) return functionApply;
+  	hasRequiredFunctionApply = 1;
+  	var NATIVE_BIND = requireFunctionBindNative();
+
+  	var FunctionPrototype = Function.prototype;
+  	var apply = FunctionPrototype.apply;
+  	var call = FunctionPrototype.call;
+
+  	// eslint-disable-next-line es/no-function-prototype-bind, es/no-reflect -- safe
+  	functionApply = typeof Reflect == 'object' && Reflect.apply || (NATIVE_BIND ? call.bind(apply) : function () {
+  	  return call.apply(apply, arguments);
+  	});
+  	return functionApply;
+  }
+
+  var validateArgumentsLength;
+  var hasRequiredValidateArgumentsLength;
+
+  function requireValidateArgumentsLength () {
+  	if (hasRequiredValidateArgumentsLength) return validateArgumentsLength;
+  	hasRequiredValidateArgumentsLength = 1;
+  	var $TypeError = TypeError;
+
+  	validateArgumentsLength = function (passed, required) {
+  	  if (passed < required) throw new $TypeError('Not enough arguments');
+  	  return passed;
+  	};
+  	return validateArgumentsLength;
+  }
+
+  var environmentIsIos;
+  var hasRequiredEnvironmentIsIos;
+
+  function requireEnvironmentIsIos () {
+  	if (hasRequiredEnvironmentIsIos) return environmentIsIos;
+  	hasRequiredEnvironmentIsIos = 1;
+  	var userAgent = requireEnvironmentUserAgent();
+
+  	environmentIsIos = /ipad|iphone|ipod/i.test(userAgent) && /applewebkit/i.test(userAgent);
+  	return environmentIsIos;
+  }
+
+  var task;
+  var hasRequiredTask;
+
+  function requireTask () {
+  	if (hasRequiredTask) return task;
+  	hasRequiredTask = 1;
+  	var globalThis = requireGlobalThis();
+  	var apply = requireFunctionApply();
+  	var bind = requireFunctionBindContext();
+  	var isCallable = requireIsCallable();
+  	var hasOwn = requireHasOwnProperty();
+  	var fails = requireFails();
+  	var html = requireHtml();
+  	var arraySlice = requireArraySlice();
+  	var createElement = requireDocumentCreateElement();
+  	var validateArgumentsLength = requireValidateArgumentsLength();
+  	var IS_IOS = requireEnvironmentIsIos();
+  	var IS_NODE = requireEnvironmentIsNode();
+
+  	var set = globalThis.setImmediate;
+  	var clear = globalThis.clearImmediate;
+  	var process = globalThis.process;
+  	var Dispatch = globalThis.Dispatch;
+  	var Function = globalThis.Function;
+  	var MessageChannel = globalThis.MessageChannel;
+  	var String = globalThis.String;
+  	var counter = 0;
+  	var queue = {};
+  	var ONREADYSTATECHANGE = 'onreadystatechange';
+  	var $location, defer, channel, port;
+
+  	fails(function () {
+  	  // Deno throws a ReferenceError on `location` access without `--location` flag
+  	  $location = globalThis.location;
+  	});
+
+  	var run = function (id) {
+  	  if (hasOwn(queue, id)) {
+  	    var fn = queue[id];
+  	    delete queue[id];
+  	    fn();
+  	  }
+  	};
+
+  	var runner = function (id) {
+  	  return function () {
+  	    run(id);
+  	  };
+  	};
+
+  	var eventListener = function (event) {
+  	  run(event.data);
+  	};
+
+  	var globalPostMessageDefer = function (id) {
+  	  // old engines have not location.origin
+  	  globalThis.postMessage(String(id), $location.protocol + '//' + $location.host);
+  	};
+
+  	// Node.js 0.9+ & IE10+ has setImmediate, otherwise:
+  	if (!set || !clear) {
+  	  set = function setImmediate(handler) {
+  	    validateArgumentsLength(arguments.length, 1);
+  	    var fn = isCallable(handler) ? handler : Function(handler);
+  	    var args = arraySlice(arguments, 1);
+  	    queue[++counter] = function () {
+  	      apply(fn, undefined, args);
+  	    };
+  	    defer(counter);
+  	    return counter;
+  	  };
+  	  clear = function clearImmediate(id) {
+  	    delete queue[id];
+  	  };
+  	  // Node.js 0.8-
+  	  if (IS_NODE) {
+  	    defer = function (id) {
+  	      process.nextTick(runner(id));
+  	    };
+  	  // Sphere (JS game engine) Dispatch API
+  	  } else if (Dispatch && Dispatch.now) {
+  	    defer = function (id) {
+  	      Dispatch.now(runner(id));
+  	    };
+  	  // Browsers with MessageChannel, includes WebWorkers
+  	  // except iOS - https://github.com/zloirock/core-js/issues/624
+  	  } else if (MessageChannel && !IS_IOS) {
+  	    channel = new MessageChannel();
+  	    port = channel.port2;
+  	    channel.port1.onmessage = eventListener;
+  	    defer = bind(port.postMessage, port);
+  	  // Browsers with postMessage, skip WebWorkers
+  	  // IE8 has postMessage, but it's sync & typeof its postMessage is 'object'
+  	  } else if (
+  	    globalThis.addEventListener &&
+  	    isCallable(globalThis.postMessage) &&
+  	    !globalThis.importScripts &&
+  	    $location && $location.protocol !== 'file:' &&
+  	    !fails(globalPostMessageDefer)
+  	  ) {
+  	    defer = globalPostMessageDefer;
+  	    globalThis.addEventListener('message', eventListener, false);
+  	  // IE8-
+  	  } else if (ONREADYSTATECHANGE in createElement('script')) {
+  	    defer = function (id) {
+  	      html.appendChild(createElement('script'))[ONREADYSTATECHANGE] = function () {
+  	        html.removeChild(this);
+  	        run(id);
+  	      };
+  	    };
+  	  // Rest old browsers
+  	  } else {
+  	    defer = function (id) {
+  	      setTimeout(runner(id), 0);
+  	    };
+  	  }
+  	}
+
+  	task = {
+  	  set: set,
+  	  clear: clear
+  	};
+  	return task;
+  }
+
+  var safeGetBuiltIn;
+  var hasRequiredSafeGetBuiltIn;
+
+  function requireSafeGetBuiltIn () {
+  	if (hasRequiredSafeGetBuiltIn) return safeGetBuiltIn;
+  	hasRequiredSafeGetBuiltIn = 1;
+  	var globalThis = requireGlobalThis();
+  	var DESCRIPTORS = requireDescriptors();
+
+  	// eslint-disable-next-line es/no-object-getownpropertydescriptor -- safe
+  	var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+
+  	// Avoid NodeJS experimental warning
+  	safeGetBuiltIn = function (name) {
+  	  if (!DESCRIPTORS) return globalThis[name];
+  	  var descriptor = getOwnPropertyDescriptor(globalThis, name);
+  	  return descriptor && descriptor.value;
+  	};
+  	return safeGetBuiltIn;
+  }
+
+  var queue;
+  var hasRequiredQueue;
+
+  function requireQueue () {
+  	if (hasRequiredQueue) return queue;
+  	hasRequiredQueue = 1;
+  	var Queue = function () {
+  	  this.head = null;
+  	  this.tail = null;
+  	};
+
+  	Queue.prototype = {
+  	  add: function (item) {
+  	    var entry = { item: item, next: null };
+  	    var tail = this.tail;
+  	    if (tail) tail.next = entry;
+  	    else this.head = entry;
+  	    this.tail = entry;
+  	  },
+  	  get: function () {
+  	    var entry = this.head;
+  	    if (entry) {
+  	      var next = this.head = entry.next;
+  	      if (next === null) this.tail = null;
+  	      return entry.item;
+  	    }
+  	  }
+  	};
+
+  	queue = Queue;
+  	return queue;
+  }
+
+  var environmentIsIosPebble;
+  var hasRequiredEnvironmentIsIosPebble;
+
+  function requireEnvironmentIsIosPebble () {
+  	if (hasRequiredEnvironmentIsIosPebble) return environmentIsIosPebble;
+  	hasRequiredEnvironmentIsIosPebble = 1;
+  	var userAgent = requireEnvironmentUserAgent();
+
+  	environmentIsIosPebble = /ipad|iphone|ipod/i.test(userAgent) && typeof Pebble != 'undefined';
+  	return environmentIsIosPebble;
+  }
+
+  var environmentIsWebosWebkit;
+  var hasRequiredEnvironmentIsWebosWebkit;
+
+  function requireEnvironmentIsWebosWebkit () {
+  	if (hasRequiredEnvironmentIsWebosWebkit) return environmentIsWebosWebkit;
+  	hasRequiredEnvironmentIsWebosWebkit = 1;
+  	var userAgent = requireEnvironmentUserAgent();
+
+  	environmentIsWebosWebkit = /web0s(?!.*chrome)/i.test(userAgent);
+  	return environmentIsWebosWebkit;
+  }
+
+  var microtask_1;
+  var hasRequiredMicrotask;
+
+  function requireMicrotask () {
+  	if (hasRequiredMicrotask) return microtask_1;
+  	hasRequiredMicrotask = 1;
+  	var globalThis = requireGlobalThis();
+  	var safeGetBuiltIn = requireSafeGetBuiltIn();
+  	var bind = requireFunctionBindContext();
+  	var macrotask = requireTask().set;
+  	var Queue = requireQueue();
+  	var IS_IOS = requireEnvironmentIsIos();
+  	var IS_IOS_PEBBLE = requireEnvironmentIsIosPebble();
+  	var IS_WEBOS_WEBKIT = requireEnvironmentIsWebosWebkit();
+  	var IS_NODE = requireEnvironmentIsNode();
+
+  	var MutationObserver = globalThis.MutationObserver || globalThis.WebKitMutationObserver;
+  	var document = globalThis.document;
+  	var process = globalThis.process;
+  	var Promise = globalThis.Promise;
+  	var microtask = safeGetBuiltIn('queueMicrotask');
+  	var notify, toggle, node, promise, then;
+
+  	// modern engines have queueMicrotask method
+  	if (!microtask) {
+  	  var queue = new Queue();
+
+  	  var flush = function () {
+  	    var parent, fn;
+  	    if (IS_NODE && (parent = process.domain)) parent.exit();
+  	    while (fn = queue.get()) try {
+  	      fn();
+  	    } catch (error) {
+  	      if (queue.head) notify();
+  	      throw error;
+  	    }
+  	    if (parent) parent.enter();
+  	  };
+
+  	  // browsers with MutationObserver, except iOS - https://github.com/zloirock/core-js/issues/339
+  	  // also except WebOS Webkit https://github.com/zloirock/core-js/issues/898
+  	  if (!IS_IOS && !IS_NODE && !IS_WEBOS_WEBKIT && MutationObserver && document) {
+  	    toggle = true;
+  	    node = document.createTextNode('');
+  	    new MutationObserver(flush).observe(node, { characterData: true });
+  	    notify = function () {
+  	      node.data = toggle = !toggle;
+  	    };
+  	  // environments with maybe non-completely correct, but existent Promise
+  	  } else if (!IS_IOS_PEBBLE && Promise && Promise.resolve) {
+  	    // Promise.resolve without an argument throws an error in LG WebOS 2
+  	    promise = Promise.resolve(undefined);
+  	    // workaround of WebKit ~ iOS Safari 10.1 bug
+  	    promise.constructor = Promise;
+  	    then = bind(promise.then, promise);
+  	    notify = function () {
+  	      then(flush);
+  	    };
+  	  // Node.js without promises
+  	  } else if (IS_NODE) {
+  	    notify = function () {
+  	      process.nextTick(flush);
+  	    };
+  	  // for other environments - macrotask based on:
+  	  // - setImmediate
+  	  // - MessageChannel
+  	  // - window.postMessage
+  	  // - onreadystatechange
+  	  // - setTimeout
+  	  } else {
+  	    // `webpack` dev server bug on IE global methods - use bind(fn, global)
+  	    macrotask = bind(macrotask, globalThis);
+  	    notify = function () {
+  	      macrotask(flush);
+  	    };
+  	  }
+
+  	  microtask = function (fn) {
+  	    if (!queue.head) notify();
+  	    queue.add(fn);
+  	  };
+  	}
+
+  	microtask_1 = microtask;
+  	return microtask_1;
+  }
+
+  var hostReportErrors;
+  var hasRequiredHostReportErrors;
+
+  function requireHostReportErrors () {
+  	if (hasRequiredHostReportErrors) return hostReportErrors;
+  	hasRequiredHostReportErrors = 1;
+  	hostReportErrors = function (a, b) {
+  	  try {
+  	    // eslint-disable-next-line no-console -- safe
+  	    arguments.length === 1 ? console.error(a) : console.error(a, b);
+  	  } catch (error) { /* empty */ }
+  	};
+  	return hostReportErrors;
+  }
+
+  var perform;
+  var hasRequiredPerform;
+
+  function requirePerform () {
+  	if (hasRequiredPerform) return perform;
+  	hasRequiredPerform = 1;
+  	perform = function (exec) {
+  	  try {
+  	    return { error: false, value: exec() };
+  	  } catch (error) {
+  	    return { error: true, value: error };
+  	  }
+  	};
+  	return perform;
+  }
+
+  var promiseNativeConstructor;
+  var hasRequiredPromiseNativeConstructor;
+
+  function requirePromiseNativeConstructor () {
+  	if (hasRequiredPromiseNativeConstructor) return promiseNativeConstructor;
+  	hasRequiredPromiseNativeConstructor = 1;
+  	var globalThis = requireGlobalThis();
+
+  	promiseNativeConstructor = globalThis.Promise;
+  	return promiseNativeConstructor;
+  }
+
+  var promiseConstructorDetection;
+  var hasRequiredPromiseConstructorDetection;
+
+  function requirePromiseConstructorDetection () {
+  	if (hasRequiredPromiseConstructorDetection) return promiseConstructorDetection;
+  	hasRequiredPromiseConstructorDetection = 1;
+  	var globalThis = requireGlobalThis();
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var isCallable = requireIsCallable();
+  	var isForced = requireIsForced();
+  	var inspectSource = requireInspectSource();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var ENVIRONMENT = requireEnvironment();
+  	var IS_PURE = requireIsPure();
+  	var V8_VERSION = requireEnvironmentV8Version();
+
+  	var NativePromisePrototype = NativePromiseConstructor && NativePromiseConstructor.prototype;
+  	var SPECIES = wellKnownSymbol('species');
+  	var SUBCLASSING = false;
+  	var NATIVE_PROMISE_REJECTION_EVENT = isCallable(globalThis.PromiseRejectionEvent);
+
+  	var FORCED_PROMISE_CONSTRUCTOR = isForced('Promise', function () {
+  	  var PROMISE_CONSTRUCTOR_SOURCE = inspectSource(NativePromiseConstructor);
+  	  var GLOBAL_CORE_JS_PROMISE = PROMISE_CONSTRUCTOR_SOURCE !== String(NativePromiseConstructor);
+  	  // V8 6.6 (Node 10 and Chrome 66) have a bug with resolving custom thenables
+  	  // https://bugs.chromium.org/p/chromium/issues/detail?id=830565
+  	  // We can't detect it synchronously, so just check versions
+  	  if (!GLOBAL_CORE_JS_PROMISE && V8_VERSION === 66) return true;
+  	  // We need Promise#{ catch, finally } in the pure version for preventing prototype pollution
+  	  if (IS_PURE && !(NativePromisePrototype['catch'] && NativePromisePrototype['finally'])) return true;
+  	  // We can't use @@species feature detection in V8 since it causes
+  	  // deoptimization and performance degradation
+  	  // https://github.com/zloirock/core-js/issues/679
+  	  if (!V8_VERSION || V8_VERSION < 51 || !/native code/.test(PROMISE_CONSTRUCTOR_SOURCE)) {
+  	    // Detect correctness of subclassing with @@species support
+  	    var promise = new NativePromiseConstructor(function (resolve) { resolve(1); });
+  	    var FakePromise = function (exec) {
+  	      exec(function () { /* empty */ }, function () { /* empty */ });
+  	    };
+  	    var constructor = promise.constructor = {};
+  	    constructor[SPECIES] = FakePromise;
+  	    SUBCLASSING = promise.then(function () { /* empty */ }) instanceof FakePromise;
+  	    if (!SUBCLASSING) return true;
+  	  // Unhandled rejections tracking support, NodeJS Promise without it fails @@species test
+  	  } return !GLOBAL_CORE_JS_PROMISE && (ENVIRONMENT === 'BROWSER' || ENVIRONMENT === 'DENO') && !NATIVE_PROMISE_REJECTION_EVENT;
+  	});
+
+  	promiseConstructorDetection = {
+  	  CONSTRUCTOR: FORCED_PROMISE_CONSTRUCTOR,
+  	  REJECTION_EVENT: NATIVE_PROMISE_REJECTION_EVENT,
+  	  SUBCLASSING: SUBCLASSING
+  	};
+  	return promiseConstructorDetection;
+  }
+
+  var newPromiseCapability = {};
+
+  var hasRequiredNewPromiseCapability;
+
+  function requireNewPromiseCapability () {
+  	if (hasRequiredNewPromiseCapability) return newPromiseCapability;
+  	hasRequiredNewPromiseCapability = 1;
+  	var aCallable = requireACallable();
+
+  	var $TypeError = TypeError;
+
+  	var PromiseCapability = function (C) {
+  	  var resolve, reject;
+  	  this.promise = new C(function ($$resolve, $$reject) {
+  	    if (resolve !== undefined || reject !== undefined) throw new $TypeError('Bad Promise constructor');
+  	    resolve = $$resolve;
+  	    reject = $$reject;
+  	  });
+  	  this.resolve = aCallable(resolve);
+  	  this.reject = aCallable(reject);
+  	};
+
+  	// `NewPromiseCapability` abstract operation
+  	// https://tc39.es/ecma262/#sec-newpromisecapability
+  	newPromiseCapability.f = function (C) {
+  	  return new PromiseCapability(C);
+  	};
+  	return newPromiseCapability;
+  }
+
+  var hasRequiredEs_promise_constructor;
+
+  function requireEs_promise_constructor () {
+  	if (hasRequiredEs_promise_constructor) return es_promise_constructor;
+  	hasRequiredEs_promise_constructor = 1;
+  	var $ = require_export();
+  	var IS_PURE = requireIsPure();
+  	var IS_NODE = requireEnvironmentIsNode();
+  	var globalThis = requireGlobalThis();
+  	var path = requirePath();
+  	var call = requireFunctionCall();
+  	var defineBuiltIn = requireDefineBuiltIn();
+  	var setPrototypeOf = requireObjectSetPrototypeOf();
+  	var setToStringTag = requireSetToStringTag();
+  	var setSpecies = requireSetSpecies();
+  	var aCallable = requireACallable();
+  	var isCallable = requireIsCallable();
+  	var isObject = requireIsObject();
+  	var anInstance = requireAnInstance();
+  	var speciesConstructor = requireSpeciesConstructor();
+  	var task = requireTask().set;
+  	var microtask = requireMicrotask();
+  	var hostReportErrors = requireHostReportErrors();
+  	var perform = requirePerform();
+  	var Queue = requireQueue();
+  	var InternalStateModule = requireInternalState();
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var PromiseConstructorDetection = requirePromiseConstructorDetection();
+  	var newPromiseCapabilityModule = requireNewPromiseCapability();
+
+  	var PROMISE = 'Promise';
+  	var FORCED_PROMISE_CONSTRUCTOR = PromiseConstructorDetection.CONSTRUCTOR;
+  	var NATIVE_PROMISE_REJECTION_EVENT = PromiseConstructorDetection.REJECTION_EVENT;
+  	var NATIVE_PROMISE_SUBCLASSING = PromiseConstructorDetection.SUBCLASSING;
+  	var getInternalPromiseState = InternalStateModule.getterFor(PROMISE);
+  	var setInternalState = InternalStateModule.set;
+  	var NativePromisePrototype = NativePromiseConstructor && NativePromiseConstructor.prototype;
+  	var PromiseConstructor = NativePromiseConstructor;
+  	var PromisePrototype = NativePromisePrototype;
+  	var TypeError = globalThis.TypeError;
+  	var document = globalThis.document;
+  	var process = globalThis.process;
+  	var newPromiseCapability = newPromiseCapabilityModule.f;
+  	var newGenericPromiseCapability = newPromiseCapability;
+
+  	var DISPATCH_EVENT = !!(document && document.createEvent && globalThis.dispatchEvent);
+  	var UNHANDLED_REJECTION = 'unhandledrejection';
+  	var REJECTION_HANDLED = 'rejectionhandled';
+  	var PENDING = 0;
+  	var FULFILLED = 1;
+  	var REJECTED = 2;
+  	var HANDLED = 1;
+  	var UNHANDLED = 2;
+
+  	var Internal, OwnPromiseCapability, PromiseWrapper, nativeThen;
+
+  	// helpers
+  	var isThenable = function (it) {
+  	  var then;
+  	  return isObject(it) && isCallable(then = it.then) ? then : false;
+  	};
+
+  	var callReaction = function (reaction, state) {
+  	  var value = state.value;
+  	  var ok = state.state === FULFILLED;
+  	  var handler = ok ? reaction.ok : reaction.fail;
+  	  var resolve = reaction.resolve;
+  	  var reject = reaction.reject;
+  	  var domain = reaction.domain;
+  	  var result, then, exited;
+  	  try {
+  	    if (handler) {
+  	      if (!ok) {
+  	        if (state.rejection === UNHANDLED) onHandleUnhandled(state);
+  	        state.rejection = HANDLED;
+  	      }
+  	      if (handler === true) result = value;
+  	      else {
+  	        if (domain) domain.enter();
+  	        result = handler(value); // can throw
+  	        if (domain) {
+  	          domain.exit();
+  	          exited = true;
+  	        }
+  	      }
+  	      if (result === reaction.promise) {
+  	        reject(new TypeError('Promise-chain cycle'));
+  	      } else if (then = isThenable(result)) {
+  	        call(then, result, resolve, reject);
+  	      } else resolve(result);
+  	    } else reject(value);
+  	  } catch (error) {
+  	    if (domain && !exited) domain.exit();
+  	    reject(error);
+  	  }
+  	};
+
+  	var notify = function (state, isReject) {
+  	  if (state.notified) return;
+  	  state.notified = true;
+  	  microtask(function () {
+  	    var reactions = state.reactions;
+  	    var reaction;
+  	    while (reaction = reactions.get()) {
+  	      callReaction(reaction, state);
+  	    }
+  	    state.notified = false;
+  	    if (isReject && !state.rejection) onUnhandled(state);
+  	  });
+  	};
+
+  	var dispatchEvent = function (name, promise, reason) {
+  	  var event, handler;
+  	  if (DISPATCH_EVENT) {
+  	    event = document.createEvent('Event');
+  	    event.promise = promise;
+  	    event.reason = reason;
+  	    event.initEvent(name, false, true);
+  	    globalThis.dispatchEvent(event);
+  	  } else event = { promise: promise, reason: reason };
+  	  if (!NATIVE_PROMISE_REJECTION_EVENT && (handler = globalThis['on' + name])) handler(event);
+  	  else if (name === UNHANDLED_REJECTION) hostReportErrors('Unhandled promise rejection', reason);
+  	};
+
+  	var onUnhandled = function (state) {
+  	  call(task, globalThis, function () {
+  	    var promise = state.facade;
+  	    var value = state.value;
+  	    var IS_UNHANDLED = isUnhandled(state);
+  	    var result;
+  	    if (IS_UNHANDLED) {
+  	      result = perform(function () {
+  	        if (IS_NODE) {
+  	          process.emit('unhandledRejection', value, promise);
+  	        } else dispatchEvent(UNHANDLED_REJECTION, promise, value);
+  	      });
+  	      // Browsers should not trigger `rejectionHandled` event if it was handled here, NodeJS - should
+  	      state.rejection = IS_NODE || isUnhandled(state) ? UNHANDLED : HANDLED;
+  	      if (result.error) throw result.value;
+  	    }
+  	  });
+  	};
+
+  	var isUnhandled = function (state) {
+  	  return state.rejection !== HANDLED && !state.parent;
+  	};
+
+  	var onHandleUnhandled = function (state) {
+  	  call(task, globalThis, function () {
+  	    var promise = state.facade;
+  	    if (IS_NODE) {
+  	      process.emit('rejectionHandled', promise);
+  	    } else dispatchEvent(REJECTION_HANDLED, promise, state.value);
+  	  });
+  	};
+
+  	var bind = function (fn, state, unwrap) {
+  	  return function (value) {
+  	    fn(state, value, unwrap);
+  	  };
+  	};
+
+  	var internalReject = function (state, value, unwrap) {
+  	  if (state.done) return;
+  	  state.done = true;
+  	  if (unwrap) state = unwrap;
+  	  state.value = value;
+  	  state.state = REJECTED;
+  	  notify(state, true);
+  	};
+
+  	var internalResolve = function (state, value, unwrap) {
+  	  if (state.done) return;
+  	  state.done = true;
+  	  if (unwrap) state = unwrap;
+  	  try {
+  	    if (state.facade === value) throw new TypeError("Promise can't be resolved itself");
+  	    var then = isThenable(value);
+  	    if (then) {
+  	      microtask(function () {
+  	        var wrapper = { done: false };
+  	        try {
+  	          call(then, value,
+  	            bind(internalResolve, wrapper, state),
+  	            bind(internalReject, wrapper, state)
+  	          );
+  	        } catch (error) {
+  	          internalReject(wrapper, error, state);
+  	        }
+  	      });
+  	    } else {
+  	      state.value = value;
+  	      state.state = FULFILLED;
+  	      notify(state, false);
+  	    }
+  	  } catch (error) {
+  	    internalReject({ done: false }, error, state);
+  	  }
+  	};
+
+  	// constructor polyfill
+  	if (FORCED_PROMISE_CONSTRUCTOR) {
+  	  // 25.4.3.1 Promise(executor)
+  	  PromiseConstructor = function Promise(executor) {
+  	    anInstance(this, PromisePrototype);
+  	    aCallable(executor);
+  	    call(Internal, this);
+  	    var state = getInternalPromiseState(this);
+  	    try {
+  	      executor(bind(internalResolve, state), bind(internalReject, state));
+  	    } catch (error) {
+  	      internalReject(state, error);
+  	    }
+  	  };
+
+  	  PromisePrototype = PromiseConstructor.prototype;
+
+  	  // eslint-disable-next-line no-unused-vars -- required for `.length`
+  	  Internal = function Promise(executor) {
+  	    setInternalState(this, {
+  	      type: PROMISE,
+  	      done: false,
+  	      notified: false,
+  	      parent: false,
+  	      reactions: new Queue(),
+  	      rejection: false,
+  	      state: PENDING,
+  	      value: null
+  	    });
+  	  };
+
+  	  // `Promise.prototype.then` method
+  	  // https://tc39.es/ecma262/#sec-promise.prototype.then
+  	  Internal.prototype = defineBuiltIn(PromisePrototype, 'then', function then(onFulfilled, onRejected) {
+  	    var state = getInternalPromiseState(this);
+  	    var reaction = newPromiseCapability(speciesConstructor(this, PromiseConstructor));
+  	    state.parent = true;
+  	    reaction.ok = isCallable(onFulfilled) ? onFulfilled : true;
+  	    reaction.fail = isCallable(onRejected) && onRejected;
+  	    reaction.domain = IS_NODE ? process.domain : undefined;
+  	    if (state.state === PENDING) state.reactions.add(reaction);
+  	    else microtask(function () {
+  	      callReaction(reaction, state);
+  	    });
+  	    return reaction.promise;
+  	  });
+
+  	  OwnPromiseCapability = function () {
+  	    var promise = new Internal();
+  	    var state = getInternalPromiseState(promise);
+  	    this.promise = promise;
+  	    this.resolve = bind(internalResolve, state);
+  	    this.reject = bind(internalReject, state);
+  	  };
+
+  	  newPromiseCapabilityModule.f = newPromiseCapability = function (C) {
+  	    return C === PromiseConstructor || C === PromiseWrapper
+  	      ? new OwnPromiseCapability(C)
+  	      : newGenericPromiseCapability(C);
+  	  };
+
+  	  if (!IS_PURE && isCallable(NativePromiseConstructor) && NativePromisePrototype !== Object.prototype) {
+  	    nativeThen = NativePromisePrototype.then;
+
+  	    if (!NATIVE_PROMISE_SUBCLASSING) {
+  	      // make `Promise#then` return a polyfilled `Promise` for native promise-based APIs
+  	      defineBuiltIn(NativePromisePrototype, 'then', function then(onFulfilled, onRejected) {
+  	        var that = this;
+  	        return new PromiseConstructor(function (resolve, reject) {
+  	          call(nativeThen, that, resolve, reject);
+  	        }).then(onFulfilled, onRejected);
+  	      // https://github.com/zloirock/core-js/issues/640
+  	      }, { unsafe: true });
+  	    }
+
+  	    // make `.constructor === Promise` work for native promise-based APIs
+  	    try {
+  	      delete NativePromisePrototype.constructor;
+  	    } catch (error) { /* empty */ }
+
+  	    // make `instanceof Promise` work for native promise-based APIs
+  	    if (setPrototypeOf) {
+  	      setPrototypeOf(NativePromisePrototype, PromisePrototype);
+  	    }
+  	  }
+  	}
+
+  	// `Promise` constructor
+  	// https://tc39.es/ecma262/#sec-promise-executor
+  	$({ global: true, constructor: true, wrap: true, forced: FORCED_PROMISE_CONSTRUCTOR }, {
+  	  Promise: PromiseConstructor
+  	});
+
+  	PromiseWrapper = path.Promise;
+
+  	setToStringTag(PromiseConstructor, PROMISE, false, true);
+  	setSpecies(PROMISE);
+  	return es_promise_constructor;
+  }
+
+  var es_promise_all = {};
+
+  var iterators;
+  var hasRequiredIterators;
+
+  function requireIterators () {
+  	if (hasRequiredIterators) return iterators;
+  	hasRequiredIterators = 1;
+  	iterators = {};
+  	return iterators;
+  }
+
+  var isArrayIteratorMethod;
+  var hasRequiredIsArrayIteratorMethod;
+
+  function requireIsArrayIteratorMethod () {
+  	if (hasRequiredIsArrayIteratorMethod) return isArrayIteratorMethod;
+  	hasRequiredIsArrayIteratorMethod = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var Iterators = requireIterators();
+
+  	var ITERATOR = wellKnownSymbol('iterator');
+  	var ArrayPrototype = Array.prototype;
+
+  	// check on default Array iterator
+  	isArrayIteratorMethod = function (it) {
+  	  return it !== undefined && (Iterators.Array === it || ArrayPrototype[ITERATOR] === it);
+  	};
+  	return isArrayIteratorMethod;
+  }
+
+  var getIteratorMethod;
+  var hasRequiredGetIteratorMethod;
+
+  function requireGetIteratorMethod () {
+  	if (hasRequiredGetIteratorMethod) return getIteratorMethod;
+  	hasRequiredGetIteratorMethod = 1;
+  	var classof = requireClassof();
+  	var getMethod = requireGetMethod();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var Iterators = requireIterators();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var ITERATOR = wellKnownSymbol('iterator');
+
+  	getIteratorMethod = function (it) {
+  	  if (!isNullOrUndefined(it)) return getMethod(it, ITERATOR)
+  	    || getMethod(it, '@@iterator')
+  	    || Iterators[classof(it)];
+  	};
+  	return getIteratorMethod;
+  }
+
+  var getIterator;
+  var hasRequiredGetIterator;
+
+  function requireGetIterator () {
+  	if (hasRequiredGetIterator) return getIterator;
+  	hasRequiredGetIterator = 1;
+  	var call = requireFunctionCall();
+  	var aCallable = requireACallable();
+  	var anObject = requireAnObject();
+  	var tryToString = requireTryToString();
+  	var getIteratorMethod = requireGetIteratorMethod();
+
+  	var $TypeError = TypeError;
+
+  	getIterator = function (argument, usingIterator) {
+  	  var iteratorMethod = arguments.length < 2 ? getIteratorMethod(argument) : usingIterator;
+  	  if (aCallable(iteratorMethod)) return anObject(call(iteratorMethod, argument));
+  	  throw new $TypeError(tryToString(argument) + ' is not iterable');
+  	};
+  	return getIterator;
+  }
+
+  var iteratorClose;
+  var hasRequiredIteratorClose;
+
+  function requireIteratorClose () {
+  	if (hasRequiredIteratorClose) return iteratorClose;
+  	hasRequiredIteratorClose = 1;
+  	var call = requireFunctionCall();
+  	var anObject = requireAnObject();
+  	var getMethod = requireGetMethod();
+
+  	iteratorClose = function (iterator, kind, value) {
+  	  var innerResult, innerError;
+  	  anObject(iterator);
+  	  try {
+  	    innerResult = getMethod(iterator, 'return');
+  	    if (!innerResult) {
+  	      if (kind === 'throw') throw value;
+  	      return value;
+  	    }
+  	    innerResult = call(innerResult, iterator);
+  	  } catch (error) {
+  	    innerError = true;
+  	    innerResult = error;
+  	  }
+  	  if (kind === 'throw') throw value;
+  	  if (innerError) throw innerResult;
+  	  anObject(innerResult);
+  	  return value;
+  	};
+  	return iteratorClose;
+  }
+
+  var iterate;
+  var hasRequiredIterate;
+
+  function requireIterate () {
+  	if (hasRequiredIterate) return iterate;
+  	hasRequiredIterate = 1;
+  	var bind = requireFunctionBindContext();
+  	var call = requireFunctionCall();
+  	var anObject = requireAnObject();
+  	var tryToString = requireTryToString();
+  	var isArrayIteratorMethod = requireIsArrayIteratorMethod();
+  	var lengthOfArrayLike = requireLengthOfArrayLike();
+  	var isPrototypeOf = requireObjectIsPrototypeOf();
+  	var getIterator = requireGetIterator();
+  	var getIteratorMethod = requireGetIteratorMethod();
+  	var iteratorClose = requireIteratorClose();
+
+  	var $TypeError = TypeError;
+
+  	var Result = function (stopped, result) {
+  	  this.stopped = stopped;
+  	  this.result = result;
+  	};
+
+  	var ResultPrototype = Result.prototype;
+
+  	iterate = function (iterable, unboundFunction, options) {
+  	  var that = options && options.that;
+  	  var AS_ENTRIES = !!(options && options.AS_ENTRIES);
+  	  var IS_RECORD = !!(options && options.IS_RECORD);
+  	  var IS_ITERATOR = !!(options && options.IS_ITERATOR);
+  	  var INTERRUPTED = !!(options && options.INTERRUPTED);
+  	  var fn = bind(unboundFunction, that);
+  	  var iterator, iterFn, index, length, result, next, step;
+
+  	  var stop = function (condition) {
+  	    var $iterator = iterator;
+  	    iterator = undefined;
+  	    if ($iterator) iteratorClose($iterator, 'normal');
+  	    return new Result(true, condition);
+  	  };
+
+  	  var callFn = function (value) {
+  	    if (AS_ENTRIES) {
+  	      anObject(value);
+  	      return INTERRUPTED ? fn(value[0], value[1], stop) : fn(value[0], value[1]);
+  	    } return INTERRUPTED ? fn(value, stop) : fn(value);
+  	  };
+
+  	  if (IS_RECORD) {
+  	    iterator = iterable.iterator;
+  	  } else if (IS_ITERATOR) {
+  	    iterator = iterable;
+  	  } else {
+  	    iterFn = getIteratorMethod(iterable);
+  	    if (!iterFn) throw new $TypeError(tryToString(iterable) + ' is not iterable');
+  	    // optimisation for array iterators
+  	    if (isArrayIteratorMethod(iterFn)) {
+  	      for (index = 0, length = lengthOfArrayLike(iterable); length > index; index++) {
+  	        result = callFn(iterable[index]);
+  	        if (result && isPrototypeOf(ResultPrototype, result)) return result;
+  	      } return new Result(false);
+  	    }
+  	    iterator = getIterator(iterable, iterFn);
+  	  }
+
+  	  next = IS_RECORD ? iterable.next : iterator.next;
+  	  while (!(step = call(next, iterator)).done) {
+  	    // `IteratorValue` errors should propagate without closing the iterator
+  	    var value = step.value;
+  	    try {
+  	      result = callFn(value);
+  	    } catch (error) {
+  	      if (iterator) iteratorClose(iterator, 'throw', error);
+  	      else throw error;
+  	    }
+  	    if (typeof result == 'object' && result && isPrototypeOf(ResultPrototype, result)) return result;
+  	  } return new Result(false);
+  	};
+  	return iterate;
+  }
+
+  var checkCorrectnessOfIteration;
+  var hasRequiredCheckCorrectnessOfIteration;
+
+  function requireCheckCorrectnessOfIteration () {
+  	if (hasRequiredCheckCorrectnessOfIteration) return checkCorrectnessOfIteration;
+  	hasRequiredCheckCorrectnessOfIteration = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+
+  	var ITERATOR = wellKnownSymbol('iterator');
+  	var SAFE_CLOSING = false;
+
+  	try {
+  	  var called = 0;
+  	  var iteratorWithReturn = {
+  	    next: function () {
+  	      return { done: !!called++ };
+  	    },
+  	    'return': function () {
+  	      SAFE_CLOSING = true;
+  	    }
+  	  };
+  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+  	  iteratorWithReturn[ITERATOR] = function () {
+  	    return this;
+  	  };
+  	  // eslint-disable-next-line es/no-array-from, no-throw-literal -- required for testing
+  	  Array.from(iteratorWithReturn, function () { throw 2; });
+  	} catch (error) { /* empty */ }
+
+  	checkCorrectnessOfIteration = function (exec, SKIP_CLOSING) {
+  	  try {
+  	    if (!SKIP_CLOSING && !SAFE_CLOSING) return false;
+  	  } catch (error) { return false; } // workaround of old WebKit + `eval` bug
+  	  var ITERATION_SUPPORT = false;
+  	  try {
+  	    var object = {};
+  	    // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+  	    object[ITERATOR] = function () {
+  	      return {
+  	        next: function () {
+  	          return { done: ITERATION_SUPPORT = true };
+  	        }
+  	      };
+  	    };
+  	    exec(object);
+  	  } catch (error) { /* empty */ }
+  	  return ITERATION_SUPPORT;
+  	};
+  	return checkCorrectnessOfIteration;
+  }
+
+  var promiseStaticsIncorrectIteration;
+  var hasRequiredPromiseStaticsIncorrectIteration;
+
+  function requirePromiseStaticsIncorrectIteration () {
+  	if (hasRequiredPromiseStaticsIncorrectIteration) return promiseStaticsIncorrectIteration;
+  	hasRequiredPromiseStaticsIncorrectIteration = 1;
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+  	var FORCED_PROMISE_CONSTRUCTOR = requirePromiseConstructorDetection().CONSTRUCTOR;
+
+  	promiseStaticsIncorrectIteration = FORCED_PROMISE_CONSTRUCTOR || !checkCorrectnessOfIteration(function (iterable) {
+  	  NativePromiseConstructor.all(iterable).then(undefined, function () { /* empty */ });
+  	});
+  	return promiseStaticsIncorrectIteration;
+  }
+
+  var hasRequiredEs_promise_all;
+
+  function requireEs_promise_all () {
+  	if (hasRequiredEs_promise_all) return es_promise_all;
+  	hasRequiredEs_promise_all = 1;
+  	var $ = require_export();
+  	var call = requireFunctionCall();
+  	var aCallable = requireACallable();
+  	var newPromiseCapabilityModule = requireNewPromiseCapability();
+  	var perform = requirePerform();
+  	var iterate = requireIterate();
+  	var PROMISE_STATICS_INCORRECT_ITERATION = requirePromiseStaticsIncorrectIteration();
+
+  	// `Promise.all` method
+  	// https://tc39.es/ecma262/#sec-promise.all
+  	$({ target: 'Promise', stat: true, forced: PROMISE_STATICS_INCORRECT_ITERATION }, {
+  	  all: function all(iterable) {
+  	    var C = this;
+  	    var capability = newPromiseCapabilityModule.f(C);
+  	    var resolve = capability.resolve;
+  	    var reject = capability.reject;
+  	    var result = perform(function () {
+  	      var $promiseResolve = aCallable(C.resolve);
+  	      var values = [];
+  	      var counter = 0;
+  	      var remaining = 1;
+  	      iterate(iterable, function (promise) {
+  	        var index = counter++;
+  	        var alreadyCalled = false;
+  	        remaining++;
+  	        call($promiseResolve, C, promise).then(function (value) {
+  	          if (alreadyCalled) return;
+  	          alreadyCalled = true;
+  	          values[index] = value;
+  	          --remaining || resolve(values);
+  	        }, reject);
+  	      });
+  	      --remaining || resolve(values);
+  	    });
+  	    if (result.error) reject(result.value);
+  	    return capability.promise;
+  	  }
+  	});
+  	return es_promise_all;
+  }
+
+  var es_promise_catch = {};
+
+  var hasRequiredEs_promise_catch;
+
+  function requireEs_promise_catch () {
+  	if (hasRequiredEs_promise_catch) return es_promise_catch;
+  	hasRequiredEs_promise_catch = 1;
+  	var $ = require_export();
+  	var IS_PURE = requireIsPure();
+  	var FORCED_PROMISE_CONSTRUCTOR = requirePromiseConstructorDetection().CONSTRUCTOR;
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var getBuiltIn = requireGetBuiltIn();
+  	var isCallable = requireIsCallable();
+  	var defineBuiltIn = requireDefineBuiltIn();
+
+  	var NativePromisePrototype = NativePromiseConstructor && NativePromiseConstructor.prototype;
+
+  	// `Promise.prototype.catch` method
+  	// https://tc39.es/ecma262/#sec-promise.prototype.catch
+  	$({ target: 'Promise', proto: true, forced: FORCED_PROMISE_CONSTRUCTOR, real: true }, {
+  	  'catch': function (onRejected) {
+  	    return this.then(undefined, onRejected);
+  	  }
+  	});
+
+  	// makes sure that native promise-based APIs `Promise#catch` properly works with patched `Promise#then`
+  	if (!IS_PURE && isCallable(NativePromiseConstructor)) {
+  	  var method = getBuiltIn('Promise').prototype['catch'];
+  	  if (NativePromisePrototype['catch'] !== method) {
+  	    defineBuiltIn(NativePromisePrototype, 'catch', method, { unsafe: true });
+  	  }
+  	}
+  	return es_promise_catch;
+  }
+
+  var es_promise_race = {};
+
+  var hasRequiredEs_promise_race;
+
+  function requireEs_promise_race () {
+  	if (hasRequiredEs_promise_race) return es_promise_race;
+  	hasRequiredEs_promise_race = 1;
+  	var $ = require_export();
+  	var call = requireFunctionCall();
+  	var aCallable = requireACallable();
+  	var newPromiseCapabilityModule = requireNewPromiseCapability();
+  	var perform = requirePerform();
+  	var iterate = requireIterate();
+  	var PROMISE_STATICS_INCORRECT_ITERATION = requirePromiseStaticsIncorrectIteration();
+
+  	// `Promise.race` method
+  	// https://tc39.es/ecma262/#sec-promise.race
+  	$({ target: 'Promise', stat: true, forced: PROMISE_STATICS_INCORRECT_ITERATION }, {
+  	  race: function race(iterable) {
+  	    var C = this;
+  	    var capability = newPromiseCapabilityModule.f(C);
+  	    var reject = capability.reject;
+  	    var result = perform(function () {
+  	      var $promiseResolve = aCallable(C.resolve);
+  	      iterate(iterable, function (promise) {
+  	        call($promiseResolve, C, promise).then(capability.resolve, reject);
+  	      });
+  	    });
+  	    if (result.error) reject(result.value);
+  	    return capability.promise;
+  	  }
+  	});
+  	return es_promise_race;
+  }
+
+  var es_promise_reject = {};
+
+  var hasRequiredEs_promise_reject;
+
+  function requireEs_promise_reject () {
+  	if (hasRequiredEs_promise_reject) return es_promise_reject;
+  	hasRequiredEs_promise_reject = 1;
+  	var $ = require_export();
+  	var newPromiseCapabilityModule = requireNewPromiseCapability();
+  	var FORCED_PROMISE_CONSTRUCTOR = requirePromiseConstructorDetection().CONSTRUCTOR;
+
+  	// `Promise.reject` method
+  	// https://tc39.es/ecma262/#sec-promise.reject
+  	$({ target: 'Promise', stat: true, forced: FORCED_PROMISE_CONSTRUCTOR }, {
+  	  reject: function reject(r) {
+  	    var capability = newPromiseCapabilityModule.f(this);
+  	    var capabilityReject = capability.reject;
+  	    capabilityReject(r);
+  	    return capability.promise;
+  	  }
+  	});
+  	return es_promise_reject;
+  }
+
+  var es_promise_resolve = {};
+
+  var promiseResolve;
+  var hasRequiredPromiseResolve;
+
+  function requirePromiseResolve () {
+  	if (hasRequiredPromiseResolve) return promiseResolve;
+  	hasRequiredPromiseResolve = 1;
+  	var anObject = requireAnObject();
+  	var isObject = requireIsObject();
+  	var newPromiseCapability = requireNewPromiseCapability();
+
+  	promiseResolve = function (C, x) {
+  	  anObject(C);
+  	  if (isObject(x) && x.constructor === C) return x;
+  	  var promiseCapability = newPromiseCapability.f(C);
+  	  var resolve = promiseCapability.resolve;
+  	  resolve(x);
+  	  return promiseCapability.promise;
+  	};
+  	return promiseResolve;
+  }
+
+  var hasRequiredEs_promise_resolve;
+
+  function requireEs_promise_resolve () {
+  	if (hasRequiredEs_promise_resolve) return es_promise_resolve;
+  	hasRequiredEs_promise_resolve = 1;
+  	var $ = require_export();
+  	var getBuiltIn = requireGetBuiltIn();
+  	var IS_PURE = requireIsPure();
+  	var NativePromiseConstructor = requirePromiseNativeConstructor();
+  	var FORCED_PROMISE_CONSTRUCTOR = requirePromiseConstructorDetection().CONSTRUCTOR;
+  	var promiseResolve = requirePromiseResolve();
+
+  	var PromiseConstructorWrapper = getBuiltIn('Promise');
+  	var CHECK_WRAPPER = IS_PURE && !FORCED_PROMISE_CONSTRUCTOR;
+
+  	// `Promise.resolve` method
+  	// https://tc39.es/ecma262/#sec-promise.resolve
+  	$({ target: 'Promise', stat: true, forced: IS_PURE || FORCED_PROMISE_CONSTRUCTOR }, {
+  	  resolve: function resolve(x) {
+  	    return promiseResolve(CHECK_WRAPPER && this === PromiseConstructorWrapper ? NativePromiseConstructor : this, x);
+  	  }
+  	});
+  	return es_promise_resolve;
+  }
+
+  var hasRequiredEs_promise;
+
+  function requireEs_promise () {
+  	if (hasRequiredEs_promise) return es_promise;
+  	hasRequiredEs_promise = 1;
+  	// TODO: Remove this module from `core-js@4` since it's split to modules listed below
+  	requireEs_promise_constructor();
+  	requireEs_promise_all();
+  	requireEs_promise_catch();
+  	requireEs_promise_race();
+  	requireEs_promise_reject();
+  	requireEs_promise_resolve();
+  	return es_promise;
+  }
+
+  requireEs_promise();
+
   var es_string_trim = {};
 
   var toString;
@@ -2609,6 +4101,29 @@ var StarmusTranscript = (function (exports) {
   var DEFAULT_MAX_PROVIDER_MS = 3600000;
 
   /**
+   * How many times the slot restarts an engine that ended on its own.
+   *
+   * Browser speech recognition ends spontaneously, so some restarting is
+   * ordinary. An unbounded loop against an engine that will never work is not:
+   * it holds the microphone pipeline open and produces nothing. After this many
+   * the draft settles and says so.
+   *
+   * @type {number}
+   */
+  var MAX_PROVIDER_RESTARTS = 5;
+
+  /**
+   * How long `stop()` waits for the engine's closing result before settling.
+   *
+   * The engine delivers a final result for audio it already heard after being
+   * asked to stop. This bounds the wait so an engine that never reports ending
+   * does not hold the draft open.
+   *
+   * @type {number}
+   */
+  var SETTLE_GRACE_MS = 2000;
+
+  /**
    * Registered provider factories, in preference order.
    *
    * @type {Array<{name: string, create: Function}>}
@@ -2625,8 +4140,12 @@ var StarmusTranscript = (function (exports) {
    *     model: string|null,      // engine's model/version identifier, or null
    *                              // when the engine does not expose one
    *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
-   *     start(context): void,    // context.emit(segment), context.fail(error)
-   *     stop(): void,
+   *     start(context): void,    // context.emit(segment)
+   *                              // context.fail(error)
+   *                              // context.ended(reason) — the engine stopped
+   *                              //   producing, whether asked to or not
+   *     stop(): void,            // ask the engine to finish; it may still
+   *                              //   deliver one last final result afterwards
    *   }
    *
    * The factory returns `null` when it cannot run in the current environment.
@@ -2687,12 +4206,16 @@ var StarmusTranscript = (function (exports) {
       return null;
     }
     var recognition = null;
+    var stopping = false;
     return {
       engine: "browser-speech-recognition",
       // The Web Speech API exposes no model identifier. Reporting null is the
       // honest answer; a placeholder string would read as provenance.
       model: null,
+      // The engine emits whole utterances, not words.
+      tokenGranularity: "utterance",
       start: function start(context) {
+        stopping = false;
         recognition = new Recognition();
         recognition.continuous = true;
         recognition.interimResults = true;
@@ -2715,11 +4238,21 @@ var StarmusTranscript = (function (exports) {
         });
         recognition.addEventListener("error", function (event) {
           // `no-speech` and `aborted` are ordinary during a recording and
-          // are not failures of the slot.
+          // are not failures of the slot. The `end` that follows them is
+          // handled below, so the slot is never left believing a dead
+          // engine is still listening.
           if (event.error === "no-speech" || event.error === "aborted") {
             return;
           }
           context.fail(new Error("SPEECH_RECOGNITION_ERROR: ".concat(event.error)));
+        });
+
+        // The engine ends on its own — after a silence, after an error it
+        // recovered from, and on some platforms simply after a while. It
+        // also ends because we asked. Only the slot can tell those apart,
+        // so both are reported and it decides.
+        recognition.addEventListener("end", function () {
+          context.ended(stopping ? "stopped" : "engine-ended");
         });
         recognition.start();
       },
@@ -2727,7 +4260,11 @@ var StarmusTranscript = (function (exports) {
         if (!recognition) {
           return;
         }
+        stopping = true;
         try {
+          // `stop()` rather than `abort()`: it asks the engine to finish
+          // and deliver a final result for what it has already heard.
+          // `abort()` would discard the last utterance of the recording.
           recognition.stop();
         } catch (_unused) {
           // Already stopped by the engine; nothing to undo.
@@ -2813,8 +4350,13 @@ var StarmusTranscript = (function (exports) {
     var tokenGranularity = provider.tokenGranularity === "word" ? "word" : "utterance";
     var segments = [];
     var stopTimer = null;
+    var settleTimer = null;
     var running = false;
+    var stopping = false;
+    var restarts = 0;
     var lastStartMs = 0;
+    /** @type {Function|null} Resolves the promise `stop()` handed out. */
+    var resolveSettled = null;
 
     /**
      * @returns {Object} The draft in its current state.
@@ -2837,7 +4379,11 @@ var StarmusTranscript = (function (exports) {
     var context = {
       emit: function emit(segment) {
         var _segment$confidence;
-        if (!running) {
+        // Accepted while stopping as well as while running: the engine
+        // delivers a final result for the audio it already heard *after*
+        // being asked to stop, and refusing it here dropped the last
+        // utterance of every recording.
+        if (!running && !stopping) {
           return;
         }
         var endMs = Math.max(0, Math.round(getElapsedMs()));
@@ -2875,29 +4421,100 @@ var StarmusTranscript = (function (exports) {
         // continues, and the Node still produces boundaries and — through
         // ESU — a transcript of record.
         console.warn("[Transcript] Provider failed:", error.message);
-        stop();
+        void stop();
+      },
+      /**
+       * The engine stopped producing.
+       *
+       * @param {string} reason 'stopped' when it was asked to, anything else
+       *        when it ended on its own.
+       */
+      ended: function ended(reason) {
+        if (stopping) {
+          // The final result, if there was one, has arrived by now.
+          settle();
+          return;
+        }
+        if (!running) {
+          return;
+        }
+
+        // Browser speech recognition ends by itself — after a silence,
+        // after a recovered error, or just after a while. Left unhandled
+        // the slot sat marked running with nothing arriving until the
+        // one-hour sensor bound fired, which looks exactly like a
+        // recording with no speech in it.
+        if (restarts < MAX_PROVIDER_RESTARTS) {
+          restarts += 1;
+          try {
+            provider.start(context);
+            return;
+          } catch (error) {
+            console.warn("[Transcript] Provider would not restart:", error.message);
+          }
+        }
+        console.warn("[Transcript] Provider ended (".concat(reason, ") and will not be restarted; settling the draft."));
+        stopping = true;
+        settle();
       }
     };
 
     /**
+     * Finish: drop any trailing interim, and hand the draft to whoever is
+     * waiting on `stop()`.
+     *
+     * @returns {void}
+     */
+    function settle() {
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+        settleTimer = null;
+      }
+      running = false;
+      stopping = false;
+      // Interim text is not a draft; drop a trailing interim on settle.
+      while (segments.length > 0 && !segments[segments.length - 1].isFinal) {
+        segments.pop();
+      }
+      if (resolveSettled) {
+        var resolve = resolveSettled;
+        resolveSettled = null;
+        resolve(draft());
+      }
+    }
+
+    /**
      * Stop the provider and settle the draft.
      *
-     * @returns {Object} The final draft.
+     * Asynchronous because the engine's last final result arrives after it is
+     * asked to stop. Settling synchronously discarded the closing utterance of
+     * every recording. The wait is bounded: an engine that never reports it has
+     * ended does not hold the draft open.
+     *
+     * @returns {Promise<Object>} The final draft.
      */
     function stop() {
       if (stopTimer) {
         clearTimeout(stopTimer);
         stopTimer = null;
       }
-      if (running) {
-        running = false;
+      if (!running && !stopping) {
+        return Promise.resolve(draft());
+      }
+      var settled = new Promise(function (resolve) {
+        resolveSettled = resolve;
+      });
+      stopping = true;
+      running = false;
+      try {
         provider.stop();
+      } catch (error) {
+        console.warn("[Transcript] Provider would not stop cleanly:", error.message);
+        settle();
+        return settled;
       }
-      // Interim text is not a draft; drop a trailing interim on settle.
-      while (segments.length > 0 && !segments[segments.length - 1].isFinal) {
-        segments.pop();
-      }
-      return draft();
+      settleTimer = setTimeout(settle, SETTLE_GRACE_MS);
+      return settled;
     }
     return {
       /**
@@ -2910,8 +4527,12 @@ var StarmusTranscript = (function (exports) {
           return;
         }
         running = true;
+        stopping = false;
+        restarts = 0;
         lastStartMs = Math.max(0, Math.round(getElapsedMs()));
-        stopTimer = setTimeout(stop, maxDurationMs);
+        stopTimer = setTimeout(function () {
+          return void stop();
+        }, maxDurationMs);
         try {
           provider.start(context);
         } catch (error) {
@@ -2919,7 +4540,7 @@ var StarmusTranscript = (function (exports) {
           // the slot marked running with its auto-disable timer armed:
           // every later start() would no-op and the sensor bound would
           // fire against a provider that never started.
-          stop();
+          void stop();
           console.warn("[Transcript] Provider failed to start:", error.message);
         }
       },
@@ -2951,6 +4572,8 @@ var StarmusTranscript = (function (exports) {
   }
 
   exports.DEFAULT_MAX_PROVIDER_MS = DEFAULT_MAX_PROVIDER_MS;
+  exports.MAX_PROVIDER_RESTARTS = MAX_PROVIDER_RESTARTS;
+  exports.SETTLE_GRACE_MS = SETTLE_GRACE_MS;
   exports.TRANSCRIPT_AUTHORITY = TRANSCRIPT_AUTHORITY;
   exports.clearTranscriptProviders = clearTranscriptProviders;
   exports.createBrowserSpeechProvider = createBrowserSpeechProvider;

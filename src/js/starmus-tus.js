@@ -274,10 +274,11 @@ export async function uploadTus(
          * upload is taking a long time, which on these networks is normal.
          *
          * The abort deliberately leaves the TUS fingerprint in place
-         * (`removeFingerprintOnSuccess` only clears it on success), so the
-         * offline queue's next attempt resumes from the last acknowledged
-         * offset instead of re-sending the original from byte zero — which
-         * ADR-038 forbids.
+         * (`removeFingerprintOnSuccess` only clears it on success). The next
+         * attempt then finds the stored upload — see the resume lookup before
+         * `start()` below — and continues from the last acknowledged offset
+         * instead of re-sending the original from byte zero, which ADR-038
+         * forbids.
          */
         function armStallWatchdog() {
             clearStallWatchdog();
@@ -348,8 +349,37 @@ export async function uploadTus(
             },
         });
 
-        armStallWatchdog();
-        upload.start();
+        // Resume before starting, or the fingerprint is a key nobody reads.
+        //
+        // `upload.start()` does not consult URL storage on its own: tus-js-client
+        // requires findPreviousUploads() then resumeFromPreviousUpload() first.
+        // Without this the stall watchdog's abort left a half-finished resource
+        // on the server and the next attempt began a new one from byte zero —
+        // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
+        // of what the comment above it claimed.
+        //
+        // A storage read that fails is not a reason to refuse the upload: the
+        // recording still needs to go. It starts fresh instead, which is the
+        // behaviour there was before, and the contributor is no worse off.
+        upload
+            .findPreviousUploads()
+            .then((previous) => {
+                if (Array.isArray(previous) && previous.length > 0) {
+                    // The most recent match: an earlier attempt on this exact
+                    // submission, since the fingerprint is the submission id.
+                    upload.resumeFromPreviousUpload(previous[previous.length - 1]);
+                }
+            })
+            .catch((err) => {
+                console.warn("[TUS] Could not read resumable uploads; starting fresh:", err.message);
+            })
+            .finally(() => {
+                if (settled) {
+                    return;
+                }
+                armStallWatchdog();
+                upload.start();
+            });
     });
 }
 

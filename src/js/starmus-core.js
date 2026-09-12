@@ -195,6 +195,12 @@ export function initCore(store, instanceId, env) {
 
         store.dispatch({ type: "starmus/submit-start" });
 
+        // Whether the bytes reached the server. Everything after that point —
+        // naming the format, building the completion detail, notifying the
+        // host — can still fail, and none of those failures mean the recording
+        // needs sending again.
+        let transferred = false;
+
         try {
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
@@ -212,6 +218,10 @@ export function initCore(store, instanceId, env) {
                         progress: uploaded / total,
                     }),
             });
+
+            if (result && result.success) {
+                transferred = true;
+            }
 
             store.dispatch({ type: "starmus/submit-complete", payload: result });
 
@@ -283,15 +293,37 @@ export function initCore(store, instanceId, env) {
                     message,
                 );
 
-            // The recording is queued on every failure, retryable or not.
-            // Whether an error is worth retrying soon decides what the queue
-            // does next and what the contributor is told — it does not decide
-            // whether their recording survives. It used to: a misconfigured
-            // endpoint (`NO_UPLOAD_ENDPOINT`) classified as non-retryable
-            // dropped the blob on the floor with an error message. ADR-011
-            // keeps the material unconditionally, and ADR-038 forbids
-            // re-sending an original from scratch — both need the bytes still
-            // to be here.
+            if (transferred) {
+                // The upload succeeded and something after it did not —
+                // `UNSUPPORTED_UPLOAD_FORMAT` is the one that throws here.
+                // Queueing now would send the same recording a second time,
+                // which costs the contributor bandwidth they have already
+                // spent and leaves the platform holding two copies of one
+                // take. The asset is on the server; what failed is this
+                // client's ability to describe it, and that is reported
+                // rather than retried.
+                console.error("[Core] Uploaded, but could not complete:", message);
+                sparxstarIntegration.reportError("post_upload_failure", {
+                    error: message,
+                    instanceId,
+                    tier: stateEnv.tier,
+                });
+                store.dispatch({
+                    type: "starmus/error",
+                    error: { message, retryable: false },
+                });
+                return;
+            }
+
+            // The recording is queued on every *transfer* failure, retryable or
+            // not. Whether an error is worth retrying soon decides what the
+            // queue does next and what the contributor is told — it does not
+            // decide whether their recording survives. It used to: a
+            // misconfigured endpoint (`NO_UPLOAD_ENDPOINT`) classified as
+            // non-retryable dropped the blob on the floor with an error
+            // message. ADR-011 keeps the material unconditionally, and ADR-038
+            // forbids re-sending an original from scratch — both need the bytes
+            // still to be here.
             try {
                 const submissionId = await queueSubmission(
                     instanceId,

@@ -163,14 +163,41 @@ if (fs.existsSync(tusFile)) {
     // of a partially transferred original". A module-private fallback still
     // re-sends the whole recording over the link that just failed, so hiding
     // it from the public API is not compliance.
-    const anyDirectPattern = /\bfunction\s+uploadDirect\b|\buploadDirect\s*=/;
-    if (anyDirectPattern.test(tusContent) || /directUpload/.test(tusContent)) {
+    // Checking for the old identifiers alone would pass a renamed FormData
+    // POST, so the check is on the *capability*: this module transfers through
+    // tus and nothing else. A whole-blob send needs one of these three, and
+    // none of them has a legitimate use here.
+    const fullFileMechanisms = [
+        [/\bfunction\s+uploadDirect\b|\buploadDirect\s*=|directUpload/, "the former direct-upload path"],
+        [/\bnew\s+FormData\b/, "a FormData body"],
+        [/\bnew\s+XMLHttpRequest\b/, "an XMLHttpRequest"],
+        [/\bfetch\s*\(/, "a raw fetch"],
+    ];
+    let chunkedOnly = true;
+    for (const [pattern, label] of fullFileMechanisms) {
+        if (pattern.test(tusContent)) {
+            console.log(
+                `❌ starmus-tus.js: ${label} can send a whole recording in one request. Chunked, resumable transfer is the only path — capture-to-ingestion contract and ADR-038.`,
+            );
+            chunkedOnly = false;
+            ok = false;
+        }
+    }
+    if (chunkedOnly) {
+        console.log("✅ No full-file upload path (chunked-only constraint satisfied)");
+    }
+
+    // Resumability is not the fingerprint; it is the lookup that reads it.
+    // tus-js-client's `start()` does not consult URL storage on its own, so
+    // without this the stall abort orphans a partial resource and the retry
+    // re-sends from byte zero — the re-upload ADR-038 forbids.
+    if (!/findPreviousUploads\s*\(/.test(tusContent) || !/resumeFromPreviousUpload\s*\(/.test(tusContent)) {
         console.log(
-            "❌ starmus-tus.js: no full-file upload path may exist (uploadDirect / directUpload endpoint). Chunked, resumable transfer is the only path — capture-to-ingestion contract and ADR-038.",
+            "❌ starmus-tus.js: a retry must look up and resume the previous upload (findPreviousUploads + resumeFromPreviousUpload) before start(). ADR-038 forbids re-sending a partially transferred original.",
         );
         ok = false;
     } else {
-        console.log("✅ No full-file upload path (chunked-only constraint satisfied)");
+        console.log("✅ A retry resumes the previous upload rather than restarting it");
     }
 
     // ADR-035 and the capture-to-ingestion contract: the capture profile
@@ -187,13 +214,22 @@ if (fs.existsSync(tusFile)) {
 
     // A total-duration abort on a resumable upload ends every real upload on a
     // 2G link before it finishes. Only a no-progress watchdog is admissible.
-    if (!/stallTimeoutMs/.test(tusContent)) {
+    // Two halves, because the presence of a stall bound does not rule out a
+    // deadline sitting beside it: the watchdog must exist, must be re-armed on
+    // progress, and the total-duration timeout it replaced must not return.
+    const hasStallBound = /stallTimeoutMs/.test(tusContent);
+    const rearmsOnProgress = /onProgress\s*\([^)]*\)\s*\{[\s\S]{0,200}?armStallWatchdog\s*\(/.test(
+        tusContent,
+    );
+    const hasDeadline = /requestTimeoutMs/.test(tusContent);
+    if (!hasStallBound || !rearmsOnProgress || hasDeadline) {
         console.log(
-            "❌ starmus-tus.js: the upload watchdog must be a no-progress (stall) bound, not a total-duration deadline.",
+            "❌ starmus-tus.js: the upload watchdog must be a no-progress bound that is re-armed on every progress event, with no total-duration deadline beside it. " +
+                `(stall bound: ${hasStallBound}; re-armed on progress: ${rearmsOnProgress}; deadline present: ${hasDeadline})`,
         );
         ok = false;
     } else {
-        console.log("✅ Upload watchdog is a no-progress bound, not a deadline");
+        console.log("✅ Upload watchdog is a no-progress bound, re-armed on progress");
     }
 }
 

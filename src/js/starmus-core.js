@@ -270,9 +270,6 @@ export function initCore(store, instanceId, env) {
                     calibrationApplied: !!completedCalibration.complete,
                 });
 
-                if (!detail) {
-                    throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
-                }
                 emitCompletionEvent(detail);
 
                 const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
@@ -319,14 +316,14 @@ export function initCore(store, instanceId, env) {
                 );
 
             if (transferred) {
-                // The upload succeeded and something after it did not —
-                // `UNSUPPORTED_UPLOAD_FORMAT` is the one that throws here.
+                // The upload succeeded and something after it did not — the
+                // redirect resolution or the parent-frame notification below.
                 // Queueing now would send the same recording a second time,
                 // which costs the contributor bandwidth they have already
                 // spent and leaves the platform holding two copies of one
                 // take. The asset is on the server; what failed is this
-                // client's ability to describe it, and that is reported
-                // rather than retried.
+                // client's handling afterwards, and that is reported rather
+                // than retried.
                 console.error("[Core] Uploaded, but could not complete:", message);
                 sparxstarIntegration.reportError("post_upload_failure", {
                     error: message,

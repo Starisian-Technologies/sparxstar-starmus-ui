@@ -127,3 +127,78 @@ test("holding a recording is a state with a way out, not a slower deletion", asy
         "discard refuses anything that is not held, so it cannot become an automatic delete",
     );
 });
+
+test("an accepted upload always gets its boundary event, even unnameable", async () => {
+    // `starmus:complete` is the boundary between recording and processing;
+    // AGENTS.md says nothing downstream triggers until it fires. Returning null
+    // for a format this client cannot name left the asset on the server with no
+    // consumer told it existed. ADR-035 holds the container/codec question
+    // (OQ-021), so refusing is not this package's call either.
+    const { buildCompletionDetail, resolveUploadFormat } = await import(
+        "../../src/js/starmus-completion-event.js"
+    );
+
+    assert.equal(
+        resolveUploadFormat("audio/amr", "field-note.amr"),
+        null,
+        "the format really is unnameable here — otherwise this test proves nothing",
+    );
+
+    const detail = buildCompletionDetail({
+        instanceId: "session-1",
+        result: { success: true, uploadId: "11111111-2222-4333-8444-555555555555" },
+        metadata: { captureProfile: "documentation" },
+        formFields: {},
+        fileName: "field-note.amr",
+        mimeType: "audio/amr",
+        durationMs: 9000,
+    });
+
+    assert.ok(detail, "a detail is built rather than withheld");
+    assert.equal(detail.format, "unknown", "the gap is reported, not guessed at");
+    assert.equal(detail.captureProfile, "documentation", "the rest of the record survives");
+    assert.equal(detail.durationMs, 9000);
+});
+
+test("a nameable format is still named", async () => {
+    const { buildCompletionDetail } = await import("../../src/js/starmus-completion-event.js");
+    const detail = buildCompletionDetail({
+        instanceId: "session-2",
+        result: { success: true },
+        metadata: {},
+        formFields: {},
+        fileName: "take.m4a",
+        mimeType: "audio/mp4",
+    });
+    assert.equal(detail.format, "aac-lc", "`unknown` is a fallback, not the default");
+});
+
+test("a host still passing the retired nonce is told, not silently unauthorized", async () => {
+    // ADR-034 retired `bootstrap.nonce`. A host that has not migrated now sends
+    // no authorization header at all, which surfaces as a 401 with nothing
+    // saying why — retried by the queue until the entry is held.
+    const { resolveUploadHeaders } = await import("../../src/js/starmus-tus.js");
+
+    const warnings = [];
+    const realWarn = console.warn;
+    console.warn = (...args) => warnings.push(args.join(" "));
+    try {
+        assert.deepEqual(resolveUploadHeaders({ nonce: "abc123" }), {});
+        assert.equal(warnings.length, 1, "the misconfiguration is named where it happens");
+        assert.match(warnings[0], /uploadHeaders/, "and it says what to do instead");
+
+        warnings.length = 0;
+        assert.deepEqual(
+            resolveUploadHeaders({ nonce: "abc123", uploadHeaders: { "X-Host-Auth": "abc123" } }),
+            { "X-Host-Auth": "abc123" },
+            "a migrated host passes it itself",
+        );
+        assert.equal(warnings.length, 0, "and is not scolded for it");
+
+        warnings.length = 0;
+        assert.deepEqual(resolveUploadHeaders({}), {}, "no auth at all is a legitimate host");
+        assert.equal(warnings.length, 0);
+    } finally {
+        console.warn = realWarn;
+    }
+});

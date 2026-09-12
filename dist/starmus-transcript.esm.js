@@ -10,7 +10,11 @@
  *
  * Three things the output always carries, per ADR-038:
  *
- *   1. tokens;
+ *   1. tokens — carried in `draft().tokens`, at the granularity
+ *      `draft().tokenGranularity` names. The field is deliberately not called
+ *      `segments`: ADR-038 uses that word for the speech/silence boundaries of
+ *      record, which are the Node's server-side VAD output, and a
+ *      lowest-authority draft must not be mistakable for them;
  *   2. timestamps on the **original timeline** — there is exactly one timeline,
  *      the recording's own, and every downstream result maps to it (ADR-039);
  *   3. provenance naming the engine and the model version.
@@ -102,7 +106,7 @@ const providerFactories = [];
  *     model: string|null,      // engine's model/version identifier, or null
  *                              // when the engine does not expose one
  *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
- *     start(context): void,    // context.emit(segment)
+ *     start(context): void,    // context.emit(token)
  *                              // context.fail(error)
  *                              // context.ended(reason) — the engine stopped
  *                              //   producing, whether asked to or not
@@ -146,7 +150,7 @@ function clearTranscriptProviders() {
  * Build a provider backed by the browser's SpeechRecognition API.
  *
  * The API reports no word timings, so this provider does not invent any. Each
- * segment is stamped from the recorder clock at the moment the result arrived
+ * token is stamped from the recorder clock at the moment the result arrived
  * and marked `timing: 'approximate'`. Precise word boundaries are ESU's
  * (alignment) and speech/silence boundaries are the Node's (VAD); a plausible
  * looking number written here would be read downstream as measurement.
@@ -256,7 +260,7 @@ registerTranscriptProvider("browser-speech-recognition", createBrowserSpeechProv
  * @param {string} [options.language]         BCP-47 tag.
  * @param {number} [options.maxDurationMs]    Provider auto-disable bound.
  * @param {function(Object): void} [options.onUpdate] Called with the draft
- *        after every segment.
+ *        after every token.
  * @returns {Object|null} The slot, or null when no provider can run — which is
  *          not an error: a recording without a live draft is complete.
  */
@@ -305,7 +309,7 @@ function openTranscriptSlot(_ref) {
   // consumer unable to tell which it received — so the granularity travels
   // with the draft and defaults to the weaker claim.
   const tokenGranularity = provider.tokenGranularity === "word" ? "word" : "utterance";
-  const segments = [];
+  const tokens = [];
   let stopTimer = null;
   let settleTimer = null;
   let running = false;
@@ -332,12 +336,12 @@ function openTranscriptSlot(_ref) {
         model: provider.model
       },
       tokenGranularity,
-      segments: segments.slice()
+      tokens: tokens.slice()
     };
   }
   const context = {
-    emit(segment) {
-      var _segment$confidence;
+    emit(token) {
+      var _token$confidence;
       // Accepted while stopping as well as while running: the engine
       // delivers a final result for the audio it already heard *after*
       // being asked to stop, and refusing it here dropped the last
@@ -346,7 +350,7 @@ function openTranscriptSlot(_ref) {
         return;
       }
       const endMs = Math.max(0, Math.round(getElapsedMs()));
-      const tail = segments[segments.length - 1];
+      const tail = tokens[tokens.length - 1];
       // A trailing interim is provisional text for the utterance still
       // being spoken. Both a revised interim and the final result for
       // that same utterance replace it — appending instead would leave
@@ -354,19 +358,19 @@ function openTranscriptSlot(_ref) {
       // interim one would carry a start time the final one needs.
       const supersedesInterim = !!tail && !tail.isFinal;
       const entry = {
-        text: String(segment.text || ""),
+        text: String(token.text || ""),
         startMs: supersedesInterim ? tail.startMs : Math.min(lastStartMs, endMs),
         endMs,
         // The browser engine reports no word timings; the Node's VAD
         // holds boundaries of record and ESU holds alignment.
         timing: "approximate",
-        confidence: (_segment$confidence = segment.confidence) !== null && _segment$confidence !== void 0 ? _segment$confidence : null,
-        isFinal: !!segment.isFinal
+        confidence: (_token$confidence = token.confidence) !== null && _token$confidence !== void 0 ? _token$confidence : null,
+        isFinal: !!token.isFinal
       };
       if (supersedesInterim) {
-        segments[segments.length - 1] = entry;
+        tokens[tokens.length - 1] = entry;
       } else {
-        segments.push(entry);
+        tokens.push(entry);
       }
       if (entry.isFinal) {
         lastStartMs = endMs;
@@ -440,8 +444,8 @@ function openTranscriptSlot(_ref) {
     running = false;
     stopping = false;
     // Interim text is not a draft; drop a trailing interim on settle.
-    while (segments.length > 0 && !segments[segments.length - 1].isFinal) {
-      segments.pop();
+    while (tokens.length > 0 && !tokens[tokens.length - 1].isFinal) {
+      tokens.pop();
     }
     if (resolveSettled) {
       const resolve = resolveSettled;
@@ -537,7 +541,7 @@ function openTranscriptSlot(_ref) {
      * @returns {string} The concatenated final text, for display.
      */
     text() {
-      return segments.filter(segment => segment.isFinal).map(segment => segment.text).join(" ").trim();
+      return tokens.filter(token => token.isFinal).map(token => token.text).join(" ").trim();
     }
   };
 }

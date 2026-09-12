@@ -671,36 +671,22 @@ class OfflineQueue {
                         calibrationApplied: !!metadata?.calibration,
                     });
 
-                    if (detail) {
-                        emitCompletionEvent(detail);
-                    } else {
-                        // The upload succeeded but the format cannot be named,
-                        // so `starmus:complete` cannot be built — and nothing
-                        // server-side begins without it (ADR-034). The asset is
-                        // on the server with no consumer told it exists.
-                        //
-                        // Held, not removed. Removing it made the orphan
-                        // invisible: the recording was gone from the device and
-                        // stalled on the server with nobody able to see either
-                        // half. A held entry is not retried, so it costs no
-                        // bandwidth, and it is the only remaining evidence that
-                        // this recording needs a person.
-                        console.error(
-                            "[Offline] Uploaded but could not build starmus:complete:",
-                            { id, fileName, mimeType: metadata?.mimeType || audioBlob.type || "" }
-                        );
-                        sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                    // Always emitted. A format this client cannot name is
+                    // reported as `unknown` rather than suppressing the event:
+                    // `starmus:complete` is the boundary before any server-side
+                    // processing (ADR-034), and withholding it left the asset on
+                    // the server with nobody told it existed, recoverable only
+                    // by a person noticing a held entry. The Node rules on the
+                    // format, where refusing does not cost the recording.
+                    emitCompletionEvent(detail);
+                    if (detail.format === "unknown") {
+                        sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
                             instanceId,
                             fileName,
                             mimeType: metadata?.mimeType || audioBlob.type || "",
                             captureProfile: metadata?.captureProfile || null,
                         });
-                        await this._hold(
-                            id,
-                            `Uploaded, but the format could not be named (${metadata?.mimeType || audioBlob.type || "unknown"}), so no completion event was emitted.`,
-                        );
-                        continue;
                     }
                 } catch (err) {
                     if (uploaded) {

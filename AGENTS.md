@@ -157,7 +157,10 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // recorder's own fallback produces it. Named rather than resolved to
     // `opus`, for the reason the other formats are: the Node identifies the
     // codec from the bytes, and OQ-021 owns the codec question.
-    format: 'opus' | 'aac-lc' | 'wav' | 'mp3' | 'webm',
+    // `unknown` when this client cannot name what it has. The event still
+    // fires: it is the boundary below, and withholding it for an asset the
+    // server already holds is worse than reporting the gap.
+    format: 'opus' | 'aac-lc' | 'wav' | 'mp3' | 'webm' | 'unknown',
     language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
     consentGranted: boolean,
@@ -270,8 +273,11 @@ What leaves the slot is a **lowest-authority machine draft** — a starting poin
 for human correction in ESU, never the transcript.
 
 Browser speech recognition is the first provider (Tier A). It reports no word
-timings, so the built-in provider does not invent any: segments are stamped
-from the recorder clock and marked `timing: 'approximate'`. A future Yahura
+timings, so the built-in provider does not invent any: tokens are stamped
+from the recorder clock and marked `timing: 'approximate'`. The draft carries
+them as `tokens`, at the granularity `tokenGranularity` names — not as
+`segments`, which ADR-038 uses for the Node's server-side speech/silence
+boundaries of record. A future Yahura
 live provider for African languages registers into the same slot with no change
 here. Adding a provider is `registerTranscriptProvider`; nothing else changes.
 

@@ -147,13 +147,23 @@ export function resolveUploadId(result) {
  * @param {string} [input.contributorId]
  * @param {boolean} [input.calibrationApplied]
  * @param {number} [input.durationMs]
- * @returns {Object|null} null when the format cannot be named.
+ * @returns {Object} Always a detail object. An accepted upload always gets its
+ *          boundary event; see the `format` note below.
  */
 export function buildCompletionDetail(input) {
-    const format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-        return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    const format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
 
     const attainment = input.metadata?.captureAttainment || null;
     const consent = readContributorConsent();

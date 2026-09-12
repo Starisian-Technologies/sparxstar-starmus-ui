@@ -7363,6 +7363,32 @@
 
   requireEs_object_entries();
 
+  var es_object_keys = {};
+
+  var hasRequiredEs_object_keys;
+
+  function requireEs_object_keys () {
+  	if (hasRequiredEs_object_keys) return es_object_keys;
+  	hasRequiredEs_object_keys = 1;
+  	var $ = require_export();
+  	var toObject = requireToObject();
+  	var nativeKeys = requireObjectKeys();
+  	var fails = requireFails();
+
+  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
+
+  	// `Object.keys` method
+  	// https://tc39.es/ecma262/#sec-object.keys
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
+  	  keys: function keys(it) {
+  	    return nativeKeys(toObject(it));
+  	  }
+  	});
+  	return es_object_keys;
+  }
+
+  requireEs_object_keys();
+
   var es_promise = {};
 
   var es_promise_constructor = {};
@@ -13445,6 +13471,34 @@
   /* ---- Config ---- */
 
   /**
+   * Resolve the authorization headers the host supplies for uploads.
+   *
+   * `bootstrap.nonce` was retired by ADR-034: the package used to read it and set
+   * a CMS authentication header itself, which made it hold a CMS header name. A
+   * host that has not migrated now passes `nonce` into a package that ignores it,
+   * and the result is an upload sent with no authorization at all — a 401 with
+   * nothing saying why, retried by the queue until the entry is held.
+   *
+   * So the misconfiguration is named where it happens. It is not fatal: a host
+   * whose ingestion needs no headers is legitimate, and refusing here would cost
+   * a recording (ADR-011) to enforce a convention the package cannot verify.
+   *
+   * @param {Object} bootstrap The host bootstrap object.
+   * @returns {Object} Headers to send, possibly empty.
+   */
+  function resolveUploadHeaders(bootstrap) {
+    var headers = bootstrap && bootstrap.uploadHeaders && _typeof$9(bootstrap.uploadHeaders) === "object" ? bootstrap.uploadHeaders : {};
+    if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
+      // The remedy names no header: which one carries the nonce is the
+      // host's to know and ADR-034 keeps it out of this package entirely —
+      // as the build check that rejected an earlier draft of this very
+      // message enforces.
+      console.warn("[Starmus] bootstrap.nonce is no longer read (ADR-034) and no " + "bootstrap.uploadHeaders was supplied, so this upload carries no " + "authorization header. A host that previously relied on nonce must " + "now supply its own header for it in bootstrap.uploadHeaders.");
+    }
+    return headers;
+  }
+
+  /**
    * Returns a configuration object merged from tier-defaults and global overrides.
    *
    * @returns {Object} Upload configuration
@@ -13470,7 +13524,7 @@
       // Host-injected. ADR-034: this package sends no CMS nonce and knows no
       // CMS header name. Whatever the host's ingestion needs to authorize the
       // transfer, the host supplies here.
-      headers: bootstrap.uploadHeaders && _typeof$9(bootstrap.uploadHeaders) === "object" ? bootstrap.uploadHeaders : {},
+      headers: resolveUploadHeaders(bootstrap),
       endpoints: bootstrap.restUrl ? {
         tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus")
       } : {}
@@ -13959,32 +14013,6 @@
 
   requireEs_array_includes();
 
-  var es_object_keys = {};
-
-  var hasRequiredEs_object_keys;
-
-  function requireEs_object_keys () {
-  	if (hasRequiredEs_object_keys) return es_object_keys;
-  	hasRequiredEs_object_keys = 1;
-  	var $ = require_export();
-  	var toObject = requireToObject();
-  	var nativeKeys = requireObjectKeys();
-  	var fails = requireFails();
-
-  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
-
-  	// `Object.keys` method
-  	// https://tc39.es/ecma262/#sec-object.keys
-  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
-  	  keys: function keys(it) {
-  	    return nativeKeys(toObject(it));
-  	  }
-  	});
-  	return es_object_keys;
-  }
-
-  requireEs_object_keys();
-
   var es_string_includes = {};
 
   var isRegexp;
@@ -14198,14 +14226,24 @@
    * @param {string} [input.contributorId]
    * @param {boolean} [input.calibrationApplied]
    * @param {number} [input.durationMs]
-   * @returns {Object|null} null when the format cannot be named.
+   * @returns {Object} Always a detail object. An accepted upload always gets its
+   *          boundary event; see the `format` note below.
    */
   function buildCompletionDetail(input) {
     var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
-    var format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-      return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    var format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
     var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
     var consent = readContributorConsent();
     return {
@@ -15135,7 +15173,7 @@
                 _iterator2.s();
               case 7:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context11.n = 28;
+                  _context11.n = 25;
                   break;
                 }
                 item = _step2.value;
@@ -15164,7 +15202,7 @@
                   _context11.n = 10;
                   break;
                 }
-                return _context11.a(3, 27);
+                return _context11.a(3, 24);
               case 10:
                 if (!(retryCount >= CONFIG.maxRetries)) {
                   _context11.n = 12;
@@ -15173,7 +15211,7 @@
                 _context11.n = 11;
                 return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
               case 11:
-                return _context11.a(3, 27);
+                return _context11.a(3, 24);
               case 12:
                 if (!(item.lastAttempt !== null)) {
                   _context11.n = 13;
@@ -15184,7 +15222,7 @@
                   _context11.n = 13;
                   break;
                 }
-                return _context11.a(3, 27);
+                return _context11.a(3, 24);
               case 13:
                 _context11.p = 13;
                 _context11.n = 14;
@@ -15221,50 +15259,30 @@
                   language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
                   contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
                   calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
-                });
-                if (!detail) {
-                  _context11.n = 15;
-                  break;
-                }
+                }); // Always emitted. A format this client cannot name is
+                // reported as `unknown` rather than suppressing the event:
+                // `starmus:complete` is the boundary before any server-side
+                // processing (ADR-034), and withholding it left the asset on
+                // the server with nobody told it existed, recoverable only
+                // by a person noticing a held entry. The Node rules on the
+                // format, where refusing does not cost the recording.
                 emitCompletionEvent(detail);
-                _context11.n = 17;
+                if (detail.format === "unknown") {
+                  sparxstarIntegration.reportError("upload_format_unnamed", {
+                    submissionId: id,
+                    instanceId: instanceId,
+                    fileName: fileName,
+                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                  });
+                }
+                _context11.n = 21;
                 break;
               case 15:
-                // The upload succeeded but the format cannot be named,
-                // so `starmus:complete` cannot be built — and nothing
-                // server-side begins without it (ADR-034). The asset is
-                // on the server with no consumer told it exists.
-                //
-                // Held, not removed. Removing it made the orphan
-                // invisible: the recording was gone from the device and
-                // stalled on the server with nobody able to see either
-                // half. A held entry is not retried, so it costs no
-                // bandwidth, and it is the only remaining evidence that
-                // this recording needs a person.
-                console.error("[Offline] Uploaded but could not build starmus:complete:", {
-                  id: id,
-                  fileName: fileName,
-                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
-                });
-                sparxstarIntegration.reportError("completion_detail_unbuildable", {
-                  submissionId: id,
-                  instanceId: instanceId,
-                  fileName: fileName,
-                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                  captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
-                });
-                _context11.n = 16;
-                return this._hold(id, "Uploaded, but the format could not be named (".concat((metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "unknown", "), so no completion event was emitted."));
-              case 16:
-                return _context11.a(3, 27);
-              case 17:
-                _context11.n = 24;
-                break;
-              case 18:
-                _context11.p = 18;
+                _context11.p = 15;
                 _t = _context11.v;
                 if (!uploaded) {
-                  _context11.n = 20;
+                  _context11.n = 17;
                   break;
                 }
                 // Reaching here after a successful transfer means the
@@ -15274,86 +15292,86 @@
                 // next drain does not upload it again.
                 _msg = _t && _t.message ? _t.message : String(_t);
                 console.error("[Offline] Uploaded, but completion failed:", id, _msg);
-                _context11.n = 19;
+                _context11.n = 16;
                 return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
-              case 19:
-                return _context11.a(3, 27);
-              case 20:
+              case 16:
+                return _context11.a(3, 24);
+              case 17:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context11.n = 22;
+                  _context11.n = 19;
                   break;
                 }
-                _context11.n = 21;
+                _context11.n = 18;
                 return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
-              case 21:
-                _context11.n = 23;
+              case 18:
+                _context11.n = 20;
                 break;
-              case 22:
+              case 19:
                 nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context11.n = 23;
+                _context11.n = 20;
                 return this._updateRetry(id, nextRetryCount, msg);
-              case 23:
-                return _context11.a(3, 27);
-              case 24:
-                _context11.p = 24;
-                _context11.n = 25;
+              case 20:
+                return _context11.a(3, 24);
+              case 21:
+                _context11.p = 21;
+                _context11.n = 22;
                 return this.remove(id);
+              case 22:
+                _context11.n = 24;
+                break;
+              case 23:
+                _context11.p = 23;
+                _t2 = _context11.v;
+                _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
+                console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
+                _context11.n = 24;
+                return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
+              case 24:
+                _context11.n = 7;
+                break;
               case 25:
                 _context11.n = 27;
                 break;
               case 26:
                 _context11.p = 26;
-                _t2 = _context11.v;
-                _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
-                console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
-                _context11.n = 27;
-                return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
+                _t3 = _context11.v;
+                _iterator2.e(_t3);
               case 27:
-                _context11.n = 7;
-                break;
+                _context11.p = 27;
+                _iterator2.f();
+                return _context11.f(27);
               case 28:
                 _context11.n = 30;
                 break;
               case 29:
                 _context11.p = 29;
-                _t3 = _context11.v;
-                _iterator2.e(_t3);
-              case 30:
-                _context11.p = 30;
-                _iterator2.f();
-                return _context11.f(30);
-              case 31:
-                _context11.n = 33;
-                break;
-              case 32:
-                _context11.p = 32;
                 _t4 = _context11.v;
                 console.error("[Offline] Queue fatal:", _t4);
-              case 33:
-                _context11.p = 33;
+              case 30:
+                _context11.p = 30;
                 this.isProcessing = false;
-                _context11.p = 34;
-                _context11.n = 35;
+                _context11.p = 31;
+                _context11.n = 32;
                 return this._getNextProcessDelay();
-              case 35:
+              case 32:
                 nextDelay = _context11.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context11.n = 37;
+                _context11.n = 34;
                 break;
-              case 36:
-                _context11.p = 36;
+              case 33:
+                _context11.p = 33;
                 _t5 = _context11.v;
                 console.error("[Offline] Failed to schedule next queue processing:", _t5);
-              case 37:
-                return _context11.f(33);
-              case 38:
+              case 34:
+                return _context11.f(30);
+              case 35:
                 return _context11.a(2);
             }
-          }, _callee11, this, [[34, 36], [24, 26], [13, 18], [6, 29, 30, 31], [5, 32, 33, 38]]);
+          }, _callee11, this, [[31, 33], [21, 23], [13, 15], [6, 26, 27, 28], [5, 29, 30, 35]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -16044,59 +16062,50 @@
 
               // Emit starmus:complete — boundary between recording and server-side processing.
               // Nothing downstream triggers until this event fires.
-              if (!(result && result.success)) {
-                _context.n = 6;
-                break;
-              }
-              completedState = store.getState();
-              completedSource = completedState.source || {};
-              completedCalibration = completedState.calibration || {};
-              detail = buildCompletionDetail({
-                instanceId: instanceId,
-                result: result,
-                metadata: metadata,
-                formFields: formFields,
-                fileName: fileName,
-                mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
-                durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
-                language: completedSource.language,
-                contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
-                calibrationApplied: !!completedCalibration.complete
-              });
-              if (detail) {
-                _context.n = 5;
-                break;
-              }
-              throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
-            case 5:
-              emitCompletionEvent(detail);
-              redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
-              if (redirect) {
-                setTimeout(function () {
-                  window.location.href = redirect;
-                }, 1500);
-              }
+              if (result && result.success) {
+                completedState = store.getState();
+                completedSource = completedState.source || {};
+                completedCalibration = completedState.calibration || {};
+                detail = buildCompletionDetail({
+                  instanceId: instanceId,
+                  result: result,
+                  metadata: metadata,
+                  formFields: formFields,
+                  fileName: fileName,
+                  mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
+                  durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
+                  language: completedSource.language,
+                  contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
+                  calibrationApplied: !!completedCalibration.complete
+                });
+                emitCompletionEvent(detail);
+                redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
+                if (redirect) {
+                  setTimeout(function () {
+                    window.location.href = redirect;
+                  }, 1500);
+                }
 
-              // Notify parent frame (modal context) safely
-              if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
-                try {
-                  if (window.parent && window.parent !== window) {
-                    void window.parent.location.href; // Throws if cross-origin
-                    if (window.parent.jQuery) {
-                      window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
-                        audioPostId: result.data.post_id
-                      }]);
+                // Notify parent frame (modal context) safely
+                if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
+                  try {
+                    if (window.parent && window.parent !== window) {
+                      void window.parent.location.href; // Throws if cross-origin
+                      if (window.parent.jQuery) {
+                        window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
+                          audioPostId: result.data.post_id
+                        }]);
+                      }
                     }
+                  } catch (_unused2) {
+                    // Cross-origin — silently skip
                   }
-                } catch (_unused2) {
-                  // Cross-origin — silently skip
                 }
               }
-            case 6:
-              _context.n = 12;
+              _context.n = 10;
               break;
-            case 7:
-              _context.p = 7;
+            case 5:
+              _context.p = 5;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -16109,17 +16118,17 @@
               message = _t && _t.message ? _t.message : String(_t);
               retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
               if (!transferred) {
-                _context.n = 8;
+                _context.n = 6;
                 break;
               }
-              // The upload succeeded and something after it did not —
-              // `UNSUPPORTED_UPLOAD_FORMAT` is the one that throws here.
+              // The upload succeeded and something after it did not — the
+              // redirect resolution or the parent-frame notification below.
               // Queueing now would send the same recording a second time,
               // which costs the contributor bandwidth they have already
               // spent and leaves the platform holding two copies of one
               // take. The asset is on the server; what failed is this
-              // client's ability to describe it, and that is reported
-              // rather than retried.
+              // client's handling afterwards, and that is reported rather
+              // than retried.
               console.error("[Core] Uploaded, but could not complete:", message);
               sparxstarIntegration.reportError("post_upload_failure", {
                 error: message,
@@ -16134,19 +16143,19 @@
                 }
               });
               return _context.a(2);
-            case 8:
-              _context.p = 8;
-              _context.n = 9;
+            case 6:
+              _context.p = 6;
+              _context.n = 7;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
-            case 9:
+            case 7:
               submissionId = _context.v;
               store.dispatch({
                 type: "starmus/submit-queued",
                 submissionId: submissionId
               });
-              _context.n = 10;
+              _context.n = 8;
               return getPendingCount();
-            case 10:
+            case 8:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
@@ -16163,10 +16172,10 @@
                   }
                 });
               }
-              _context.n = 12;
+              _context.n = 10;
               break;
-            case 11:
-              _context.p = 11;
+            case 9:
+              _context.p = 9;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
               // The queue's own message is kept. `QueueFull` names how much
@@ -16182,10 +16191,10 @@
                   retryable: false
                 }
               });
-            case 12:
+            case 10:
               return _context.a(2);
           }
-        }, _callee, null, [[8, 11], [2, 7]]);
+        }, _callee, null, [[6, 9], [2, 5]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }

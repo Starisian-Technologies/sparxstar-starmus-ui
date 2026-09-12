@@ -141,7 +141,7 @@ test("a provider that throws on start leaves the slot stopped, not stuck running
     assert.doesNotThrow(() => slot.start());
     assert.equal(captured.stopped, 1, "the failed provider is stopped");
     captured.context.emit({ text: "late", isFinal: true });
-    assert.equal(slot.draft().segments.length, 0, "nothing is accepted afterwards");
+    assert.equal(slot.draft().tokens.length, 0, "nothing is accepted afterwards");
 });
 
 test("the draft carries provenance and an original-timeline stamp", async () => {
@@ -165,11 +165,11 @@ test("the draft carries provenance and an original-timeline stamp", async () => 
     assert.equal(draft.timeline, "original");
     assert.equal(draft.language, "mnk");
     assert.deepEqual(draft.provenance, { engine: "stub-engine", model: "stub-1.2" });
-    assert.equal(draft.segments.length, 1);
-    assert.equal(draft.segments[0].endMs, 1500);
-    assert.equal(draft.segments[0].startMs, 0);
+    assert.equal(draft.tokens.length, 1);
+    assert.equal(draft.tokens[0].endMs, 1500);
+    assert.equal(draft.tokens[0].startMs, 0);
     // The engine reported no word timings, so the slot does not claim any.
-    assert.equal(draft.segments[0].timing, "approximate");
+    assert.equal(draft.tokens[0].timing, "approximate");
     await slot.stop();
 });
 
@@ -202,24 +202,24 @@ test("interim results replace the trailing interim and never survive stop", asyn
     captured.context.emit({ text: "ko", isFinal: false });
     elapsed = 700;
     captured.context.emit({ text: "kori", isFinal: false });
-    assert.equal(slot.draft().segments.length, 1);
-    assert.equal(slot.draft().segments[0].text, "kori");
+    assert.equal(slot.draft().tokens.length, 1);
+    assert.equal(slot.draft().tokens[0].text, "kori");
 
     elapsed = 900;
     captured.context.emit({ text: "kori tanante", isFinal: true });
-    assert.equal(slot.draft().segments.length, 1);
+    assert.equal(slot.draft().tokens.length, 1);
 
     elapsed = 1200;
     captured.context.emit({ text: "ib", isFinal: false });
-    assert.equal(slot.draft().segments.length, 2);
+    assert.equal(slot.draft().tokens.length, 2);
 
     const settled = await slot.stop();
-    assert.equal(settled.segments.length, 1);
-    assert.equal(settled.segments[0].isFinal, true);
+    assert.equal(settled.tokens.length, 1);
+    assert.equal(settled.tokens[0].isFinal, true);
     assert.equal(slot.text(), "kori tanante");
 });
 
-test("segments do not accept text after the slot stops", async () => {
+test("tokens do not accept text after the slot stops", async () => {
     clearTranscriptProviders();
     const captured = stubProvider();
     const slot = openTranscriptSlot({
@@ -230,7 +230,7 @@ test("segments do not accept text after the slot stops", async () => {
     slot.start();
     await slot.stop();
     captured.context.emit({ text: "late", isFinal: true });
-    assert.equal(slot.draft().segments.length, 0);
+    assert.equal(slot.draft().tokens.length, 0);
 });
 
 test("a provider failure ends the draft without throwing", () => {
@@ -329,8 +329,8 @@ test("the engine's closing result is kept, not dropped on stop", async () => {
     elapsed = 900;
 
     const settled = await slot.stop();
-    assert.equal(settled.segments.length, 2, "the closing utterance survives");
-    assert.equal(settled.segments[1]?.text, "the last thing said");
+    assert.equal(settled.tokens.length, 2, "the closing utterance survives");
+    assert.equal(settled.tokens[1]?.text, "the last thing said");
     assert.equal(slot.text(), "something earlier the last thing said");
 });
 
@@ -457,4 +457,41 @@ test("settling does not leave a timer that can reach into the next run", async (
         captured.stopped >= stoppedAfterSettle,
         "a stale timer from the settled run did not stop the new one early",
     );
+});
+
+test("the draft carries tokens, under a name that cannot be read as VAD output", async () => {
+    // ADR-038 uses "segments" for the speech/silence boundaries of record,
+    // computed server-side by the Node's VAD. This slot is explicitly not that
+    // mechanism, so its lowest-authority output must not share the word.
+    const { openTranscriptSlot, registerTranscriptProvider, clearTranscriptProviders } =
+        await import("../../src/js/starmus-transcript-provider.js");
+
+    clearTranscriptProviders();
+    registerTranscriptProvider("fake", () => ({
+        engine: "fake",
+        model: null,
+        start(context) {
+            context.emit({ text: "kori", isFinal: true, startMs: 0, endMs: 100 });
+        },
+        stop() {},
+    }));
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        tier: "A",
+        language: "mnk",
+        getElapsedMs: () => 0,
+    });
+    slot.start();
+    const draft = slot.draft();
+
+    assert.ok(Array.isArray(draft.tokens), "tokens is the field ADR-038 names");
+    assert.equal(
+        Object.prototype.hasOwnProperty.call(draft, "segments"),
+        false,
+        "and `segments` is not also present, which would invite the conflation",
+    );
+    assert.equal(draft.tokenGranularity, "utterance", "granularity says what a token is here");
+    await slot.stop();
+    clearTranscriptProviders();
 });

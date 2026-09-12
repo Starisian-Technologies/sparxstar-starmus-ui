@@ -86,6 +86,44 @@ const uploadCircuitBreaker = new UploadCircuitBreaker();
 /* ---- Config ---- */
 
 /**
+ * Resolve the authorization headers the host supplies for uploads.
+ *
+ * `bootstrap.nonce` was retired by ADR-034: the package used to read it and set
+ * a CMS authentication header itself, which made it hold a CMS header name. A
+ * host that has not migrated now passes `nonce` into a package that ignores it,
+ * and the result is an upload sent with no authorization at all — a 401 with
+ * nothing saying why, retried by the queue until the entry is held.
+ *
+ * So the misconfiguration is named where it happens. It is not fatal: a host
+ * whose ingestion needs no headers is legitimate, and refusing here would cost
+ * a recording (ADR-011) to enforce a convention the package cannot verify.
+ *
+ * @param {Object} bootstrap The host bootstrap object.
+ * @returns {Object} Headers to send, possibly empty.
+ */
+export function resolveUploadHeaders(bootstrap) {
+    const headers =
+        bootstrap && bootstrap.uploadHeaders && typeof bootstrap.uploadHeaders === "object"
+            ? bootstrap.uploadHeaders
+            : {};
+
+    if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
+        // The remedy names no header: which one carries the nonce is the
+        // host's to know and ADR-034 keeps it out of this package entirely —
+        // as the build check that rejected an earlier draft of this very
+        // message enforces.
+        console.warn(
+            "[Starmus] bootstrap.nonce is no longer read (ADR-034) and no " +
+                "bootstrap.uploadHeaders was supplied, so this upload carries no " +
+                "authorization header. A host that previously relied on nonce must " +
+                "now supply its own header for it in bootstrap.uploadHeaders.",
+        );
+    }
+
+    return headers;
+}
+
+/**
  * Returns a configuration object merged from tier-defaults and global overrides.
  *
  * @returns {Object} Upload configuration
@@ -116,9 +154,7 @@ function getConfig() {
         // Host-injected. ADR-034: this package sends no CMS nonce and knows no
         // CMS header name. Whatever the host's ingestion needs to authorize the
         // transfer, the host supplies here.
-        headers: bootstrap.uploadHeaders && typeof bootstrap.uploadHeaders === "object"
-            ? bootstrap.uploadHeaders
-            : {},
+        headers: resolveUploadHeaders(bootstrap),
         endpoints: bootstrap.restUrl
             ? {
                   tus: `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`,

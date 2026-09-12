@@ -8521,60 +8521,6 @@
 
   requireEs_promise();
 
-  var es_promise_finally = {};
-
-  var hasRequiredEs_promise_finally;
-
-  function requireEs_promise_finally () {
-  	if (hasRequiredEs_promise_finally) return es_promise_finally;
-  	hasRequiredEs_promise_finally = 1;
-  	var $ = require_export();
-  	var IS_PURE = requireIsPure();
-  	var NativePromiseConstructor = requirePromiseNativeConstructor();
-  	var fails = requireFails();
-  	var getBuiltIn = requireGetBuiltIn();
-  	var isCallable = requireIsCallable();
-  	var speciesConstructor = requireSpeciesConstructor();
-  	var promiseResolve = requirePromiseResolve();
-  	var defineBuiltIn = requireDefineBuiltIn();
-
-  	var NativePromisePrototype = NativePromiseConstructor && NativePromiseConstructor.prototype;
-
-  	// Safari bug https://bugs.webkit.org/show_bug.cgi?id=200829
-  	var NON_GENERIC = !!NativePromiseConstructor && fails(function () {
-  	  // eslint-disable-next-line unicorn/no-thenable -- required for testing
-  	  NativePromisePrototype['finally'].call({ then: function () { /* empty */ } }, function () { /* empty */ });
-  	});
-
-  	// `Promise.prototype.finally` method
-  	// https://tc39.es/ecma262/#sec-promise.prototype.finally
-  	$({ target: 'Promise', proto: true, real: true, forced: NON_GENERIC }, {
-  	  'finally': function (onFinally) {
-  	    var C = speciesConstructor(this, getBuiltIn('Promise'));
-  	    var isFunction = isCallable(onFinally);
-  	    return this.then(
-  	      isFunction ? function (x) {
-  	        return promiseResolve(C, onFinally()).then(function () { return x; });
-  	      } : onFinally,
-  	      isFunction ? function (e) {
-  	        return promiseResolve(C, onFinally()).then(function () { throw e; });
-  	      } : onFinally
-  	    );
-  	  }
-  	});
-
-  	// makes sure that native promise-based APIs `Promise#finally` properly works with patched `Promise#then`
-  	if (!IS_PURE && isCallable(NativePromiseConstructor)) {
-  	  var method = getBuiltIn('Promise').prototype['finally'];
-  	  if (NativePromisePrototype['finally'] !== method) {
-  	    defineBuiltIn(NativePromisePrototype, 'finally', method, { unsafe: true });
-  	  }
-  	}
-  	return es_promise_finally;
-  }
-
-  requireEs_promise_finally();
-
   var es_regexp_toString = {};
 
   var regexpFlagsDetection;
@@ -13305,14 +13251,37 @@
                   // submission, since the fingerprint is the submission id.
                   upload.resumeFromPreviousUpload(previous[previous.length - 1]);
                 }
-              }).catch(function (err) {
-                console.warn("[TUS] Could not read resumable uploads; starting fresh:", err.message);
-              }).finally(function () {
                 if (settled) {
                   return;
                 }
                 armStallWatchdog();
+                // Inside the chain, not a `finally` after it: a synchronous
+                // throw from `start()` — a malformed endpoint, a browser that
+                // refuses the request — would otherwise reject only the
+                // internal chain, leaving the promise this function returned
+                // pending forever with the watchdog armed and the caller with
+                // no error and no result.
                 upload.start();
+              }).catch(function (err) {
+                // A storage read that failed is not permission to start over.
+                // Without the lookup this cannot establish that no partial
+                // transfer exists, and starting fresh would re-send from byte
+                // zero and orphan whatever is already on the server — the
+                // re-upload ADR-038 forbids. Rejecting hands it back to the
+                // offline queue, which keeps the recording and tries again;
+                // the earlier behaviour here traded the contributor's
+                // bandwidth for the convenience of not failing.
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                clearStallWatchdog();
+                try {
+                  upload.abort();
+                } catch (_unused) {
+                  // Never started, or already aborted. Nothing to undo.
+                }
+                reject(new Error("TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (".concat(err.message, "). Not starting over.")));
               });
             }));
         }
@@ -14398,6 +14367,14 @@
                 });
               case 12:
                 result = _context9.v;
+                // Set here, the moment the bytes are known to have landed —
+                // not at the end of the block. Setting it last made the
+                // `if (uploaded)` guard below unreachable: everything that
+                // can throw between here and there threw first, so the
+                // protection against re-uploading an accepted asset did
+                // nothing at all.
+                uploaded = true;
+
                 // `starmus:complete` is the boundary before any
                 // server-side processing (ADR-034). A queued upload that
                 // drains is as complete as an immediate one, so it fires
@@ -14438,7 +14415,6 @@
                     captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
                   });
                 }
-                uploaded = true;
                 _context9.n = 19;
                 break;
               case 13:
@@ -15228,7 +15204,7 @@
                 fileSize: audioBlob.size
               });
               message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
+              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
               if (!transferred) {
                 _context.n = 8;
                 break;

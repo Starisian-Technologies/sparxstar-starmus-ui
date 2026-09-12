@@ -418,16 +418,42 @@ export async function uploadTus(
                     // submission, since the fingerprint is the submission id.
                     upload.resumeFromPreviousUpload(previous[previous.length - 1]);
                 }
-            })
-            .catch((err) => {
-                console.warn("[TUS] Could not read resumable uploads; starting fresh:", err.message);
-            })
-            .finally(() => {
                 if (settled) {
                     return;
                 }
                 armStallWatchdog();
+                // Inside the chain, not a `finally` after it: a synchronous
+                // throw from `start()` — a malformed endpoint, a browser that
+                // refuses the request — would otherwise reject only the
+                // internal chain, leaving the promise this function returned
+                // pending forever with the watchdog armed and the caller with
+                // no error and no result.
                 upload.start();
+            })
+            .catch((err) => {
+                // A storage read that failed is not permission to start over.
+                // Without the lookup this cannot establish that no partial
+                // transfer exists, and starting fresh would re-send from byte
+                // zero and orphan whatever is already on the server — the
+                // re-upload ADR-038 forbids. Rejecting hands it back to the
+                // offline queue, which keeps the recording and tries again;
+                // the earlier behaviour here traded the contributor's
+                // bandwidth for the convenience of not failing.
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearStallWatchdog();
+                try {
+                    upload.abort();
+                } catch {
+                    // Never started, or already aborted. Nothing to undo.
+                }
+                reject(
+                    new Error(
+                        `TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (${err.message}). Not starting over.`,
+                    ),
+                );
             });
     });
 }

@@ -493,6 +493,14 @@ class OfflineQueue {
                         instanceId,
                     });
 
+                    // Set here, the moment the bytes are known to have landed —
+                    // not at the end of the block. Setting it last made the
+                    // `if (uploaded)` guard below unreachable: everything that
+                    // can throw between here and there threw first, so the
+                    // protection against re-uploading an accepted asset did
+                    // nothing at all.
+                    uploaded = true;
+
                     // `starmus:complete` is the boundary before any
                     // server-side processing (ADR-034). A queued upload that
                     // drains is as complete as an immediate one, so it fires
@@ -533,8 +541,6 @@ class OfflineQueue {
                             captureProfile: metadata?.captureProfile || null,
                         });
                     }
-
-                    uploaded = true;
                 } catch (err) {
                     if (uploaded) {
                         // Reaching here after a successful transfer means the

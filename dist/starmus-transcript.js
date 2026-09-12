@@ -2047,6 +2047,8 @@ var StarmusTranscript = (function (exports) {
 	  let lastStartMs = 0;
 	  /** @type {Function|null} Resolves the promise `stop()` handed out. */
 	  let resolveSettled = null;
+	  /** @type {Promise<Object>|null} The one promise every `stop()` caller gets. */
+	  let pendingStop = null;
 
 	  /**
 	   * @returns {Object} The draft in its current state.
@@ -2160,6 +2162,14 @@ var StarmusTranscript = (function (exports) {
 	      clearTimeout(settleTimer);
 	      settleTimer = null;
 	    }
+	    // The auto-disable timer as well. `settle()` is reachable from
+	    // `ended()` without going through `stop()`, and a timer left armed
+	    // there outlives the run: start the slot again and the old callback
+	    // stops the new provider and clears the new timer.
+	    if (stopTimer) {
+	      clearTimeout(stopTimer);
+	      stopTimer = null;
+	    }
 	    running = false;
 	    stopping = false;
 	    // Interim text is not a draft; drop a trailing interim on settle.
@@ -2169,6 +2179,7 @@ var StarmusTranscript = (function (exports) {
 	    if (resolveSettled) {
 	      const resolve = resolveSettled;
 	      resolveSettled = null;
+	      pendingStop = null;
 	      resolve(draft());
 	    }
 	  }
@@ -2191,9 +2202,22 @@ var StarmusTranscript = (function (exports) {
 	    if (!running && !stopping) {
 	      return Promise.resolve(draft());
 	    }
-	    const settled = new Promise(resolve => {
+
+	    // One promise for however many callers ask to stop. Minting a new one
+	    // per call overwrote `resolveSettled`, so an earlier caller — the
+	    // auto-disable timer racing a host's stop, say — was left holding a
+	    // promise nothing would ever resolve.
+	    if (pendingStop) {
+	      // A stop is already in flight. Hand back the same promise and do
+	      // not ask the provider to stop twice: a second `stop()` on a
+	      // browser engine mid-shutdown is at best ignored and at worst
+	      // discards the closing result the first one is waiting for.
+	      return pendingStop;
+	    }
+	    pendingStop = new Promise(resolve => {
 	      resolveSettled = resolve;
 	    });
+	    const settled = pendingStop;
 	    stopping = true;
 	    running = false;
 	    try {
@@ -2203,7 +2227,13 @@ var StarmusTranscript = (function (exports) {
 	      settle();
 	      return settled;
 	    }
-	    settleTimer = setTimeout(settle, SETTLE_GRACE_MS);
+
+	    // Only if the provider has not already settled us. A provider may call
+	    // `context.ended()` synchronously from `stop()`, and arming the grace
+	    // timer afterwards left a stale timer that would settle the *next* run.
+	    if (resolveSettled !== null && settleTimer === null) {
+	      settleTimer = setTimeout(settle, SETTLE_GRACE_MS);
+	    }
 	    return settled;
 	  }
 	  return {
@@ -2219,6 +2249,8 @@ var StarmusTranscript = (function (exports) {
 	      running = true;
 	      stopping = false;
 	      restarts = 0;
+	      pendingStop = null;
+	      resolveSettled = null;
 	      lastStartMs = Math.max(0, Math.round(getElapsedMs()));
 	      stopTimer = setTimeout(() => void stop(), maxDurationMs);
 	      try {

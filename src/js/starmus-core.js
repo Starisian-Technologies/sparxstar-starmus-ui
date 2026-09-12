@@ -314,7 +314,7 @@ export function initCore(store, instanceId, env) {
             const message = error && error.message ? error.message : String(error);
             const retryableUploadError =
                 !navigator.onLine ||
-                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
+                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
                     message,
                 );
 

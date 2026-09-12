@@ -376,3 +376,85 @@ test("an engine that ends on its own is restarted, within a bound", async () => 
     const settled = await slot.stop();
     assert.ok(settled, "the draft settles rather than hanging");
 });
+
+test("every stop() caller gets a promise that resolves, not just the last", async () => {
+    clearTranscriptProviders();
+    const captured = { context: null, stopped: 0 };
+    registerTranscriptProvider("slow-stop", () => ({
+        engine: "slow-stop",
+        model: null,
+        start(context) {
+            captured.context = context;
+        },
+        stop() {
+            captured.stopped += 1;
+            // Terminal event arrives later, as a real engine's does.
+            setTimeout(() => captured.context.ended("stopped"), 5);
+        },
+    }));
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+    });
+    slot.start();
+
+    // Two callers race — a host stop and the auto-disable timer, say.
+    const first = slot.stop();
+    const second = slot.stop();
+
+    const [a, b] = await Promise.all([first, second]);
+    assert.ok(a, "the first caller's promise resolves");
+    assert.ok(b, "the second caller's promise resolves");
+    assert.equal(a, b, "both get the same settled draft");
+    assert.equal(captured.stopped, 1, "the provider is stopped once");
+});
+
+test("settling does not leave a timer that can reach into the next run", async () => {
+    clearTranscriptProviders();
+    const captured = { context: null, starts: 0, stopped: 0 };
+    registerTranscriptProvider("ends-itself", () => ({
+        engine: "ends-itself",
+        model: null,
+        start(context) {
+            captured.context = context;
+            captured.starts += 1;
+        },
+        stop() {
+            captured.stopped += 1;
+            captured.context.ended("stopped");
+        },
+    }));
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+        // Short enough that a leaked timer would fire during this test.
+        maxDurationMs: 15,
+    });
+
+    slot.start();
+    // Exhaust the restarts so `settle()` is reached from `ended()` rather than
+    // from `stop()` — the path that used to leave the auto-disable timer armed.
+    for (let i = 0; i < MAX_PROVIDER_RESTARTS + 2; i += 1) {
+        captured.context.ended("engine-ended");
+    }
+
+    const startsAfterSettle = captured.starts;
+    const stoppedAfterSettle = captured.stopped;
+
+    slot.start();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.equal(
+        captured.starts,
+        startsAfterSettle + 1,
+        "the new run started exactly once",
+    );
+    assert.ok(
+        captured.stopped >= stoppedAfterSettle,
+        "a stale timer from the settled run did not stop the new one early",
+    );
+});

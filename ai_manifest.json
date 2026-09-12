@@ -41,6 +41,8 @@
         { "symbol": "SUPPORTED_TIERS",       "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
         { "symbol": "getHeldSubmissions",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "getQueueUsage",         "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "releaseHeldSubmission", "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "discardHeldSubmission", "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "getPendingCount",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "createUploadId",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "DEFAULT_CAPTURE_PROFILE",   "type": "constant", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },

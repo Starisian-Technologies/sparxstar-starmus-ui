@@ -14394,6 +14394,11 @@
    *   unconditionally: a contributor does not lose a recording because the
    *   server said 400 four times, and the bytes are the only copy once the page
    *   is closed.
+   * - Held is a state, not a slower deletion: `releaseHold()` puts an entry back
+   *   in the queue and `discardHeld()` removes it on an explicit instruction.
+   *   Without those a device fills with entries nobody can clear until `add()`
+   *   refuses every new recording — trading one lost recording for the loss of
+   *   recording itself.
    *
    * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
    *   enforced at `add()`: a recording that will not fit is refused with an error
@@ -14830,6 +14835,134 @@
         return usage;
       }()
       /**
+       * Put a held submission back in the queue.
+       *
+       * The counterpart to `_hold()`, and the reason holding is a state rather
+       * than a slow deletion. Without a way out, held entries accumulate against
+       * the queue's byte budget until `add()` refuses every new recording — which
+       * would trade "lose one old recording" for "lose the ability to record at
+       * all", a worse outcome than the deletion holding replaced.
+       *
+       * The retry count resets, because a person releasing an entry is saying the
+       * condition that stopped it has changed.
+       *
+       * @param {string} id
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "releaseHold",
+      value: (function () {
+        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id) {
+          var _this6 = this;
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
+              case 0:
+                if (this.db) {
+                  _context8.n = 1;
+                  break;
+                }
+                return _context8.a(2);
+              case 1:
+                _context8.n = 2;
+                return new Promise(function (resolve, reject) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (item) {
+                      item.held = false;
+                      item.heldReason = null;
+                      item.retryCount = 0;
+                      item.lastAttempt = null;
+                      item.error = null;
+                      store.put(item);
+                    }
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    _this6._notifyQueueUpdate();
+                    resolve();
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                });
+              case 2:
+                this._scheduleProcessQueue(0);
+              case 3:
+                return _context8.a(2);
+            }
+          }, _callee8, this);
+        }));
+        function releaseHold(_x0) {
+          return _releaseHold.apply(this, arguments);
+        }
+        return releaseHold;
+      }()
+      /**
+       * Delete a held submission, on a person's explicit instruction.
+       *
+       * The only deletion in this module that is not a successful upload, and it
+       * exists because the alternative is a device that fills with recordings
+       * nobody can clear. It is deliberately not reachable from any automatic
+       * path: ADR-011 forbids this module deciding a contributor's material is
+       * expendable, and nothing here decides. Someone does, and says why.
+       *
+       * @param {string} id
+       * @param {string} reason Recorded before the entry goes.
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "discardHeld",
+      value: (function () {
+        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id, reason) {
+          var all, item;
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
+              case 0:
+                _context9.n = 1;
+                return this.getAll();
+              case 1:
+                all = _context9.v;
+                item = all.find(function (entry) {
+                  return entry.id === id;
+                });
+                if (item) {
+                  _context9.n = 2;
+                  break;
+                }
+                return _context9.a(2);
+              case 2:
+                if (!(item.held !== true)) {
+                  _context9.n = 3;
+                  break;
+                }
+                throw new Error("DiscardRefused: ".concat(id, " is not held. Only a held submission can be discarded, and only on an explicit instruction."));
+              case 3:
+                console.warn("[Offline] Discarded on instruction:", id, reason);
+                sparxstarIntegration.reportError("submission_discarded", {
+                  submissionId: id,
+                  reason: reason || "(no reason given)",
+                  heldReason: item.heldReason || null
+                });
+                _context9.n = 4;
+                return this.remove(id);
+              case 4:
+                return _context9.a(2);
+            }
+          }, _callee9, this);
+        }));
+        function discardHeld(_x1, _x10) {
+          return _discardHeld.apply(this, arguments);
+        }
+        return discardHeld;
+      }()
+      /**
        * Submissions that are kept but will not be retried without intervention.
        *
        * Surfaced so a host can show them rather than let them sit invisibly: a
@@ -14841,20 +14974,20 @@
     }, {
       key: "getHeld",
       value: (function () {
-        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
           var all;
-          return _regenerator().w(function (_context8) {
-            while (1) switch (_context8.n) {
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
               case 0:
-                _context8.n = 1;
+                _context0.n = 1;
                 return this.getAll();
               case 1:
-                all = _context8.v;
-                return _context8.a(2, all.filter(function (item) {
+                all = _context0.v;
+                return _context0.a(2, all.filter(function (item) {
                   return item.held === true;
                 }));
             }
-          }, _callee8, this);
+          }, _callee0, this);
         }));
         function getHeld() {
           return _getHeld.apply(this, arguments);
@@ -14873,19 +15006,19 @@
     }, {
       key: "_setMetadata",
       value: (function () {
-        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id, metadata) {
-          var _this6 = this;
-          return _regenerator().w(function (_context9) {
-            while (1) switch (_context9.n) {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, metadata) {
+          var _this7 = this;
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.n) {
               case 0:
                 if (this.db) {
-                  _context9.n = 1;
+                  _context1.n = 1;
                   break;
                 }
-                return _context9.a(2);
+                return _context1.a(2);
               case 1:
-                return _context9.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
+                return _context1.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -14906,9 +15039,9 @@
                   };
                 }));
             }
-          }, _callee9, this);
+          }, _callee1, this);
         }));
-        function _setMetadata(_x0, _x1) {
+        function _setMetadata(_x11, _x12) {
           return _setMetadata2.apply(this, arguments);
         }
         return _setMetadata;
@@ -14916,19 +15049,19 @@
     }, {
       key: "_updateRetry",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, retryCount, error) {
-          var _this7 = this;
-          return _regenerator().w(function (_context0) {
-            while (1) switch (_context0.n) {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(id, retryCount, error) {
+          var _this8 = this;
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.n) {
               case 0:
                 if (this.db) {
-                  _context0.n = 1;
+                  _context10.n = 1;
                   break;
                 }
-                return _context0.a(2);
+                return _context10.a(2);
               case 1:
-                return _context0.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
+                return _context10.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -14948,9 +15081,9 @@
                   };
                 }));
             }
-          }, _callee0, this);
+          }, _callee10, this);
         }));
-        function _updateRetry(_x10, _x11, _x12) {
+        function _updateRetry(_x13, _x14, _x15) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -14965,44 +15098,44 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1() {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
           var _sparxstarIntegration;
           var pending, _iterator2, _step2, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, uploaded, backfilled, delay, _metadata$durationMs, _metadata$env2, result, detail, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
-          return _regenerator().w(function (_context1) {
-            while (1) switch (_context1.p = _context1.n) {
+          return _regenerator().w(function (_context11) {
+            while (1) switch (_context11.p = _context11.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context1.n = 1;
+                  _context11.n = 1;
                   break;
                 }
-                return _context1.a(2);
+                return _context11.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context1.n = 2;
+                _context11.n = 2;
                 return this.getAll();
               case 2:
-                pending = _context1.v;
+                pending = _context11.v;
                 if (!(pending.length === 0)) {
-                  _context1.n = 3;
+                  _context11.n = 3;
                   break;
                 }
-                return _context1.a(2);
+                return _context11.a(2);
               case 3:
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context1.n = 4;
+                  _context11.n = 4;
                   break;
                 }
-                return _context1.a(2);
+                return _context11.a(2);
               case 4:
                 this.isProcessing = true;
-                _context1.p = 5;
+                _context11.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context1.p = 6;
+                _context11.p = 6;
                 _iterator2.s();
               case 7:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context1.n = 28;
+                  _context11.n = 28;
                   break;
                 }
                 item = _step2.value;
@@ -15014,11 +15147,11 @@
                 // one-id-per-submission rule reaches recordings already sitting
                 // on devices rather than only new ones.
                 if (!(typeof (metadata === null || metadata === void 0 ? void 0 : metadata.uploadId) !== "string" || metadata.uploadId === "")) {
-                  _context1.n = 9;
+                  _context11.n = 9;
                   break;
                 }
                 backfilled = createUploadId();
-                _context1.n = 8;
+                _context11.n = 8;
                 return this._setMetadata(id, _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
                   uploadId: backfilled
                 }));
@@ -15028,33 +15161,33 @@
                 }
               case 9:
                 if (!item.held) {
-                  _context1.n = 10;
+                  _context11.n = 10;
                   break;
                 }
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 10:
                 if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context1.n = 12;
+                  _context11.n = 12;
                   break;
                 }
-                _context1.n = 11;
+                _context11.n = 11;
                 return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
               case 11:
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 12:
                 if (!(item.lastAttempt !== null)) {
-                  _context1.n = 13;
+                  _context11.n = 13;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context1.n = 13;
+                  _context11.n = 13;
                   break;
                 }
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 13:
-                _context1.p = 13;
-                _context1.n = 14;
+                _context11.p = 13;
+                _context11.n = 14;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -15063,7 +15196,7 @@
                   instanceId: instanceId
                 });
               case 14:
-                result = _context1.v;
+                result = _context11.v;
                 // Set here, the moment the bytes are known to have landed —
                 // not at the end of the block. Setting it last made the
                 // `if (uploaded)` guard below unreachable: everything that
@@ -15090,11 +15223,11 @@
                   calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
                 });
                 if (!detail) {
-                  _context1.n = 15;
+                  _context11.n = 15;
                   break;
                 }
                 emitCompletionEvent(detail);
-                _context1.n = 17;
+                _context11.n = 17;
                 break;
               case 15:
                 // The upload succeeded but the format cannot be named,
@@ -15120,18 +15253,18 @@
                   mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
                   captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
                 });
-                _context1.n = 16;
+                _context11.n = 16;
                 return this._hold(id, "Uploaded, but the format could not be named (".concat((metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "unknown", "), so no completion event was emitted."));
               case 16:
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 17:
-                _context1.n = 24;
+                _context11.n = 24;
                 break;
               case 18:
-                _context1.p = 18;
-                _t = _context1.v;
+                _context11.p = 18;
+                _t = _context11.v;
                 if (!uploaded) {
-                  _context1.n = 20;
+                  _context11.n = 20;
                   break;
                 }
                 // Reaching here after a successful transfer means the
@@ -15141,86 +15274,86 @@
                 // next drain does not upload it again.
                 _msg = _t && _t.message ? _t.message : String(_t);
                 console.error("[Offline] Uploaded, but completion failed:", id, _msg);
-                _context1.n = 19;
+                _context11.n = 19;
                 return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
               case 19:
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 20:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context1.n = 22;
+                  _context11.n = 22;
                   break;
                 }
-                _context1.n = 21;
+                _context11.n = 21;
                 return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
               case 21:
-                _context1.n = 23;
+                _context11.n = 23;
                 break;
               case 22:
                 nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context1.n = 23;
+                _context11.n = 23;
                 return this._updateRetry(id, nextRetryCount, msg);
               case 23:
-                return _context1.a(3, 27);
+                return _context11.a(3, 27);
               case 24:
-                _context1.p = 24;
-                _context1.n = 25;
+                _context11.p = 24;
+                _context11.n = 25;
                 return this.remove(id);
               case 25:
-                _context1.n = 27;
+                _context11.n = 27;
                 break;
               case 26:
-                _context1.p = 26;
-                _t2 = _context1.v;
+                _context11.p = 26;
+                _t2 = _context11.v;
                 _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
                 console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
-                _context1.n = 27;
+                _context11.n = 27;
                 return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
               case 27:
-                _context1.n = 7;
+                _context11.n = 7;
                 break;
               case 28:
-                _context1.n = 30;
+                _context11.n = 30;
                 break;
               case 29:
-                _context1.p = 29;
-                _t3 = _context1.v;
+                _context11.p = 29;
+                _t3 = _context11.v;
                 _iterator2.e(_t3);
               case 30:
-                _context1.p = 30;
+                _context11.p = 30;
                 _iterator2.f();
-                return _context1.f(30);
+                return _context11.f(30);
               case 31:
-                _context1.n = 33;
+                _context11.n = 33;
                 break;
               case 32:
-                _context1.p = 32;
-                _t4 = _context1.v;
+                _context11.p = 32;
+                _t4 = _context11.v;
                 console.error("[Offline] Queue fatal:", _t4);
               case 33:
-                _context1.p = 33;
+                _context11.p = 33;
                 this.isProcessing = false;
-                _context1.p = 34;
-                _context1.n = 35;
+                _context11.p = 34;
+                _context11.n = 35;
                 return this._getNextProcessDelay();
               case 35:
-                nextDelay = _context1.v;
+                nextDelay = _context11.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context1.n = 37;
+                _context11.n = 37;
                 break;
               case 36:
-                _context1.p = 36;
-                _t5 = _context1.v;
+                _context11.p = 36;
+                _t5 = _context11.v;
                 console.error("[Offline] Failed to schedule next queue processing:", _t5);
               case 37:
-                return _context1.f(33);
+                return _context11.f(33);
               case 38:
-                return _context1.a(2);
+                return _context11.a(2);
             }
-          }, _callee1, this, [[34, 36], [24, 26], [13, 18], [6, 29, 30, 31], [5, 32, 33, 38]]);
+          }, _callee11, this, [[34, 36], [24, 26], [13, 18], [6, 29, 30, 31], [5, 32, 33, 38]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -15236,13 +15369,13 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this8 = this;
+        var _this9 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this8._scheduleProcessQueue(0);
+          _this9._scheduleProcessQueue(0);
         });
         this._setupBatteryListeners();
 
@@ -15255,7 +15388,7 @@
     }, {
       key: "_setupBatteryListeners",
       value: function _setupBatteryListeners() {
-        var _this9 = this;
+        var _this0 = this;
         if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
           return;
         }
@@ -15264,7 +15397,7 @@
           var handleBatteryChange = function handleBatteryChange() {
             var _sparxstarIntegration2;
             if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
-              _this9._scheduleProcessQueue(0);
+              _this0._scheduleProcessQueue(0);
             }
           };
           battery.addEventListener("levelchange", handleBatteryChange);
@@ -15285,7 +15418,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this0 = this;
+        var _this1 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -15297,48 +15430,48 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this0.processQueueTimeoutId = null;
-          _this0.processQueueDueAt = null;
-          void _this0.processQueue();
+          _this1.processQueueTimeoutId = null;
+          _this1.processQueueDueAt = null;
+          void _this1.processQueue();
         }, safeDelay);
       }
       /** @private */
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
           var pending, nextDelay, now, _iterator3, _step3, item, retryDelay, remainingDelay, _t6;
-          return _regenerator().w(function (_context10) {
-            while (1) switch (_context10.p = _context10.n) {
+          return _regenerator().w(function (_context12) {
+            while (1) switch (_context12.p = _context12.n) {
               case 0:
-                _context10.n = 1;
+                _context12.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context10.v.filter(function (item) {
+                pending = _context12.v.filter(function (item) {
                   return item.held !== true;
                 });
                 if (!(pending.length === 0)) {
-                  _context10.n = 2;
+                  _context12.n = 2;
                   break;
                 }
-                return _context10.a(2, null);
+                return _context12.a(2, null);
               case 2:
                 nextDelay = null;
                 now = Date.now();
                 _iterator3 = _createForOfIteratorHelper$1(pending);
-                _context10.p = 3;
+                _context12.p = 3;
                 _iterator3.s();
               case 4:
                 if ((_step3 = _iterator3.n()).done) {
-                  _context10.n = 7;
+                  _context12.n = 7;
                   break;
                 }
                 item = _step3.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context10.n = 5;
+                  _context12.n = 5;
                   break;
                 }
-                return _context10.a(2, 0);
+                return _context12.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -15346,23 +15479,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context10.n = 4;
+                _context12.n = 4;
                 break;
               case 7:
-                _context10.n = 9;
+                _context12.n = 9;
                 break;
               case 8:
-                _context10.p = 8;
-                _t6 = _context10.v;
+                _context12.p = 8;
+                _t6 = _context12.v;
                 _iterator3.e(_t6);
               case 9:
-                _context10.p = 9;
+                _context12.p = 9;
                 _iterator3.f();
-                return _context10.f(9);
+                return _context12.f(9);
               case 10:
-                return _context10.a(2, nextDelay);
+                return _context12.a(2, nextDelay);
             }
-          }, _callee10, this, [[3, 8, 9, 10]]);
+          }, _callee12, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -15460,26 +15593,26 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
-      return _regenerator().w(function (_context11) {
-        while (1) switch (_context11.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
+      return _regenerator().w(function (_context13) {
+        while (1) switch (_context13.n) {
           case 0:
             if (offlineQueue.db) {
-              _context11.n = 2;
+              _context13.n = 2;
               break;
             }
-            _context11.n = 1;
+            _context13.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context11.a(2, offlineQueue);
+            return _context13.a(2, offlineQueue);
         }
-      }, _callee11);
+      }, _callee13);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x13, _x14, _x15, _x16, _x17) {
+  function queueSubmission(_x16, _x17, _x18, _x19, _x20) {
     return _queueSubmission.apply(this, arguments);
   }
 
@@ -15492,18 +15625,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context12) {
-        while (1) switch (_context12.n) {
+      return _regenerator().w(function (_context14) {
+        while (1) switch (_context14.n) {
           case 0:
-            _context12.n = 1;
+            _context14.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context12.v;
-            return _context12.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context14.v;
+            return _context14.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee12);
+      }, _callee14);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -15519,22 +15652,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
       var q, list;
-      return _regenerator().w(function (_context13) {
-        while (1) switch (_context13.n) {
+      return _regenerator().w(function (_context15) {
+        while (1) switch (_context15.n) {
           case 0:
-            _context13.n = 1;
+            _context15.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context13.v;
-            _context13.n = 2;
+            q = _context15.v;
+            _context15.n = 2;
             return q.getAll();
           case 2:
-            list = _context13.v;
-            return _context13.a(2, list.length);
+            list = _context15.v;
+            return _context15.a(2, list.length);
         }
-      }, _callee13);
+      }, _callee15);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -15551,18 +15684,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
       var q;
-      return _regenerator().w(function (_context14) {
-        while (1) switch (_context14.n) {
+      return _regenerator().w(function (_context16) {
+        while (1) switch (_context16.n) {
           case 0:
-            _context14.n = 1;
+            _context16.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context14.v;
-            return _context14.a(2, q.getHeld());
+            q = _context16.v;
+            return _context16.a(2, q.getHeld());
         }
-      }, _callee14);
+      }, _callee16);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -15571,25 +15704,81 @@
   }
 
   /**
+   * Put a held submission back in the queue and try it again.
+   *
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  function _getQueueUsage() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
+      var q;
+      return _regenerator().w(function (_context17) {
+        while (1) switch (_context17.n) {
+          case 0:
+            _context17.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context17.v;
+            return _context17.a(2, q.usage());
+        }
+      }, _callee17);
+    }));
+    return _getQueueUsage.apply(this, arguments);
+  }
+  function releaseHeldSubmission(_x21) {
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+
+  /**
+   * Delete a held submission, on a person's explicit instruction.
+   *
+   * The only deletion here that is not a successful upload. Nothing automatic
+   * reaches it.
+   *
+   * @param {string} id
+   * @param {string} reason
+   * @returns {Promise<void>}
+   */
+  function _releaseHeldSubmission() {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18(id) {
+      var q;
+      return _regenerator().w(function (_context18) {
+        while (1) switch (_context18.n) {
+          case 0:
+            _context18.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context18.v;
+            return _context18.a(2, q.releaseHold(id));
+        }
+      }, _callee18);
+    }));
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+  function discardHeldSubmission(_x22, _x23) {
+    return _discardHeldSubmission.apply(this, arguments);
+  }
+
+  /**
    * Initialises the offline queue. Alias of getOfflineQueue.
    *
    * @returns {Promise<OfflineQueue>}
    */
-  function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
+  function _discardHeldSubmission() {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19(id, reason) {
       var q;
-      return _regenerator().w(function (_context15) {
-        while (1) switch (_context15.n) {
+      return _regenerator().w(function (_context19) {
+        while (1) switch (_context19.n) {
           case 0:
-            _context15.n = 1;
+            _context19.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context15.v;
-            return _context15.a(2, q.usage());
+            q = _context19.v;
+            return _context19.a(2, q.discardHeld(id, reason));
         }
-      }, _callee15);
+      }, _callee19);
     }));
-    return _getQueueUsage.apply(this, arguments);
+    return _discardHeldSubmission.apply(this, arguments);
   }
   function initOffline() {
     return getOfflineQueue();
@@ -15599,6 +15788,8 @@
     window.StarmusOfflineQueue = getOfflineQueue;
     window.StarmusHeldSubmissions = getHeldSubmissions;
     window.StarmusQueueUsage = getQueueUsage;
+    window.StarmusReleaseHeldSubmission = releaseHeldSubmission;
+    window.StarmusDiscardHeldSubmission = discardHeldSubmission;
   }
 
   /**

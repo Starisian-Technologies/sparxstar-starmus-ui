@@ -357,10 +357,17 @@ newer one fits, which is what ADR-011 forbids. So `add()` refuses a recording
 that will not fit, with an error naming what occupies the space, and
 `getQueueUsage()` lets a host warn someone before they reach that point.
 
+**Held is a state, not a slower deletion.** `releaseHeldSubmission(id)` puts an
+entry back in the queue; `discardHeldSubmission(id, reason)` removes it and is
+the only deletion here that is not a successful upload. Nothing automatic
+reaches it. Without both, held entries accumulate against the byte budget until
+`add()` refuses every new recording — trading one lost recording for the loss of
+recording itself.
+
 **Whose recording loses when a device is genuinely full is not this package's
 call.** It is a sovereignty question and it routes to the platform owner. Until
 it is ruled on, nothing already recorded is deleted without a person deciding
-so.
+so — which is what `discardHeldSubmission` requires and why it takes a reason.
 
 ---
 

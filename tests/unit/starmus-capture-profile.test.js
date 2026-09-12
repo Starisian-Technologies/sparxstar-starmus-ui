@@ -100,3 +100,30 @@ test("a host form field cannot overwrite reserved capture metadata", async () =>
         "the merge loop skips reserved keys rather than overwriting them",
     );
 });
+
+test("holding a recording is a state with a way out, not a slower deletion", async () => {
+    // The queue holds entries rather than deleting them (ADR-011). Without a
+    // release and an explicit discard, held entries accumulate against the byte
+    // budget until `add()` refuses every new recording — which trades one lost
+    // recording for the loss of recording itself.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    assert.match(source, /async releaseHold\(/, "a held entry can be put back");
+    assert.match(source, /async discardHeld\(/, "a held entry can be deleted deliberately");
+    assert.match(
+        source,
+        /export async function releaseHeldSubmission/,
+        "hosts can release a held entry",
+    );
+    assert.match(
+        source,
+        /export async function discardHeldSubmission/,
+        "hosts can discard a held entry",
+    );
+    assert.match(
+        source,
+        /DiscardRefused/,
+        "discard refuses anything that is not held, so it cannot become an automatic delete",
+    );
+});

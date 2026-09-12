@@ -115,6 +115,11 @@ function createOfflineSubmissionId() {
  *   unconditionally: a contributor does not lose a recording because the
  *   server said 400 four times, and the bytes are the only copy once the page
  *   is closed.
+ * - Held is a state, not a slower deletion: `releaseHold()` puts an entry back
+ *   in the queue and `discardHeld()` removes it on an explicit instruction.
+ *   Without those a device fills with entries nobody can clear until `add()`
+ *   refuses every new recording — trading one lost recording for the loss of
+ *   recording itself.
  *
  * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
  *   enforced at `add()`: a recording that will not fit is refused with an error
@@ -408,6 +413,85 @@ class OfflineQueue {
             heldCount,
             maxTotalBytes: CONFIG.maxTotalBytes,
         };
+    }
+
+    /**
+     * Put a held submission back in the queue.
+     *
+     * The counterpart to `_hold()`, and the reason holding is a state rather
+     * than a slow deletion. Without a way out, held entries accumulate against
+     * the queue's byte budget until `add()` refuses every new recording — which
+     * would trade "lose one old recording" for "lose the ability to record at
+     * all", a worse outcome than the deletion holding replaced.
+     *
+     * The retry count resets, because a person releasing an entry is saying the
+     * condition that stopped it has changed.
+     *
+     * @param {string} id
+     * @returns {Promise<void>}
+     */
+    async releaseHold(id) {
+        if (!this.db) {
+            return;
+        }
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.held = false;
+                    item.heldReason = null;
+                    item.retryCount = 0;
+                    item.lastAttempt = null;
+                    item.error = null;
+                    store.put(item);
+                }
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => {
+                this._notifyQueueUpdate();
+                resolve();
+            };
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+        this._scheduleProcessQueue(0);
+    }
+
+    /**
+     * Delete a held submission, on a person's explicit instruction.
+     *
+     * The only deletion in this module that is not a successful upload, and it
+     * exists because the alternative is a device that fills with recordings
+     * nobody can clear. It is deliberately not reachable from any automatic
+     * path: ADR-011 forbids this module deciding a contributor's material is
+     * expendable, and nothing here decides. Someone does, and says why.
+     *
+     * @param {string} id
+     * @param {string} reason Recorded before the entry goes.
+     * @returns {Promise<void>}
+     */
+    async discardHeld(id, reason) {
+        const all = await this.getAll();
+        const item = all.find((entry) => entry.id === id);
+        if (!item) {
+            return;
+        }
+        if (item.held !== true) {
+            throw new Error(
+                `DiscardRefused: ${id} is not held. Only a held submission can be discarded, and only on an explicit instruction.`,
+            );
+        }
+        console.warn("[Offline] Discarded on instruction:", id, reason);
+        sparxstarIntegration.reportError("submission_discarded", {
+            submissionId: id,
+            reason: reason || "(no reason given)",
+            heldReason: item.heldReason || null,
+        });
+        await this.remove(id);
     }
 
     /**
@@ -914,6 +998,32 @@ export async function getQueueUsage() {
 }
 
 /**
+ * Put a held submission back in the queue and try it again.
+ *
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+export async function releaseHeldSubmission(id) {
+    const q = await getOfflineQueue();
+    return q.releaseHold(id);
+}
+
+/**
+ * Delete a held submission, on a person's explicit instruction.
+ *
+ * The only deletion here that is not a successful upload. Nothing automatic
+ * reaches it.
+ *
+ * @param {string} id
+ * @param {string} reason
+ * @returns {Promise<void>}
+ */
+export async function discardHeldSubmission(id, reason) {
+    const q = await getOfflineQueue();
+    return q.discardHeld(id, reason);
+}
+
+/**
  * Initialises the offline queue. Alias of getOfflineQueue.
  *
  * @returns {Promise<OfflineQueue>}
@@ -927,4 +1037,6 @@ if (typeof window !== "undefined") {
     window.StarmusOfflineQueue = getOfflineQueue;
     window.StarmusHeldSubmissions = getHeldSubmissions;
     window.StarmusQueueUsage = getQueueUsage;
+    window.StarmusReleaseHeldSubmission = releaseHeldSubmission;
+    window.StarmusDiscardHeldSubmission = discardHeldSubmission;
 }

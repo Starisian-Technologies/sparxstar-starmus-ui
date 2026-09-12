@@ -13000,6 +13000,9 @@
 
   /* ---- Helpers ---- */
 
+  /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
+  var UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
   /**
    * Sanitises a metadata value for TUS header transmission.
    * Objects are JSON-encoded; all values have control characters stripped.
@@ -13021,6 +13024,17 @@
   function normalizeFormFields(fields) {
     return fields && _typeof$9(fields) === "object" ? fields : {};
   }
+
+  /**
+   * Mint a UUID v4, refusing to run where secure randomness is unavailable.
+   *
+   * Exported so `starmus-core.js` mints the submission's id the same way rather
+   * than keeping a second, weaker copy: its own version used `crypto.randomUUID`
+   * only, which is absent on browsers this package supports, and there the
+   * submission silently lost its stable identity across retries.
+   *
+   * @returns {string}
+   */
   function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
@@ -13090,6 +13104,7 @@
         cfg,
         tusEndpoint,
         fields,
+        suppliedId,
         uploadId,
         tusMetadata,
         _i3,
@@ -13128,7 +13143,17 @@
             // the id from its last — an identifier matching no resource anywhere. The
             // caller supplies the id it will keep (the offline queue persists it with
             // the blob); a direct first attempt that has none gets one minted here.
-            uploadId = typeof metadata.uploadId === "string" && metadata.uploadId.trim() !== "" ? metadata.uploadId : createUploadId(); // Flatten all metadata into TUS metadata (strings only)
+            // A caller-supplied id is used only if it is actually a UUID v4. This is a
+            // public function, and the id becomes both the TUS `upload_uuid` and the
+            // resume fingerprint — an arbitrary string there would let two submissions
+            // collide on a resume key, which is the bug the fingerprint change fixed.
+            suppliedId = typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
+            uploadId = UUID_V4_PATTERN.test(suppliedId) ? suppliedId : createUploadId();
+            if (suppliedId !== "" && uploadId !== suppliedId) {
+              console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
+            }
+
+            // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
               upload_uuid: sanitizeMetadata(uploadId),
               filename: sanitizeMetadata(fileName),
@@ -13137,7 +13162,7 @@
               tier: sanitizeMetadata(metadata.tier || "C"),
               transcript: sanitizeMetadata(metadata.transcript || ""),
               calibration: sanitizeMetadata(metadata.calibration || ""),
-              env: sanitizeMetadata(metadata.env || ""),
+              env: sanitizeMetadata(metadata.env || "")
               // ADR-035 and the capture-to-ingestion contract: the capture profile
               // travels with the asset, so a later reader can tell whether a
               // measurement taken from it is admissible. It was being built in
@@ -13148,9 +13173,25 @@
               // not this package's to settle, so this reuses the name already fixed
               // by `starmus:complete` rather than inventing a second one. When the
               // seam names the key, this changes with it.
-              captureProfile: sanitizeMetadata(metadata.captureProfile || ""),
-              captureAttainment: sanitizeMetadata(metadata.captureAttainment || "")
-            }; // Merge form fields into TUS metadata
+            }; // The profile key is present with a value, or absent. Never present and
+            // empty: the Spoken Audio Node distinguishes "arrived with no profile"
+            // (stored, flagged, not a measurement source) from a profile it cannot
+            // read, and an empty string collapses the two. ADR-011 still holds — the
+            // recording goes either way; what it does not do is misdescribe itself.
+            if (metadata.captureProfile) {
+              tusMetadata.captureProfile = sanitizeMetadata(metadata.captureProfile);
+            } else {
+              console.warn("[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.");
+              sparxstarIntegration.reportError("upload_without_capture_profile", {
+                instanceId: instanceId,
+                tier: metadata.tier
+              });
+            }
+            if (metadata.captureAttainment) {
+              tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
+            }
+
+            // Merge form fields into TUS metadata
             for (_i3 = 0, _Object$entries3 = Object.entries(fields); _i3 < _Object$entries3.length; _i3++) {
               _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
               tusMetadata[key] = sanitizeMetadata(val);
@@ -13536,6 +13577,21 @@
     if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
       return "mp3";
     }
+
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+      return "webm";
+    }
     return null;
   }
 
@@ -13718,7 +13774,26 @@
       // 10 MB — Tier B
       C: 5 * 1024 * 1024 // 5 MB  — Tier C (default)
     },
-    defaultMaxBlobSize: 5 * 1024 * 1024
+    defaultMaxBlobSize: 5 * 1024 * 1024,
+    /**
+     * Total queue budget, from the platform's IndexedDB standard (20 MB).
+     *
+     * How it is spent is the part that needed deciding. The standard also says
+     * LRU, and LRU here means silently deleting the oldest recording to make
+     * room — which is the behaviour ADR-011 exists to prevent, and the one this
+     * queue was just changed to stop doing.
+     *
+     * So the budget is enforced at the door, not by eviction. When a new
+     * recording will not fit, the add is refused with an error naming what is
+     * occupying the space. The contributor is present and can act; a held
+     * recording from last week cannot advocate for itself.
+     *
+     * **Which recording loses when storage is genuinely full is not this
+     * module's call to make** — it is a sovereignty question about whose
+     * material is expendable, and it routes to the platform owner. Until it is
+     * ruled on, nothing is deleted automatically.
+     */
+    maxTotalBytes: 20 * 1024 * 1024
   };
 
   /** Tracks whether the singleton queue has installed its network listener. */
@@ -13772,10 +13847,17 @@
    *   server said 400 four times, and the bytes are the only copy once the page
    *   is closed.
    *
-   * Target eviction policy (Phase 3 — not yet implemented):
-   * - LRU, 20 MB maximum total queue size.
-   * - Entries older than 7 days are eligible for automatic eviction.
-   * - Eviction will run on queue initialization and after each successful upload.
+   * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
+   *   enforced at `add()`: a recording that will not fit is refused with an error
+   *   naming what is occupying the space. Nothing is evicted to make room.
+   *
+   * That last point is a deliberate departure from the platform standard's "LRU".
+   * LRU here means deleting a contributor's older recording so a newer one fits,
+   * which is the behaviour ADR-011 forbids and the one this queue was changed to
+   * stop. Whose material is expendable when a device is genuinely full is a
+   * sovereignty question for the platform owner, not a default this module picks.
+   * Until it is ruled on, the person standing in front of the device is told, and
+   * nothing already recorded is lost without someone deciding so.
    *
    * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
    */
@@ -13887,6 +13969,8 @@
           var formFields,
             metadata,
             maxAllowedSize,
+            usage,
+            heldNote,
             safeBlob,
             item,
             _args2 = arguments;
@@ -13908,6 +13992,17 @@
                 }
                 throw new Error("Audio too large (".concat((audioBlob.size / 1024 / 1024).toFixed(2), " MB); limit ").concat((maxAllowedSize / 1024 / 1024).toFixed(2), " MB"));
               case 2:
+                _context2.n = 3;
+                return this.usage();
+              case 3:
+                usage = _context2.v;
+                if (!(usage.totalBytes + audioBlob.size > CONFIG.maxTotalBytes)) {
+                  _context2.n = 4;
+                  break;
+                }
+                heldNote = usage.heldCount > 0 ? " ".concat(usage.heldCount, " held recording(s) occupy ").concat((usage.heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
+                throw new Error("QueueFull: the offline queue holds ".concat((usage.totalBytes / 1024 / 1024).toFixed(2), " MB of ") + "".concat((CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2), " MB and this recording needs ") + "".concat((audioBlob.size / 1024 / 1024).toFixed(2), " MB.").concat(heldNote, " ") + "Nothing is deleted to make room.");
+              case 4:
                 safeBlob = new Blob([audioBlob], {
                   type: audioBlob.type
                 });
@@ -14085,6 +14180,61 @@
         return _hold;
       }()
       /**
+       * What the queue is currently holding, in bytes and in entries.
+       *
+       * Exported through `getQueueUsage()` so a host can show the contributor how
+       * full the device is before they find out by being refused.
+       *
+       * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+       */
+      )
+    }, {
+      key: "usage",
+      value: (function () {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
+          var all, totalBytes, heldBytes, heldCount, _iterator, _step, _item$audioBlob, item, size;
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
+              case 0:
+                _context6.n = 1;
+                return this.getAll();
+              case 1:
+                all = _context6.v;
+                totalBytes = 0;
+                heldBytes = 0;
+                heldCount = 0;
+                _iterator = _createForOfIteratorHelper$1(all);
+                try {
+                  for (_iterator.s(); !(_step = _iterator.n()).done;) {
+                    item = _step.value;
+                    size = ((_item$audioBlob = item.audioBlob) === null || _item$audioBlob === void 0 ? void 0 : _item$audioBlob.size) || 0;
+                    totalBytes += size;
+                    if (item.held === true) {
+                      heldBytes += size;
+                      heldCount += 1;
+                    }
+                  }
+                } catch (err) {
+                  _iterator.e(err);
+                } finally {
+                  _iterator.f();
+                }
+                return _context6.a(2, {
+                  totalBytes: totalBytes,
+                  count: all.length,
+                  heldBytes: heldBytes,
+                  heldCount: heldCount,
+                  maxTotalBytes: CONFIG.maxTotalBytes
+                });
+            }
+          }, _callee6, this);
+        }));
+        function usage() {
+          return _usage.apply(this, arguments);
+        }
+        return usage;
+      }()
+      /**
        * Submissions that are kept but will not be retried without intervention.
        *
        * Surfaced so a host can show them rather than let them sit invisibly: a
@@ -14096,20 +14246,20 @@
     }, {
       key: "getHeld",
       value: (function () {
-        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
           var all;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.n) {
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
               case 0:
-                _context6.n = 1;
+                _context7.n = 1;
                 return this.getAll();
               case 1:
-                all = _context6.v;
-                return _context6.a(2, all.filter(function (item) {
+                all = _context7.v;
+                return _context7.a(2, all.filter(function (item) {
                   return item.held === true;
                 }));
             }
-          }, _callee6, this);
+          }, _callee7, this);
         }));
         function getHeld() {
           return _getHeld.apply(this, arguments);
@@ -14119,18 +14269,18 @@
     }, {
       key: "_updateRetry",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id, retryCount, error) {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id, retryCount, error) {
           var _this6 = this;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.n) {
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
               case 0:
                 if (this.db) {
-                  _context7.n = 1;
+                  _context8.n = 1;
                   break;
                 }
-                return _context7.a(2);
+                return _context8.a(2);
               case 1:
-                return _context7.a(2, new Promise(function (resolve, reject) {
+                return _context8.a(2, new Promise(function (resolve, reject) {
                   var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
@@ -14151,7 +14301,7 @@
                   };
                 }));
             }
-          }, _callee7, this);
+          }, _callee8, this);
         }));
         function _updateRetry(_x7, _x8, _x9) {
           return _updateRetry2.apply(this, arguments);
@@ -14168,76 +14318,77 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3, _t4;
-          return _regenerator().w(function (_context8) {
-            while (1) switch (_context8.p = _context8.n) {
+          var pending, _iterator2, _step2, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, uploaded, delay, _metadata$durationMs, _metadata$env2, result, detail, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.p = _context9.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context8.n = 1;
+                  _context9.n = 1;
                   break;
                 }
-                return _context8.a(2);
+                return _context9.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context8.n = 2;
+                _context9.n = 2;
                 return this.getAll();
               case 2:
-                pending = _context8.v;
+                pending = _context9.v;
                 if (!(pending.length === 0)) {
-                  _context8.n = 3;
+                  _context9.n = 3;
                   break;
                 }
-                return _context8.a(2);
+                return _context9.a(2);
               case 3:
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context8.n = 4;
+                  _context9.n = 4;
                   break;
                 }
-                return _context8.a(2);
+                return _context9.a(2);
               case 4:
                 this.isProcessing = true;
-                _context8.p = 5;
+                _context9.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
-                _iterator = _createForOfIteratorHelper$1(pending);
-                _context8.p = 6;
-                _iterator.s();
+                _iterator2 = _createForOfIteratorHelper$1(pending);
+                _context9.p = 6;
+                _iterator2.s();
               case 7:
-                if ((_step = _iterator.n()).done) {
-                  _context8.n = 18;
+                if ((_step2 = _iterator2.n()).done) {
+                  _context9.n = 23;
                   break;
                 }
-                item = _step.value;
-                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId;
+                item = _step2.value;
+                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId; // Whether the bytes reached the server on this attempt.
+                uploaded = false;
                 if (!item.held) {
-                  _context8.n = 8;
+                  _context9.n = 8;
                   break;
                 }
-                return _context8.a(3, 17);
+                return _context9.a(3, 22);
               case 8:
                 if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context8.n = 10;
+                  _context9.n = 10;
                   break;
                 }
-                _context8.n = 9;
+                _context9.n = 9;
                 return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
               case 9:
-                return _context8.a(3, 17);
+                return _context9.a(3, 22);
               case 10:
                 if (!(item.lastAttempt !== null)) {
-                  _context8.n = 11;
+                  _context9.n = 11;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context8.n = 11;
+                  _context9.n = 11;
                   break;
                 }
-                return _context8.a(3, 17);
+                return _context9.a(3, 22);
               case 11:
-                _context8.p = 11;
-                _context8.n = 12;
+                _context9.p = 11;
+                _context9.n = 12;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -14246,7 +14397,7 @@
                   instanceId: instanceId
                 });
               case 12:
-                result = _context8.v;
+                result = _context9.v;
                 // `starmus:complete` is the boundary before any
                 // server-side processing (ADR-034). A queued upload that
                 // drains is as complete as an immediate one, so it fires
@@ -14287,73 +14438,103 @@
                     captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
                   });
                 }
-                _context8.n = 13;
-                return this.remove(id);
-              case 13:
-                _context8.n = 17;
+                uploaded = true;
+                _context9.n = 19;
                 break;
+              case 13:
+                _context9.p = 13;
+                _t = _context9.v;
+                if (!uploaded) {
+                  _context9.n = 15;
+                  break;
+                }
+                // Reaching here after a successful transfer means the
+                // completion handling threw, not the upload. Re-queuing
+                // or retrying would send an asset the server already
+                // has. Hold it instead, so a person can see it and the
+                // next drain does not upload it again.
+                _msg = _t && _t.message ? _t.message : String(_t);
+                console.error("[Offline] Uploaded, but completion failed:", id, _msg);
+                _context9.n = 14;
+                return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
               case 14:
-                _context8.p = 14;
-                _t = _context8.v;
+                return _context9.a(3, 22);
+              case 15:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context8.n = 16;
+                  _context9.n = 17;
                   break;
                 }
-                _context8.n = 15;
+                _context9.n = 16;
                 return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
-              case 15:
-                _context8.n = 17;
-                break;
               case 16:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context8.n = 17;
-                return this._updateRetry(id, nextRetryCount, msg);
+                _context9.n = 18;
+                break;
               case 17:
-                _context8.n = 7;
-                break;
+                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                _context9.n = 18;
+                return this._updateRetry(id, nextRetryCount, msg);
               case 18:
-                _context8.n = 20;
-                break;
+                return _context9.a(3, 22);
               case 19:
-                _context8.p = 19;
-                _t2 = _context8.v;
-                _iterator.e(_t2);
+                _context9.p = 19;
+                _context9.n = 20;
+                return this.remove(id);
               case 20:
-                _context8.p = 20;
-                _iterator.f();
-                return _context8.f(20);
-              case 21:
-                _context8.n = 23;
+                _context9.n = 22;
                 break;
+              case 21:
+                _context9.p = 21;
+                _t2 = _context9.v;
+                _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
+                console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
+                _context9.n = 22;
+                return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
               case 22:
-                _context8.p = 22;
-                _t3 = _context8.v;
-                console.error("[Offline] Queue fatal:", _t3);
+                _context9.n = 7;
+                break;
               case 23:
-                _context8.p = 23;
-                this.isProcessing = false;
-                _context8.p = 24;
-                _context8.n = 25;
-                return this._getNextProcessDelay();
+                _context9.n = 25;
+                break;
+              case 24:
+                _context9.p = 24;
+                _t3 = _context9.v;
+                _iterator2.e(_t3);
               case 25:
-                nextDelay = _context8.v;
+                _context9.p = 25;
+                _iterator2.f();
+                return _context9.f(25);
+              case 26:
+                _context9.n = 28;
+                break;
+              case 27:
+                _context9.p = 27;
+                _t4 = _context9.v;
+                console.error("[Offline] Queue fatal:", _t4);
+              case 28:
+                _context9.p = 28;
+                this.isProcessing = false;
+                _context9.p = 29;
+                _context9.n = 30;
+                return this._getNextProcessDelay();
+              case 30:
+                nextDelay = _context9.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context8.n = 27;
+                _context9.n = 32;
                 break;
-              case 26:
-                _context8.p = 26;
-                _t4 = _context8.v;
-                console.error("[Offline] Failed to schedule next queue processing:", _t4);
-              case 27:
-                return _context8.f(23);
-              case 28:
-                return _context8.a(2);
+              case 31:
+                _context9.p = 31;
+                _t5 = _context9.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t5);
+              case 32:
+                return _context9.f(28);
+              case 33:
+                return _context9.a(2);
             }
-          }, _callee8, this, [[24, 26], [11, 14], [6, 19, 20, 21], [5, 22, 23, 28]]);
+          }, _callee9, this, [[29, 31], [19, 21], [11, 13], [6, 24, 25, 26], [5, 27, 28, 33]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14439,37 +14620,37 @@
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
-          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t5;
-          return _regenerator().w(function (_context9) {
-            while (1) switch (_context9.p = _context9.n) {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
+          var pending, nextDelay, now, _iterator3, _step3, item, retryDelay, remainingDelay, _t6;
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.p = _context0.n) {
               case 0:
-                _context9.n = 1;
+                _context0.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context9.v;
+                pending = _context0.v;
                 if (!(pending.length === 0)) {
-                  _context9.n = 2;
+                  _context0.n = 2;
                   break;
                 }
-                return _context9.a(2, null);
+                return _context0.a(2, null);
               case 2:
                 nextDelay = null;
                 now = Date.now();
-                _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context9.p = 3;
-                _iterator2.s();
+                _iterator3 = _createForOfIteratorHelper$1(pending);
+                _context0.p = 3;
+                _iterator3.s();
               case 4:
-                if ((_step2 = _iterator2.n()).done) {
-                  _context9.n = 7;
+                if ((_step3 = _iterator3.n()).done) {
+                  _context0.n = 7;
                   break;
                 }
-                item = _step2.value;
+                item = _step3.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context9.n = 5;
+                  _context0.n = 5;
                   break;
                 }
-                return _context9.a(2, 0);
+                return _context0.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -14477,23 +14658,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context9.n = 4;
+                _context0.n = 4;
                 break;
               case 7:
-                _context9.n = 9;
+                _context0.n = 9;
                 break;
               case 8:
-                _context9.p = 8;
-                _t5 = _context9.v;
-                _iterator2.e(_t5);
+                _context0.p = 8;
+                _t6 = _context0.v;
+                _iterator3.e(_t6);
               case 9:
-                _context9.p = 9;
-                _iterator2.f();
-                return _context9.f(9);
+                _context0.p = 9;
+                _iterator3.f();
+                return _context0.f(9);
               case 10:
-                return _context9.a(2, nextDelay);
+                return _context0.a(2, nextDelay);
             }
-          }, _callee9, this, [[3, 8, 9, 10]]);
+          }, _callee0, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -14591,22 +14772,22 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
-      return _regenerator().w(function (_context0) {
-        while (1) switch (_context0.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1() {
+      return _regenerator().w(function (_context1) {
+        while (1) switch (_context1.n) {
           case 0:
             if (offlineQueue.db) {
-              _context0.n = 2;
+              _context1.n = 2;
               break;
             }
-            _context0.n = 1;
+            _context1.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context0.a(2, offlineQueue);
+            return _context1.a(2, offlineQueue);
         }
-      }, _callee0);
+      }, _callee1);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
@@ -14623,18 +14804,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context1) {
-        while (1) switch (_context1.n) {
+      return _regenerator().w(function (_context10) {
+        while (1) switch (_context10.n) {
           case 0:
-            _context1.n = 1;
+            _context10.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context1.v;
-            return _context1.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context10.v;
+            return _context10.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee1);
+      }, _callee10);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -14650,22 +14831,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
       var q, list;
-      return _regenerator().w(function (_context10) {
-        while (1) switch (_context10.n) {
+      return _regenerator().w(function (_context11) {
+        while (1) switch (_context11.n) {
           case 0:
-            _context10.n = 1;
+            _context11.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context10.v;
-            _context10.n = 2;
+            q = _context11.v;
+            _context11.n = 2;
             return q.getAll();
           case 2:
-            list = _context10.v;
-            return _context10.a(2, list.length);
+            list = _context11.v;
+            return _context11.a(2, list.length);
         }
-      }, _callee10);
+      }, _callee11);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -14674,25 +14855,53 @@
   }
 
   /**
+   * How full the offline queue is.
+   *
+   * A host shows this so a contributor learns the device is nearly full before a
+   * recording is refused, rather than at the moment they finish speaking.
+   *
+   * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+   */
+  function _getHeldSubmissions() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
+      var q;
+      return _regenerator().w(function (_context12) {
+        while (1) switch (_context12.n) {
+          case 0:
+            _context12.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context12.v;
+            return _context12.a(2, q.getHeld());
+        }
+      }, _callee12);
+    }));
+    return _getHeldSubmissions.apply(this, arguments);
+  }
+  function getQueueUsage() {
+    return _getQueueUsage.apply(this, arguments);
+  }
+
+  /**
    * Initialises the offline queue. Alias of getOfflineQueue.
    *
    * @returns {Promise<OfflineQueue>}
    */
-  function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
+  function _getQueueUsage() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
       var q;
-      return _regenerator().w(function (_context11) {
-        while (1) switch (_context11.n) {
+      return _regenerator().w(function (_context13) {
+        while (1) switch (_context13.n) {
           case 0:
-            _context11.n = 1;
+            _context13.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context11.v;
-            return _context11.a(2, q.getHeld());
+            q = _context13.v;
+            return _context13.a(2, q.usage());
         }
-      }, _callee11);
+      }, _callee13);
     }));
-    return _getHeldSubmissions.apply(this, arguments);
+    return _getQueueUsage.apply(this, arguments);
   }
   function initOffline() {
     return getOfflineQueue();
@@ -14701,6 +14910,7 @@
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
     window.StarmusHeldSubmissions = getHeldSubmissions;
+    window.StarmusQueueUsage = getQueueUsage;
   }
 
   /**
@@ -14858,7 +15068,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, uploadId, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -14879,18 +15089,25 @@
               return _context.a(2);
             case 1:
               // ADR-035 / capture-to-ingestion contract: the capture profile travels
-              // with the asset. This object is what the direct and TUS serializers
-              // send and what the offline queue persists for later retry, so the
-              // profile has to be in it here or it reaches ingestion on no path at
-              // all. `null` means the recorder never reported one (a file upload via
-              // the Tier C fallback), which is itself information the consumer needs.
+              // with the asset. This object is what the upload serializes and what
+              // the offline queue persists for later retry, so the profile has to be
+              // in it here or it reaches ingestion on no path at all. A recorded
+              // session carries the profile the recorder attained; an attached file
+              // carries `import`. `null` is left for a source that reported no
+              // profile at all, which is itself information the consumer needs — the
+              // Node stores such an asset and marks it inadmissible for measurement
+              // rather than refusing it.
               captureAttainment = source.captureAttainment || null; // Minted once per submission and carried into both the immediate
               // attempt and the queued retry, so a recording that is resumed hours
               // later still reports the identifier the server knows it by.
-              uploadId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : null;
-              metadata = _objectSpread2(_objectSpread2({}, uploadId === null ? {} : {
-                uploadId: uploadId
-              }), {}, {
+              //
+              // Through the upload module's helper rather than `crypto.randomUUID`
+              // directly: that API is missing on browsers this package supports, and
+              // reaching for it alone left the id unset on exactly those devices —
+              // where a retry over a bad link is likeliest and a stable identity
+              // matters most.
+              metadata = {
+                uploadId: createUploadId(),
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 calibration: calibration.complete ? {
                   gain: calibration.gain,
@@ -14905,7 +15122,7 @@
                 mimeType: ((_source$metadata2 = source.metadata) === null || _source$metadata2 === void 0 ? void 0 : _source$metadata2.mimeType) || audioBlob.type || "",
                 env: stateEnv,
                 tier: stateEnv.tier || (currentEnvData === null || currentEnvData === void 0 ? void 0 : currentEnvData.tier) || "C"
-              });
+              };
               store.dispatch({
                 type: "starmus/submit-start"
               });

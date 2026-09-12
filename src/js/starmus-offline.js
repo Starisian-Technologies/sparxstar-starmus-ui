@@ -40,6 +40,25 @@ const CONFIG = {
         C: 5 * 1024 * 1024, // 5 MB  — Tier C (default)
     },
     defaultMaxBlobSize: 5 * 1024 * 1024,
+    /**
+     * Total queue budget, from the platform's IndexedDB standard (20 MB).
+     *
+     * How it is spent is the part that needed deciding. The standard also says
+     * LRU, and LRU here means silently deleting the oldest recording to make
+     * room — which is the behaviour ADR-011 exists to prevent, and the one this
+     * queue was just changed to stop doing.
+     *
+     * So the budget is enforced at the door, not by eviction. When a new
+     * recording will not fit, the add is refused with an error naming what is
+     * occupying the space. The contributor is present and can act; a held
+     * recording from last week cannot advocate for itself.
+     *
+     * **Which recording loses when storage is genuinely full is not this
+     * module's call to make** — it is a sovereignty question about whose
+     * material is expendable, and it routes to the platform owner. Until it is
+     * ruled on, nothing is deleted automatically.
+     */
+    maxTotalBytes: 20 * 1024 * 1024,
 };
 
 /** Tracks whether the singleton queue has installed its network listener. */
@@ -97,10 +116,17 @@ function createOfflineSubmissionId() {
  *   server said 400 four times, and the bytes are the only copy once the page
  *   is closed.
  *
- * Target eviction policy (Phase 3 — not yet implemented):
- * - LRU, 20 MB maximum total queue size.
- * - Entries older than 7 days are eligible for automatic eviction.
- * - Eviction will run on queue initialization and after each successful upload.
+ * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
+ *   enforced at `add()`: a recording that will not fit is refused with an error
+ *   naming what is occupying the space. Nothing is evicted to make room.
+ *
+ * That last point is a deliberate departure from the platform standard's "LRU".
+ * LRU here means deleting a contributor's older recording so a newer one fits,
+ * which is the behaviour ADR-011 forbids and the one this queue was changed to
+ * stop. Whose material is expendable when a device is genuinely full is a
+ * sovereignty question for the platform owner, not a default this module picks.
+ * Until it is ruled on, the person standing in front of the device is told, and
+ * nothing already recorded is lost without someone deciding so.
  *
  * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
  */
@@ -197,6 +223,25 @@ class OfflineQueue {
         if (audioBlob.size > maxAllowedSize) {
             throw new Error(
                 `Audio too large (${(audioBlob.size / 1024 / 1024).toFixed(2)} MB); limit ${(maxAllowedSize / 1024 / 1024).toFixed(2)} MB`,
+            );
+        }
+
+        // Per-blob was the only bound; the platform standard also caps the
+        // queue as a whole. Without that, repeated failures accumulate held
+        // entries until IndexedDB refuses the transaction — and a quota error
+        // at `add()` loses the recording being made right now, which is the
+        // worst possible moment to find out.
+        const usage = await this.usage();
+        if (usage.totalBytes + audioBlob.size > CONFIG.maxTotalBytes) {
+            const heldNote =
+                usage.heldCount > 0
+                    ? ` ${usage.heldCount} held recording(s) occupy ${(usage.heldBytes / 1024 / 1024).toFixed(2)} MB and need attention before more will fit.`
+                    : "";
+            throw new Error(
+                `QueueFull: the offline queue holds ${(usage.totalBytes / 1024 / 1024).toFixed(2)} MB of ` +
+                    `${(CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2)} MB and this recording needs ` +
+                    `${(audioBlob.size / 1024 / 1024).toFixed(2)} MB.${heldNote} ` +
+                    "Nothing is deleted to make room.",
             );
         }
 
@@ -314,6 +359,36 @@ class OfflineQueue {
     }
 
     /**
+     * What the queue is currently holding, in bytes and in entries.
+     *
+     * Exported through `getQueueUsage()` so a host can show the contributor how
+     * full the device is before they find out by being refused.
+     *
+     * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+     */
+    async usage() {
+        const all = await this.getAll();
+        let totalBytes = 0;
+        let heldBytes = 0;
+        let heldCount = 0;
+        for (const item of all) {
+            const size = item.audioBlob?.size || 0;
+            totalBytes += size;
+            if (item.held === true) {
+                heldBytes += size;
+                heldCount += 1;
+            }
+        }
+        return {
+            totalBytes,
+            count: all.length,
+            heldBytes,
+            heldCount,
+            maxTotalBytes: CONFIG.maxTotalBytes,
+        };
+    }
+
+    /**
      * Submissions that are kept but will not be retried without intervention.
      *
      * Surfaced so a host can show them rather than let them sit invisibly: a
@@ -381,6 +456,8 @@ class OfflineQueue {
             for (const item of pending) {
                 const { id, audioBlob, fileName, formFields, metadata, retryCount, instanceId } =
                     item;
+                // Whether the bytes reached the server on this attempt.
+                let uploaded = false;
 
                 if (item.held) {
                     // Already held for a person. Retrying it on every drain
@@ -457,8 +534,19 @@ class OfflineQueue {
                         });
                     }
 
-                    await this.remove(id);
+                    uploaded = true;
                 } catch (err) {
+                    if (uploaded) {
+                        // Reaching here after a successful transfer means the
+                        // completion handling threw, not the upload. Re-queuing
+                        // or retrying would send an asset the server already
+                        // has. Hold it instead, so a person can see it and the
+                        // next drain does not upload it again.
+                        const msg = err && err.message ? err.message : String(err);
+                        console.error("[Offline] Uploaded, but completion failed:", id, msg);
+                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`);
+                        continue;
+                    }
                     const msg = err && err.message ? err.message : String(err);
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                     if (nonRetryable) {
@@ -471,6 +559,22 @@ class OfflineQueue {
                         const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
                         await this._updateRetry(id, nextRetryCount, msg);
                     }
+                    continue;
+                }
+
+                // Cleanup, outside the transfer's try. An IndexedDB delete that
+                // fails is a storage problem, not an upload one; recorded as an
+                // upload failure it left the entry retryable and the next drain
+                // uploaded the same recording again.
+                try {
+                    await this.remove(id);
+                } catch (cleanupError) {
+                    const msg =
+                        cleanupError && cleanupError.message
+                            ? cleanupError.message
+                            : String(cleanupError);
+                    console.error("[Offline] Uploaded but could not clear the entry:", id, msg);
+                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`);
                 }
             }
         } catch (fatal) {
@@ -708,6 +812,19 @@ export async function getHeldSubmissions() {
 }
 
 /**
+ * How full the offline queue is.
+ *
+ * A host shows this so a contributor learns the device is nearly full before a
+ * recording is refused, rather than at the moment they finish speaking.
+ *
+ * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+ */
+export async function getQueueUsage() {
+    const q = await getOfflineQueue();
+    return q.usage();
+}
+
+/**
  * Initialises the offline queue. Alias of getOfflineQueue.
  *
  * @returns {Promise<OfflineQueue>}
@@ -720,4 +837,5 @@ if (typeof window !== "undefined") {
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
     window.StarmusHeldSubmissions = getHeldSubmissions;
+    window.StarmusQueueUsage = getQueueUsage;
 }

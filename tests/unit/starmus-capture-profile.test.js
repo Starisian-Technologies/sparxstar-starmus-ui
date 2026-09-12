@@ -61,3 +61,16 @@ test("the import profile preserves material rather than reshaping it", () => {
     assert.equal(profile.channelCount, null, "import must not fold channels down");
     assert.equal(profile.audioBitsPerSecond, null, "import must not re-encode to a bitrate");
 });
+
+test("webm with no codec stated is named, not dropped", async () => {
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+    // The recorder's own fallback is `mimeType || "audio/webm"`, so this is the
+    // real path, not a hypothetical one. Returning null here meant a recording
+    // produced no `starmus:complete` at all.
+    assert.equal(resolveUploadFormat("audio/webm", "take.webm"), "webm");
+    assert.equal(
+        resolveUploadFormat("audio/webm;codecs=opus", "take.webm"),
+        "opus",
+        "a stated codec is still preferred over the container",
+    );
+});

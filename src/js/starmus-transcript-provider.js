@@ -67,6 +67,15 @@ export const DEFAULT_MAX_PROVIDER_MS = 3600000;
 export const MAX_PROVIDER_RESTARTS = 5;
 
 /**
+ * The device tiers this package knows.
+ *
+ * A value outside this set is a caller error, not a tier to interpret.
+ *
+ * @type {readonly string[]}
+ */
+export const SUPPORTED_TIERS = Object.freeze(["A", "B", "C"]);
+
+/**
  * How long `stop()` waits for the engine's closing result before settling.
  *
  * The engine delivers a final result for audio it already heard after being
@@ -266,9 +275,14 @@ export function openTranscriptSlot({
     maxDurationMs = DEFAULT_MAX_PROVIDER_MS,
     onUpdate,
 }) {
-    if (typeof tier !== "string" || tier === "") {
+    // Validated against the model, not merely checked for emptiness. Rejecting
+    // only `""` let `'c'` or `'D'` past the Tier C guard below and open a
+    // provider for a tier that does not exist — failing open on the one
+    // decision that says whether a microphone surface is permitted at all.
+    if (!SUPPORTED_TIERS.includes(tier)) {
         throw new Error(
-            "TRANSCRIPT_SLOT_NO_TIER: tier is required. It decides whether a microphone surface exists at all, and this slot does not guess it.",
+            `TRANSCRIPT_SLOT_BAD_TIER: tier must be one of ${SUPPORTED_TIERS.join(", ")}; received ${JSON.stringify(tier)}. ` +
+                "It decides whether a microphone surface exists at all, and this slot does not guess it.",
         );
     }
     // Tier C is file upload only — no microphone, and so no live transcript.

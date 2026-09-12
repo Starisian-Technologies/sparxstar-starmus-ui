@@ -83,12 +83,20 @@ test("a slot without a recording clock is refused", () => {
     );
 });
 
-test("a slot without a tier is refused rather than guessed either way", () => {
+test("a tier outside the model is refused, not interpreted", () => {
     clearTranscriptProviders();
     stubProvider();
+    for (const tier of [undefined, "", "c", "D", "tier-a", 1]) {
+        assert.throws(
+            () => openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0, tier }),
+            /TRANSCRIPT_SLOT_BAD_TIER/,
+            `${JSON.stringify(tier)} must not open a slot`,
+        );
+    }
+    // Lowercase 'c' must not sneak past the Tier C guard and open a provider.
     assert.throws(
-        () => openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0 }),
-        /TRANSCRIPT_SLOT_NO_TIER/,
+        () => openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0, tier: "c" }),
+        /TRANSCRIPT_SLOT_BAD_TIER/,
     );
 });
 

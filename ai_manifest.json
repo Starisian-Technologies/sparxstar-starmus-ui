@@ -35,6 +35,19 @@
         { "symbol": "clearTranscriptProviders",   "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
         { "symbol": "createBrowserSpeechProvider","type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
         { "symbol": "TRANSCRIPT_AUTHORITY",  "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
-        { "symbol": "DEFAULT_MAX_PROVIDER_MS","type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" }
+        { "symbol": "DEFAULT_MAX_PROVIDER_MS","type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "MAX_PROVIDER_RESTARTS", "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "SETTLE_GRACE_MS",       "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "SUPPORTED_TIERS",       "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "getHeldSubmissions",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "getQueueUsage",         "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "getPendingCount",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "createUploadId",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
+        { "symbol": "DEFAULT_CAPTURE_PROFILE",   "type": "constant", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "activeCaptureProfileName",  "type": "function", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "describeAttainment",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "getAudioConstraints",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "getRecorderOptions",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "starmusCapabilities",       "type": "object",   "owner": "Starisian", "path": "src/js/starmus-core.js" }
     ]
 }

@@ -2,6 +2,9 @@
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
+
+const ROOT_DIR = path.resolve(__dirname, "..");
 
 console.log("🔍 Validating build configuration...\n");
 
@@ -203,13 +206,22 @@ if (fs.existsSync(tusFile)) {
     // ADR-035 and the capture-to-ingestion contract: the capture profile
     // travels with the asset. It was being assembled in starmus-core.js and
     // then dropped before transmission, so it reached ingestion on no path.
-    if (!/captureProfile\s*:/.test(tusContent)) {
+    // Checking that the property name appears would pass
+    // `captureProfile: metadata.captureProfile || ""`, which transmits an empty
+    // profile — indistinguishable downstream from a profile the Node could not
+    // read, when it actually means none was set. So: the key must be assigned
+    // conditionally, and the empty-string default must not return.
+    const profileSentConditionally = /if\s*\(\s*metadata\.captureProfile\s*\)/.test(tusContent);
+    const profileDefaultsToEmpty = /captureProfile\s*:\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\|\|/.test(
+        tusContent,
+    );
+    if (!profileSentConditionally || profileDefaultsToEmpty) {
         console.log(
-            "❌ starmus-tus.js: the capture profile must travel with the asset in upload metadata (ADR-035; AGENTS.md: 'An asset uploaded without its capture profile recorded' is a FAIL).",
+            "❌ starmus-tus.js: the capture profile must travel with the asset as a present value or be absent — never present and empty (ADR-035; AGENTS.md: 'An asset uploaded without its capture profile recorded' is a FAIL).",
         );
         ok = false;
     } else {
-        console.log("✅ Capture profile travels with the asset");
+        console.log("✅ Capture profile travels with the asset, or is absent — never empty");
     }
 
     // A total-duration abort on a resumable upload ends every real upload on a
@@ -279,6 +291,33 @@ if (fs.existsSync(tusFile)) {
     }
     if (oneHome) {
         console.log("✅ Capture constraints have one home (starmus-capture-profiles.js)");
+    }
+}
+
+// ---- CHECK ai_manifest.json IS COMPLETE ----
+// AGENTS.md: check the manifest before creating any symbol, and update it when
+// one is added, removed or renamed. A manifest that silently drifts is worse
+// than none, because the rule says to trust it.
+{
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "ai_manifest.json"), "utf8"));
+    const listed = new Set(manifest.symbols.map((entry) => entry.symbol));
+    const exported = new Set();
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        const pattern = /export\s+(?:async\s+)?(?:function|const|class)\s+(\w+)/g;
+        let match;
+        while ((match = pattern.exec(content)) !== null) {
+            exported.add(match[1]);
+        }
+    }
+    const missing = [...exported].filter((symbol) => !listed.has(symbol)).sort();
+    if (missing.length > 0) {
+        console.log(
+            `❌ ai_manifest.json is missing ${missing.length} exported symbol(s): ${missing.join(", ")}. AGENTS.md requires the manifest to track every symbol added, removed or renamed.`,
+        );
+        ok = false;
+    } else {
+        console.log("✅ ai_manifest.json lists every exported symbol");
     }
 }
 

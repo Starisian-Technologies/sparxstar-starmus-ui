@@ -22,7 +22,7 @@
 "use strict";
 
 import { CommandBus } from "./starmus-hooks.js";
-import { uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
@@ -183,21 +183,26 @@ export function initCore(store, instanceId, env) {
         }
 
         // ADR-035 / capture-to-ingestion contract: the capture profile travels
-        // with the asset. This object is what the direct and TUS serializers
-        // send and what the offline queue persists for later retry, so the
-        // profile has to be in it here or it reaches ingestion on no path at
-        // all. `null` means the recorder never reported one (a file upload via
-        // the Tier C fallback), which is itself information the consumer needs.
+        // with the asset. This object is what the upload serializes and what
+        // the offline queue persists for later retry, so the profile has to be
+        // in it here or it reaches ingestion on no path at all. A recorded
+        // session carries the profile the recorder attained; an attached file
+        // carries `import`. `null` is left for a source that reported no
+        // profile at all, which is itself information the consumer needs — the
+        // Node stores such an asset and marks it inadmissible for measurement
+        // rather than refusing it.
         const captureAttainment = source.captureAttainment || null;
         // Minted once per submission and carried into both the immediate
         // attempt and the queued retry, so a recording that is resumed hours
         // later still reports the identifier the server knows it by.
-        const uploadId =
-            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-                ? crypto.randomUUID()
-                : null;
+        //
+        // Through the upload module's helper rather than `crypto.randomUUID`
+        // directly: that API is missing on browsers this package supports, and
+        // reaching for it alone left the id unset on exactly those devices —
+        // where a retry over a bad link is likeliest and a stable identity
+        // matters most.
         const metadata = {
-            ...(uploadId === null ? {} : { uploadId }),
+            uploadId: createUploadId(),
             transcript: source.transcript?.trim() || null,
             calibration: calibration.complete
                 ? { gain: calibration.gain, speechLevel: calibration.speechLevel }

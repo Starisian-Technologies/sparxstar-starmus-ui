@@ -54,25 +54,57 @@ export default function URLParse(address, location) {
         include: /node_modules/,
     }),
 
-    babel({
-        babelHelpers: "bundled",
-        exclude: "node_modules/**",
-        presets: [
-            [
-                "@babel/preset-env",
-                {
-                    targets: {
-                        android: "5",
-                        safari: "12",
-                        chrome: "70",
-                    },
-                    useBuiltIns: "usage",
-                    corejs: 3,
-                },
-            ],
-        ],
-    }),
 ];
+
+/**
+ * The recorder's target: the oldest devices the platform supports.
+ *
+ * File upload works on all of them, so the recorder bundle has to as well.
+ */
+const RECORDER_TARGETS = {
+    android: "5",
+    safari: "12",
+    chrome: "70",
+};
+
+/**
+ * The transcript slot's target: browsers that have `SpeechRecognition`.
+ *
+ * The slot is Tier A/B only and does nothing without the Web Speech API, which
+ * no Android 5 or Safari 12 browser has. Polyfilling it down to those was
+ * paying — in bytes, on metered connections — for compatibility the capability
+ * cannot have. Narrowing the target here is why the bundle fits its budget;
+ * raising the budget would have hidden the same waste.
+ */
+const TRANSCRIPT_TARGETS = {
+    android: "67",
+    safari: "14.1",
+    chrome: "67",
+};
+
+/**
+ * @param {Object} targets A @babel/preset-env `targets` object.
+ * @returns {Array} Plugins for one bundle.
+ */
+function pluginsFor(targets) {
+    return [
+        ...sharedPlugins,
+        babel({
+            babelHelpers: "bundled",
+            exclude: "node_modules/**",
+            presets: [
+                [
+                    "@babel/preset-env",
+                    {
+                        targets,
+                        useBuiltIns: "usage",
+                        corejs: 3,
+                    },
+                ],
+            ],
+        }),
+    ];
+}
 
 export default [
     // Main Bundle (unminified — consuming build minifies)
@@ -88,7 +120,7 @@ export default [
 
         external: [],
 
-        plugins: sharedPlugins,
+        plugins: pluginsFor(RECORDER_TARGETS),
     },
 
     // Live-transcript slot (ADR-038) — a separate bundle on purpose. It is a
@@ -106,6 +138,6 @@ export default [
 
         external: [],
 
-        plugins: sharedPlugins,
+        plugins: pluginsFor(TRANSCRIPT_TARGETS),
     },
 ];

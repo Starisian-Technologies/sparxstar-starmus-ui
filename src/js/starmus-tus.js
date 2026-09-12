@@ -149,6 +149,10 @@ function getConfig() {
 
 /* ---- Helpers ---- */
 
+/** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
+const UUID_V4_PATTERN =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * Sanitises a metadata value for TUS header transmission.
  * Objects are JSON-encoded; all values have control characters stripped.
@@ -172,7 +176,17 @@ function normalizeFormFields(fields) {
     return fields && typeof fields === "object" ? fields : {};
 }
 
-function createUploadId() {
+/**
+ * Mint a UUID v4, refusing to run where secure randomness is unavailable.
+ *
+ * Exported so `starmus-core.js` mints the submission's id the same way rather
+ * than keeping a second, weaker copy: its own version used `crypto.randomUUID`
+ * only, which is absent on browsers this package supports, and there the
+ * submission silently lost its stable identity across retries.
+ *
+ * @returns {string}
+ */
+export function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
         return crypto.randomUUID();
     }
@@ -228,10 +242,16 @@ export async function uploadTus(
     // the id from its last — an identifier matching no resource anywhere. The
     // caller supplies the id it will keep (the offline queue persists it with
     // the blob); a direct first attempt that has none gets one minted here.
-    const uploadId =
-        typeof metadata.uploadId === "string" && metadata.uploadId.trim() !== ""
-            ? metadata.uploadId
-            : createUploadId();
+    // A caller-supplied id is used only if it is actually a UUID v4. This is a
+    // public function, and the id becomes both the TUS `upload_uuid` and the
+    // resume fingerprint — an arbitrary string there would let two submissions
+    // collide on a resume key, which is the bug the fingerprint change fixed.
+    const suppliedId =
+        typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
+    const uploadId = UUID_V4_PATTERN.test(suppliedId) ? suppliedId : createUploadId();
+    if (suppliedId !== "" && uploadId !== suppliedId) {
+        console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
+    }
 
     // Flatten all metadata into TUS metadata (strings only)
     const tusMetadata = {
@@ -253,9 +273,27 @@ export async function uploadTus(
         // not this package's to settle, so this reuses the name already fixed
         // by `starmus:complete` rather than inventing a second one. When the
         // seam names the key, this changes with it.
-        captureProfile: sanitizeMetadata(metadata.captureProfile || ""),
-        captureAttainment: sanitizeMetadata(metadata.captureAttainment || ""),
     };
+
+    // The profile key is present with a value, or absent. Never present and
+    // empty: the Spoken Audio Node distinguishes "arrived with no profile"
+    // (stored, flagged, not a measurement source) from a profile it cannot
+    // read, and an empty string collapses the two. ADR-011 still holds — the
+    // recording goes either way; what it does not do is misdescribe itself.
+    if (metadata.captureProfile) {
+        tusMetadata.captureProfile = sanitizeMetadata(metadata.captureProfile);
+    } else {
+        console.warn(
+            "[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.",
+        );
+        sparxstarIntegration.reportError("upload_without_capture_profile", {
+            instanceId,
+            tier: metadata.tier,
+        });
+    }
+    if (metadata.captureAttainment) {
+        tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
+    }
 
     // Merge form fields into TUS metadata
     for (const [key, val] of Object.entries(fields)) {

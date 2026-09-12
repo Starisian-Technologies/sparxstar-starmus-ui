@@ -153,7 +153,11 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // pending OQ-021, so this package reports the format it has rather than
     // deciding an arriving format is inadmissible. The Spoken Audio Node
     // rules on admissibility, where refusing does not cost the recording.
-    format: 'opus' | 'aac-lc' | 'wav' | 'mp3',
+    // `webm` covers a WebM container whose codec was not stated — the
+    // recorder's own fallback produces it. Named rather than resolved to
+    // `opus`, for the reason the other formats are: the Node identifies the
+    // codec from the bytes, and OQ-021 owns the codec question.
+    format: 'opus' | 'aac-lc' | 'wav' | 'mp3' | 'webm',
     language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
     consentGranted: boolean,
@@ -279,7 +283,7 @@ here. Adding a provider is `registerTranscriptProvider`; nothing else changes.
 | FAIL | The slot running on Tier C |
 | FAIL | Provenance omitted, or a placeholder model string standing in for one the engine does not expose |
 | FAIL | `tokenGranularity` claiming `word` for an engine that emits utterances |
-| FAIL | `openTranscriptSlot` called without an explicit `tier` |
+| FAIL | `openTranscriptSlot` called with a tier outside `SUPPORTED_TIERS` (it fails closed; a stray `'c'` must not open a microphone) |
 
 ---
 
@@ -344,6 +348,19 @@ these networks the queued blob is often the only copy.
 | --- | --- |
 | FAIL | A queue path that deletes a submission for any reason but successful upload |
 | FAIL | Held submissions that no host-visible accessor reports |
+| FAIL | A local cleanup failure recorded as an upload failure (it makes the next drain re-upload an asset the server already has) |
+| FAIL | Automatic eviction to make room — see below |
+
+**The 20 MB cap is enforced at the door, not by eviction.** The platform
+standard says LRU; LRU here means deleting a contributor's older recording so a
+newer one fits, which is what ADR-011 forbids. So `add()` refuses a recording
+that will not fit, with an error naming what occupies the space, and
+`getQueueUsage()` lets a host warn someone before they reach that point.
+
+**Whose recording loses when a device is genuinely full is not this package's
+call.** It is a sovereignty question and it routes to the platform owner. Until
+it is ruled on, nothing already recorded is deleted without a person deciding
+so.
 
 ---
 

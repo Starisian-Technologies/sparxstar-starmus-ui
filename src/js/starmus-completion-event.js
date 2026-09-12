@@ -67,6 +67,21 @@ export function resolveUploadFormat(mimeType, fileName) {
         return "mp3";
     }
 
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+        return "webm";
+    }
+
     return null;
 }
 

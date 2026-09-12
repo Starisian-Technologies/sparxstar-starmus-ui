@@ -373,9 +373,18 @@ export function initCore(store, instanceId, env) {
                 }
             } catch (queueError) {
                 console.error("[Core] Offline queue failed:", queueError);
+                // The queue's own message is kept. `QueueFull` names how much
+                // space is taken and how many held recordings are taking it —
+                // the only information the contributor can act on — and
+                // replacing it with "Upload failed completely" threw that away
+                // at the one moment it mattered.
+                const queueMessage =
+                    queueError && queueError.message
+                        ? queueError.message
+                        : "Upload failed completely.";
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message: "Upload failed completely.", retryable: false },
+                    error: { message: queueMessage, retryable: false },
                 });
             }
         }

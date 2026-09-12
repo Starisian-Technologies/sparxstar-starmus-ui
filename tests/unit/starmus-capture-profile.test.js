@@ -74,3 +74,29 @@ test("webm with no codec stated is named, not dropped", async () => {
         "a stated codec is still preferred over the container",
     );
 });
+
+test("a host form field cannot overwrite reserved capture metadata", async () => {
+    // `uploadTus` needs a browser; the guarantee is checked at the source level
+    // because the failure it prevents is a silent one — a form field named
+    // `captureProfile` replacing the validated value with an empty string,
+    // satisfying the build check while violating the rule it enforces.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    assert.match(
+        source,
+        /RESERVED_METADATA_KEYS/,
+        "reserved keys are declared",
+    );
+    for (const key of ["upload_uuid", "captureProfile", "captureAttainment"]) {
+        assert.ok(
+            new RegExp(`"${key}"`).test(source),
+            `${key} is reserved against host form fields`,
+        );
+    }
+    assert.match(
+        source,
+        /if \(RESERVED_METADATA_KEYS\.has\(key\)\)/,
+        "the merge loop skips reserved keys rather than overwriting them",
+    );
+});

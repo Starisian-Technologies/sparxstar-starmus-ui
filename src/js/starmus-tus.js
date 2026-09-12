@@ -149,6 +149,19 @@ function getConfig() {
 
 /* ---- Helpers ---- */
 
+/**
+ * Metadata this module owns. A host form field may not overwrite one.
+ *
+ * @type {ReadonlySet<string>}
+ */
+const RESERVED_METADATA_KEYS = new Set([
+    "upload_uuid",
+    "captureProfile",
+    "captureAttainment",
+    "filename",
+    "filetype",
+]);
+
 /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
 const UUID_V4_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -295,8 +308,19 @@ export async function uploadTus(
         tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
     }
 
-    // Merge form fields into TUS metadata
+    // Merge form fields into TUS metadata — but never over a reserved key.
+    //
+    // The profile and the upload id are validated above and then were merged
+    // over by whatever the host's form happened to be named. A field called
+    // `captureProfile` could replace the validated value with an empty string,
+    // satisfying the build check and violating the rule it enforces.
     for (const [key, val] of Object.entries(fields)) {
+        if (RESERVED_METADATA_KEYS.has(key)) {
+            console.warn(
+                `[TUS] Ignoring form field '${key}': it is reserved capture metadata and the host does not set it.`,
+            );
+            continue;
+        }
         tusMetadata[key] = sanitizeMetadata(val);
     }
 

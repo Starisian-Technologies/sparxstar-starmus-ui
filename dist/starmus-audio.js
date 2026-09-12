@@ -8637,6 +8637,558 @@
 
   requireEs_regexp_toString();
 
+  var es_set = {};
+
+  var es_set_constructor = {};
+
+  var internalMetadata = {exports: {}};
+
+  var objectGetOwnPropertyNamesExternal = {};
+
+  var hasRequiredObjectGetOwnPropertyNamesExternal;
+
+  function requireObjectGetOwnPropertyNamesExternal () {
+  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
+  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
+  	/* eslint-disable es/no-object-getownpropertynames -- safe */
+  	var classof = requireClassofRaw();
+  	var toIndexedObject = requireToIndexedObject();
+  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+  	var arraySlice = requireArraySlice();
+
+  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
+  	  ? Object.getOwnPropertyNames(window) : [];
+
+  	var getWindowNames = function (it) {
+  	  try {
+  	    return $getOwnPropertyNames(it);
+  	  } catch (error) {
+  	    return arraySlice(windowNames);
+  	  }
+  	};
+
+  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
+  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
+  	  return windowNames && classof(it) === 'Window'
+  	    ? getWindowNames(it)
+  	    : $getOwnPropertyNames(toIndexedObject(it));
+  	};
+  	return objectGetOwnPropertyNamesExternal;
+  }
+
+  var arrayBufferNonExtensible;
+  var hasRequiredArrayBufferNonExtensible;
+
+  function requireArrayBufferNonExtensible () {
+  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
+  	hasRequiredArrayBufferNonExtensible = 1;
+  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
+  	var fails = requireFails();
+
+  	arrayBufferNonExtensible = fails(function () {
+  	  if (typeof ArrayBuffer == 'function') {
+  	    var buffer = new ArrayBuffer(8);
+  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
+  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
+  	  }
+  	});
+  	return arrayBufferNonExtensible;
+  }
+
+  var objectIsExtensible;
+  var hasRequiredObjectIsExtensible;
+
+  function requireObjectIsExtensible () {
+  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
+  	hasRequiredObjectIsExtensible = 1;
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
+
+  	// eslint-disable-next-line es/no-object-isextensible -- safe
+  	var $isExtensible = Object.isExtensible;
+  	var FAILS_ON_PRIMITIVES = fails(function () { });
+
+  	// `Object.isExtensible` method
+  	// https://tc39.es/ecma262/#sec-object.isextensible
+  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
+  	  if (!isObject(it)) return false;
+  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
+  	  return $isExtensible ? $isExtensible(it) : true;
+  	} : $isExtensible;
+  	return objectIsExtensible;
+  }
+
+  var freezing;
+  var hasRequiredFreezing;
+
+  function requireFreezing () {
+  	if (hasRequiredFreezing) return freezing;
+  	hasRequiredFreezing = 1;
+  	var fails = requireFails();
+
+  	freezing = !fails(function () {
+  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
+  	  return Object.isExtensible(Object.preventExtensions({}));
+  	});
+  	return freezing;
+  }
+
+  var hasRequiredInternalMetadata;
+
+  function requireInternalMetadata () {
+  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
+  	hasRequiredInternalMetadata = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var hiddenKeys = requireHiddenKeys();
+  	var isObject = requireIsObject();
+  	var hasOwn = requireHasOwnProperty();
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
+  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
+  	var isExtensible = requireObjectIsExtensible();
+  	var uid = requireUid();
+  	var FREEZING = requireFreezing();
+
+  	var REQUIRED = false;
+  	var METADATA = uid('meta');
+  	var id = 0;
+
+  	var setMetadata = function (it) {
+  	  defineProperty(it, METADATA, { value: {
+  	    objectID: 'O' + id++, // object ID
+  	    weakData: {}          // weak collections IDs
+  	  } });
+  	};
+
+  	var fastKey = function (it, create) {
+  	  // return a primitive with prefix
+  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return 'F';
+  	    // not necessary to add metadata
+  	    if (!create) return 'E';
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return object ID
+  	  } return it[METADATA].objectID;
+  	};
+
+  	var getWeakData = function (it, create) {
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return true;
+  	    // not necessary to add metadata
+  	    if (!create) return false;
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return the store of weak collections IDs
+  	  } return it[METADATA].weakData;
+  	};
+
+  	// add metadata on freeze-family methods calling
+  	var onFreeze = function (it) {
+  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
+  	  return it;
+  	};
+
+  	var enable = function () {
+  	  meta.enable = function () { /* empty */ };
+  	  REQUIRED = true;
+  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
+  	  var splice = uncurryThis([].splice);
+  	  var test = {};
+  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+  	  test[METADATA] = 1;
+
+  	  // prevent exposing of metadata key
+  	  if (getOwnPropertyNames(test).length) {
+  	    getOwnPropertyNamesModule.f = function (it) {
+  	      var result = getOwnPropertyNames(it);
+  	      for (var i = 0, length = result.length; i < length; i++) {
+  	        if (result[i] === METADATA) {
+  	          splice(result, i, 1);
+  	          break;
+  	        }
+  	      } return result;
+  	    };
+
+  	    $({ target: 'Object', stat: true, forced: true }, {
+  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
+  	    });
+  	  }
+  	};
+
+  	var meta = internalMetadata.exports = {
+  	  enable: enable,
+  	  fastKey: fastKey,
+  	  getWeakData: getWeakData,
+  	  onFreeze: onFreeze
+  	};
+
+  	hiddenKeys[METADATA] = true;
+  	return internalMetadata.exports;
+  }
+
+  var collection;
+  var hasRequiredCollection;
+
+  function requireCollection () {
+  	if (hasRequiredCollection) return collection;
+  	hasRequiredCollection = 1;
+  	var $ = require_export();
+  	var globalThis = requireGlobalThis();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var isForced = requireIsForced();
+  	var defineBuiltIn = requireDefineBuiltIn();
+  	var InternalMetadataModule = requireInternalMetadata();
+  	var iterate = requireIterate();
+  	var anInstance = requireAnInstance();
+  	var isCallable = requireIsCallable();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var isObject = requireIsObject();
+  	var fails = requireFails();
+  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+  	var setToStringTag = requireSetToStringTag();
+  	var inheritIfRequired = requireInheritIfRequired();
+
+  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
+  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
+  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
+  	  var ADDER = IS_MAP ? 'set' : 'add';
+  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
+  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
+  	  var Constructor = NativeConstructor;
+  	  var exported = {};
+
+  	  var fixMethod = function (KEY) {
+  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
+  	    defineBuiltIn(NativePrototype, KEY,
+  	      KEY === 'add' ? function add(value) {
+  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
+  	        return this;
+  	      } : KEY === 'delete' ? function (key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'get' ? function get(key) {
+  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'has' ? function has(key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : function set(key, value) {
+  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
+  	        return this;
+  	      }
+  	    );
+  	  };
+
+  	  var REPLACE = isForced(
+  	    CONSTRUCTOR_NAME,
+  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
+  	      new NativeConstructor().entries().next();
+  	    }))
+  	  );
+
+  	  if (REPLACE) {
+  	    // create collection constructor
+  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
+  	    InternalMetadataModule.enable();
+  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
+  	    var instance = new Constructor();
+  	    // early implementations not supports chaining
+  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
+  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
+  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
+  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
+  	    // eslint-disable-next-line no-new -- required for testing
+  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
+  	    // for early implementations -0 and +0 not the same
+  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
+  	      // V8 ~ Chromium 42- fails only with 5+ elements
+  	      var $instance = new NativeConstructor();
+  	      var index = 5;
+  	      while (index--) $instance[ADDER](index, index);
+  	      return !$instance.has(-0);
+  	    });
+
+  	    if (!ACCEPT_ITERABLES) {
+  	      Constructor = wrapper(function (dummy, iterable) {
+  	        anInstance(dummy, NativePrototype);
+  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
+  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	        return that;
+  	      });
+  	      Constructor.prototype = NativePrototype;
+  	      NativePrototype.constructor = Constructor;
+  	    }
+
+  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
+  	      fixMethod('delete');
+  	      fixMethod('has');
+  	      IS_MAP && fixMethod('get');
+  	    }
+
+  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
+
+  	    // weak collections should not contains .clear method
+  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
+  	  }
+
+  	  exported[CONSTRUCTOR_NAME] = Constructor;
+  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
+
+  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
+
+  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
+
+  	  return Constructor;
+  	};
+  	return collection;
+  }
+
+  var collectionStrong;
+  var hasRequiredCollectionStrong;
+
+  function requireCollectionStrong () {
+  	if (hasRequiredCollectionStrong) return collectionStrong;
+  	hasRequiredCollectionStrong = 1;
+  	var create = requireObjectCreate();
+  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+  	var defineBuiltIns = requireDefineBuiltIns();
+  	var bind = requireFunctionBindContext();
+  	var anInstance = requireAnInstance();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var iterate = requireIterate();
+  	var defineIterator = requireIteratorDefine();
+  	var createIterResultObject = requireCreateIterResultObject();
+  	var setSpecies = requireSetSpecies();
+  	var DESCRIPTORS = requireDescriptors();
+  	var fastKey = requireInternalMetadata().fastKey;
+  	var InternalStateModule = requireInternalState();
+
+  	var setInternalState = InternalStateModule.set;
+  	var internalStateGetterFor = InternalStateModule.getterFor;
+
+  	collectionStrong = {
+  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
+  	    var Constructor = wrapper(function (that, iterable) {
+  	      anInstance(that, Prototype);
+  	      setInternalState(that, {
+  	        type: CONSTRUCTOR_NAME,
+  	        index: create(null),
+  	        first: null,
+  	        last: null,
+  	        size: 0
+  	      });
+  	      if (!DESCRIPTORS) that.size = 0;
+  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	    });
+
+  	    var Prototype = Constructor.prototype;
+
+  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
+
+  	    var define = function (that, key, value) {
+  	      var state = getInternalState(that);
+  	      var entry = getEntry(that, key);
+  	      var previous, index;
+  	      // change existing entry
+  	      if (entry) {
+  	        entry.value = value;
+  	      // create new entry
+  	      } else {
+  	        state.last = entry = {
+  	          index: index = fastKey(key, true),
+  	          key: key,
+  	          value: value,
+  	          previous: previous = state.last,
+  	          next: null,
+  	          removed: false
+  	        };
+  	        if (!state.first) state.first = entry;
+  	        if (previous) previous.next = entry;
+  	        if (DESCRIPTORS) state.size++;
+  	        else that.size++;
+  	        // add to index
+  	        if (index !== 'F') state.index[index] = entry;
+  	      } return that;
+  	    };
+
+  	    var getEntry = function (that, key) {
+  	      var state = getInternalState(that);
+  	      // fast case
+  	      var index = fastKey(key);
+  	      var entry;
+  	      if (index !== 'F') return state.index[index];
+  	      // frozen object case
+  	      for (entry = state.first; entry; entry = entry.next) {
+  	        if (entry.key === key) return entry;
+  	      }
+  	    };
+
+  	    defineBuiltIns(Prototype, {
+  	      // `{ Map, Set }.prototype.clear()` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
+  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
+  	      clear: function clear() {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = state.first;
+  	        while (entry) {
+  	          entry.removed = true;
+  	          if (entry.previous) entry.previous = entry.previous.next = null;
+  	          entry = entry.next;
+  	        }
+  	        state.first = state.last = null;
+  	        state.index = create(null);
+  	        if (DESCRIPTORS) state.size = 0;
+  	        else that.size = 0;
+  	      },
+  	      // `{ Map, Set }.prototype.delete(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
+  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
+  	      'delete': function (key) {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = getEntry(that, key);
+  	        if (entry) {
+  	          var next = entry.next;
+  	          var prev = entry.previous;
+  	          delete state.index[entry.index];
+  	          entry.removed = true;
+  	          if (prev) prev.next = next;
+  	          if (next) next.previous = prev;
+  	          if (state.first === entry) state.first = next;
+  	          if (state.last === entry) state.last = prev;
+  	          if (DESCRIPTORS) state.size--;
+  	          else that.size--;
+  	        } return !!entry;
+  	      },
+  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
+  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
+  	      forEach: function forEach(callbackfn /* , that = undefined */) {
+  	        var state = getInternalState(this);
+  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	        var entry;
+  	        while (entry = entry ? entry.next : state.first) {
+  	          boundFunction(entry.value, entry.key, this);
+  	          // revert to the last existing entry
+  	          while (entry && entry.removed) entry = entry.previous;
+  	        }
+  	      },
+  	      // `{ Map, Set}.prototype.has(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.has
+  	      // https://tc39.es/ecma262/#sec-set.prototype.has
+  	      has: function has(key) {
+  	        return !!getEntry(this, key);
+  	      }
+  	    });
+
+  	    defineBuiltIns(Prototype, IS_MAP ? {
+  	      // `Map.prototype.get(key)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.get
+  	      get: function get(key) {
+  	        var entry = getEntry(this, key);
+  	        return entry && entry.value;
+  	      },
+  	      // `Map.prototype.set(key, value)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.set
+  	      set: function set(key, value) {
+  	        return define(this, key === 0 ? 0 : key, value);
+  	      }
+  	    } : {
+  	      // `Set.prototype.add(value)` method
+  	      // https://tc39.es/ecma262/#sec-set.prototype.add
+  	      add: function add(value) {
+  	        return define(this, value = value === 0 ? 0 : value, value);
+  	      }
+  	    });
+  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
+  	      configurable: true,
+  	      get: function () {
+  	        return getInternalState(this).size;
+  	      }
+  	    });
+  	    return Constructor;
+  	  },
+  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
+  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
+  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
+  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
+  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
+  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-map.prototype.values
+  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
+  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-set.prototype.values
+  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
+  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
+  	      setInternalState(this, {
+  	        type: ITERATOR_NAME,
+  	        target: iterated,
+  	        state: getInternalCollectionState(iterated),
+  	        kind: kind,
+  	        last: null
+  	      });
+  	    }, function () {
+  	      var state = getInternalIteratorState(this);
+  	      var kind = state.kind;
+  	      var entry = state.last;
+  	      // revert to the last existing entry
+  	      while (entry && entry.removed) entry = entry.previous;
+  	      // get next entry
+  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
+  	        // or finish the iteration
+  	        state.target = null;
+  	        return createIterResultObject(undefined, true);
+  	      }
+  	      // return step by kind
+  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
+  	      if (kind === 'values') return createIterResultObject(entry.value, false);
+  	      return createIterResultObject([entry.key, entry.value], false);
+  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
+
+  	    // `{ Map, Set }.prototype[@@species]` accessors
+  	    // https://tc39.es/ecma262/#sec-get-map-@@species
+  	    // https://tc39.es/ecma262/#sec-get-set-@@species
+  	    setSpecies(CONSTRUCTOR_NAME);
+  	  }
+  	};
+  	return collectionStrong;
+  }
+
+  var hasRequiredEs_set_constructor;
+
+  function requireEs_set_constructor () {
+  	if (hasRequiredEs_set_constructor) return es_set_constructor;
+  	hasRequiredEs_set_constructor = 1;
+  	var collection = requireCollection();
+  	var collectionStrong = requireCollectionStrong();
+
+  	// `Set` constructor
+  	// https://tc39.es/ecma262/#sec-set-objects
+  	collection('Set', function (init) {
+  	  return function Set() { return init(this, arguments.length ? arguments[0] : undefined); };
+  	}, collectionStrong);
+  	return es_set_constructor;
+  }
+
+  var hasRequiredEs_set;
+
+  function requireEs_set () {
+  	if (hasRequiredEs_set) return es_set;
+  	hasRequiredEs_set = 1;
+  	// TODO: Remove this module from `core-js@4` since it's replaced to module below
+  	requireEs_set_constructor();
+  	return es_set;
+  }
+
+  requireEs_set();
+
   var es_string_padStart = {};
 
   var stringRepeat;
@@ -12946,6 +13498,13 @@
 
   /* ---- Helpers ---- */
 
+  /**
+   * Metadata this module owns. A host form field may not overwrite one.
+   *
+   * @type {ReadonlySet<string>}
+   */
+  var RESERVED_METADATA_KEYS = new Set(["upload_uuid", "captureProfile", "captureAttainment", "filename", "filetype"]);
+
   /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
   var UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -13137,12 +13696,32 @@
               tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
             }
 
-            // Merge form fields into TUS metadata
-            for (_i3 = 0, _Object$entries3 = Object.entries(fields); _i3 < _Object$entries3.length; _i3++) {
-              _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
-              tusMetadata[key] = sanitizeMetadata(val);
+            // Merge form fields into TUS metadata — but never over a reserved key.
+            //
+            // The profile and the upload id are validated above and then were merged
+            // over by whatever the host's form happened to be named. A field called
+            // `captureProfile` could replace the validated value with an empty string,
+            // satisfying the build check and violating the rule it enforces.
+            _i3 = 0, _Object$entries3 = Object.entries(fields);
+          case 3:
+            if (!(_i3 < _Object$entries3.length)) {
+              _context2.n = 6;
+              break;
             }
-
+            _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
+            if (!RESERVED_METADATA_KEYS.has(key)) {
+              _context2.n = 4;
+              break;
+            }
+            console.warn("[TUS] Ignoring form field '".concat(key, "': it is reserved capture metadata and the host does not set it."));
+            return _context2.a(3, 5);
+          case 4:
+            tusMetadata[key] = sanitizeMetadata(val);
+          case 5:
+            _i3++;
+            _context2.n = 3;
+            break;
+          case 6:
             // Host-injected only (ADR-034). A CMS nonce header used to be set here.
             headers = Object.assign({}, cfg.headers);
             stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : 120000;
@@ -13841,6 +14420,8 @@
       this.processQueueTimeoutId = null;
       /** @type {number|null} */
       this.processQueueDueAt = null;
+      /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
+      this._addChain = Promise.resolve();
     }
 
     /**
@@ -13933,7 +14514,52 @@
     }, {
       key: "add",
       value: (function () {
-        var _add = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(instanceId, audioBlob, fileName) {
+        var _add2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(instanceId, audioBlob, fileName) {
+          var formFields,
+            metadata,
+            previous,
+            release,
+            _args2 = arguments;
+          return _regenerator().w(function (_context2) {
+            while (1) switch (_context2.p = _context2.n) {
+              case 0:
+                formFields = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+                metadata = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : {};
+                // Serialized. The budget check reads the store and the insert writes it
+                // in two separate transactions, so two concurrent adds could each see
+                // room and then both insert — two 12 MB Tier A recordings landing in a
+                // 20 MB queue. Chaining them makes check-then-insert effectively
+                // atomic without holding an IndexedDB transaction across an await.
+                previous = this._addChain;
+                this._addChain = new Promise(function (resolve) {
+                  release = resolve;
+                });
+                _context2.p = 1;
+                _context2.n = 2;
+                return previous;
+              case 2:
+                _context2.n = 3;
+                return this._add(instanceId, audioBlob, fileName, formFields, metadata);
+              case 3:
+                return _context2.a(2, _context2.v);
+              case 4:
+                _context2.p = 4;
+                release();
+                return _context2.f(4);
+              case 5:
+                return _context2.a(2);
+            }
+          }, _callee2, this, [[1,, 4, 5]]);
+        }));
+        function add(_x, _x2, _x3) {
+          return _add2.apply(this, arguments);
+        }
+        return add;
+      }() /** @private */)
+    }, {
+      key: "_add",
+      value: (function () {
+        var _add3 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(instanceId, audioBlob, fileName) {
           var _this2 = this;
           var formFields,
             metadata,
@@ -13942,31 +14568,31 @@
             heldNote,
             safeBlob,
             item,
-            _args2 = arguments;
-          return _regenerator().w(function (_context2) {
-            while (1) switch (_context2.n) {
+            _args3 = arguments;
+          return _regenerator().w(function (_context3) {
+            while (1) switch (_context3.n) {
               case 0:
-                formFields = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
-                metadata = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : {};
+                formFields = _args3.length > 3 && _args3[3] !== undefined ? _args3[3] : {};
+                metadata = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : {};
                 if (this.db) {
-                  _context2.n = 1;
+                  _context3.n = 1;
                   break;
                 }
                 throw new Error("OfflineQueue: DB not initialised");
               case 1:
                 maxAllowedSize = getMaxBlobSize(metadata);
                 if (!(audioBlob.size > maxAllowedSize)) {
-                  _context2.n = 2;
+                  _context3.n = 2;
                   break;
                 }
                 throw new Error("Audio too large (".concat((audioBlob.size / 1024 / 1024).toFixed(2), " MB); limit ").concat((maxAllowedSize / 1024 / 1024).toFixed(2), " MB"));
               case 2:
-                _context2.n = 3;
+                _context3.n = 3;
                 return this.usage();
               case 3:
-                usage = _context2.v;
+                usage = _context3.v;
                 if (!(usage.totalBytes + audioBlob.size > CONFIG.maxTotalBytes)) {
-                  _context2.n = 4;
+                  _context3.n = 4;
                   break;
                 }
                 heldNote = usage.heldCount > 0 ? " ".concat(usage.heldCount, " held recording(s) occupy ").concat((usage.heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
@@ -13989,7 +14615,7 @@
                   held: false,
                   heldReason: null
                 };
-                return _context2.a(2, new Promise(function (resolve, reject) {
+                return _context3.a(2, new Promise(function (resolve, reject) {
                   var tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   store.add(item);
@@ -14006,12 +14632,12 @@
                   };
                 }));
             }
-          }, _callee2, this);
+          }, _callee3, this);
         }));
-        function add(_x, _x2, _x3) {
-          return _add.apply(this, arguments);
+        function _add(_x4, _x5, _x6) {
+          return _add3.apply(this, arguments);
         }
-        return add;
+        return _add;
       }()
       /**
        * Retrieves all pending submissions.
@@ -14022,18 +14648,18 @@
     }, {
       key: "getAll",
       value: (function () {
-        var _getAll = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3() {
+        var _getAll = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4() {
           var _this3 = this;
-          return _regenerator().w(function (_context3) {
-            while (1) switch (_context3.n) {
+          return _regenerator().w(function (_context4) {
+            while (1) switch (_context4.n) {
               case 0:
                 if (this.db) {
-                  _context3.n = 1;
+                  _context4.n = 1;
                   break;
                 }
-                return _context3.a(2, []);
+                return _context4.a(2, []);
               case 1:
-                return _context3.a(2, new Promise(function (resolve, reject) {
+                return _context4.a(2, new Promise(function (resolve, reject) {
                   var tx = _this3.db.transaction([CONFIG.storeName], "readonly");
                   var req = tx.objectStore(CONFIG.storeName).getAll();
                   req.onsuccess = function () {
@@ -14044,7 +14670,7 @@
                   };
                 }));
             }
-          }, _callee3, this);
+          }, _callee4, this);
         }));
         function getAll() {
           return _getAll.apply(this, arguments);
@@ -14061,18 +14687,18 @@
     }, {
       key: "remove",
       value: (function () {
-        var _remove = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4(id) {
+        var _remove = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id) {
           var _this4 = this;
-          return _regenerator().w(function (_context4) {
-            while (1) switch (_context4.n) {
+          return _regenerator().w(function (_context5) {
+            while (1) switch (_context5.n) {
               case 0:
                 if (this.db) {
-                  _context4.n = 1;
+                  _context5.n = 1;
                   break;
                 }
-                return _context4.a(2);
+                return _context5.a(2);
               case 1:
-                return _context4.a(2, new Promise(function (resolve, reject) {
+                return _context5.a(2, new Promise(function (resolve, reject) {
                   var tx = _this4.db.transaction([CONFIG.storeName], "readwrite");
                   tx.objectStore(CONFIG.storeName).delete(id);
                   tx.oncomplete = function () {
@@ -14084,9 +14710,9 @@
                   };
                 }));
             }
-          }, _callee4, this);
+          }, _callee5, this);
         }));
-        function remove(_x4) {
+        function remove(_x7) {
           return _remove.apply(this, arguments);
         }
         return remove;
@@ -14103,18 +14729,18 @@
     }, {
       key: "_hold",
       value: (function () {
-        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, reason) {
+        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6(id, reason) {
           var _this5 = this;
-          return _regenerator().w(function (_context5) {
-            while (1) switch (_context5.n) {
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
               case 0:
                 if (this.db) {
-                  _context5.n = 1;
+                  _context6.n = 1;
                   break;
                 }
-                return _context5.a(2);
+                return _context6.a(2);
               case 1:
-                return _context5.a(2, new Promise(function (resolve, reject) {
+                return _context6.a(2, new Promise(function (resolve, reject) {
                   var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
@@ -14141,9 +14767,9 @@
                   };
                 }));
             }
-          }, _callee5, this);
+          }, _callee6, this);
         }));
-        function _hold(_x5, _x6) {
+        function _hold(_x8, _x9) {
           return _hold2.apply(this, arguments);
         }
         return _hold;
@@ -14160,15 +14786,15 @@
     }, {
       key: "usage",
       value: (function () {
-        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
           var all, totalBytes, heldBytes, heldCount, _iterator, _step, _item$audioBlob, item, size;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.n) {
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
               case 0:
-                _context6.n = 1;
+                _context7.n = 1;
                 return this.getAll();
               case 1:
-                all = _context6.v;
+                all = _context7.v;
                 totalBytes = 0;
                 heldBytes = 0;
                 heldCount = 0;
@@ -14188,7 +14814,7 @@
                 } finally {
                   _iterator.f();
                 }
-                return _context6.a(2, {
+                return _context7.a(2, {
                   totalBytes: totalBytes,
                   count: all.length,
                   heldBytes: heldBytes,
@@ -14196,7 +14822,7 @@
                   maxTotalBytes: CONFIG.maxTotalBytes
                 });
             }
-          }, _callee6, this);
+          }, _callee7, this);
         }));
         function usage() {
           return _usage.apply(this, arguments);
@@ -14215,42 +14841,94 @@
     }, {
       key: "getHeld",
       value: (function () {
-        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
           var all;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.n) {
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
               case 0:
-                _context7.n = 1;
+                _context8.n = 1;
                 return this.getAll();
               case 1:
-                all = _context7.v;
-                return _context7.a(2, all.filter(function (item) {
+                all = _context8.v;
+                return _context8.a(2, all.filter(function (item) {
                   return item.held === true;
                 }));
             }
-          }, _callee7, this);
+          }, _callee8, this);
         }));
         function getHeld() {
           return _getHeld.apply(this, arguments);
         }
         return getHeld;
+      }()
+      /**
+       * Replace a submission's metadata in place.
+       *
+       * @private
+       * @param {string} id
+       * @param {Object} metadata
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "_setMetadata",
+      value: (function () {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id, metadata) {
+          var _this6 = this;
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
+              case 0:
+                if (this.db) {
+                  _context9.n = 1;
+                  break;
+                }
+                return _context9.a(2);
+              case 1:
+                return _context9.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (item) {
+                      item.metadata = metadata;
+                      store.put(item);
+                    }
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve();
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee9, this);
+        }));
+        function _setMetadata(_x0, _x1) {
+          return _setMetadata2.apply(this, arguments);
+        }
+        return _setMetadata;
       }() /** @private */)
     }, {
       key: "_updateRetry",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id, retryCount, error) {
-          var _this6 = this;
-          return _regenerator().w(function (_context8) {
-            while (1) switch (_context8.n) {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, retryCount, error) {
+          var _this7 = this;
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
               case 0:
                 if (this.db) {
-                  _context8.n = 1;
+                  _context0.n = 1;
                   break;
                 }
-                return _context8.a(2);
+                return _context0.a(2);
               case 1:
-                return _context8.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
+                return _context0.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -14270,9 +14948,9 @@
                   };
                 }));
             }
-          }, _callee8, this);
+          }, _callee0, this);
         }));
-        function _updateRetry(_x7, _x8, _x9) {
+        function _updateRetry(_x10, _x11, _x12) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -14287,77 +14965,96 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1() {
           var _sparxstarIntegration;
-          var pending, _iterator2, _step2, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, uploaded, delay, _metadata$durationMs, _metadata$env2, result, detail, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
-          return _regenerator().w(function (_context9) {
-            while (1) switch (_context9.p = _context9.n) {
+          var pending, _iterator2, _step2, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, uploaded, backfilled, delay, _metadata$durationMs, _metadata$env2, result, detail, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.p = _context1.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context9.n = 1;
+                  _context1.n = 1;
                   break;
                 }
-                return _context9.a(2);
+                return _context1.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context9.n = 2;
+                _context1.n = 2;
                 return this.getAll();
               case 2:
-                pending = _context9.v;
+                pending = _context1.v;
                 if (!(pending.length === 0)) {
-                  _context9.n = 3;
+                  _context1.n = 3;
                   break;
                 }
-                return _context9.a(2);
+                return _context1.a(2);
               case 3:
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context9.n = 4;
+                  _context1.n = 4;
                   break;
                 }
-                return _context9.a(2);
+                return _context1.a(2);
               case 4:
                 this.isProcessing = true;
-                _context9.p = 5;
+                _context1.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context9.p = 6;
+                _context1.p = 6;
                 _iterator2.s();
               case 7:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context9.n = 23;
+                  _context1.n = 28;
                   break;
                 }
                 item = _step2.value;
                 id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId; // Whether the bytes reached the server on this attempt.
-                uploaded = false;
-                if (!item.held) {
-                  _context9.n = 8;
+                uploaded = false; // Entries queued before the submission id existed have no
+                // `metadata.uploadId`, so every retry would mint a new one and
+                // start a new TUS resource instead of resuming the partial it
+                // already has. Backfilled once and persisted, so the
+                // one-id-per-submission rule reaches recordings already sitting
+                // on devices rather than only new ones.
+                if (!(typeof (metadata === null || metadata === void 0 ? void 0 : metadata.uploadId) !== "string" || metadata.uploadId === "")) {
+                  _context1.n = 9;
                   break;
                 }
-                return _context9.a(3, 22);
+                backfilled = createUploadId();
+                _context1.n = 8;
+                return this._setMetadata(id, _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
+                  uploadId: backfilled
+                }));
               case 8:
-                if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context9.n = 10;
+                if (metadata) {
+                  metadata.uploadId = backfilled;
+                }
+              case 9:
+                if (!item.held) {
+                  _context1.n = 10;
                   break;
                 }
-                _context9.n = 9;
-                return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
-              case 9:
-                return _context9.a(3, 22);
+                return _context1.a(3, 27);
               case 10:
+                if (!(retryCount >= CONFIG.maxRetries)) {
+                  _context1.n = 12;
+                  break;
+                }
+                _context1.n = 11;
+                return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
+              case 11:
+                return _context1.a(3, 27);
+              case 12:
                 if (!(item.lastAttempt !== null)) {
-                  _context9.n = 11;
+                  _context1.n = 13;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context9.n = 11;
+                  _context1.n = 13;
                   break;
                 }
-                return _context9.a(3, 22);
-              case 11:
-                _context9.p = 11;
-                _context9.n = 12;
+                return _context1.a(3, 27);
+              case 13:
+                _context1.p = 13;
+                _context1.n = 14;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -14365,8 +15062,8 @@
                   metadata: metadata,
                   instanceId: instanceId
                 });
-              case 12:
-                result = _context9.v;
+              case 14:
+                result = _context1.v;
                 // Set here, the moment the bytes are known to have landed —
                 // not at the end of the block. Setting it last made the
                 // `if (uploaded)` guard below unreachable: everything that
@@ -14392,36 +15089,49 @@
                   contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
                   calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
                 });
-                if (detail) {
-                  emitCompletionEvent(detail);
-                } else {
-                  // The upload succeeded but the format cannot be named,
-                  // so no consumer can be told this asset exists. The
-                  // entry is still removed — the asset is on the server
-                  // and re-uploading it on every future drain would burn
-                  // bandwidth the contributor is paying for without ever
-                  // producing a nameable format. What must not happen is
-                  // this passing in silence, so it is reported.
-                  console.error("[Offline] Uploaded but could not build starmus:complete:", {
-                    id: id,
-                    fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
-                  });
-                  sparxstarIntegration.reportError("completion_detail_unbuildable", {
-                    submissionId: id,
-                    instanceId: instanceId,
-                    fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
-                  });
+                if (!detail) {
+                  _context1.n = 15;
+                  break;
                 }
-                _context9.n = 19;
+                emitCompletionEvent(detail);
+                _context1.n = 17;
                 break;
-              case 13:
-                _context9.p = 13;
-                _t = _context9.v;
+              case 15:
+                // The upload succeeded but the format cannot be named,
+                // so `starmus:complete` cannot be built — and nothing
+                // server-side begins without it (ADR-034). The asset is
+                // on the server with no consumer told it exists.
+                //
+                // Held, not removed. Removing it made the orphan
+                // invisible: the recording was gone from the device and
+                // stalled on the server with nobody able to see either
+                // half. A held entry is not retried, so it costs no
+                // bandwidth, and it is the only remaining evidence that
+                // this recording needs a person.
+                console.error("[Offline] Uploaded but could not build starmus:complete:", {
+                  id: id,
+                  fileName: fileName,
+                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
+                });
+                sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                  submissionId: id,
+                  instanceId: instanceId,
+                  fileName: fileName,
+                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
+                  captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                });
+                _context1.n = 16;
+                return this._hold(id, "Uploaded, but the format could not be named (".concat((metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "unknown", "), so no completion event was emitted."));
+              case 16:
+                return _context1.a(3, 27);
+              case 17:
+                _context1.n = 24;
+                break;
+              case 18:
+                _context1.p = 18;
+                _t = _context1.v;
                 if (!uploaded) {
-                  _context9.n = 15;
+                  _context1.n = 20;
                   break;
                 }
                 // Reaching here after a successful transfer means the
@@ -14431,86 +15141,86 @@
                 // next drain does not upload it again.
                 _msg = _t && _t.message ? _t.message : String(_t);
                 console.error("[Offline] Uploaded, but completion failed:", id, _msg);
-                _context9.n = 14;
+                _context1.n = 19;
                 return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
-              case 14:
-                return _context9.a(3, 22);
-              case 15:
+              case 19:
+                return _context1.a(3, 27);
+              case 20:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context9.n = 17;
+                  _context1.n = 22;
                   break;
                 }
-                _context9.n = 16;
+                _context1.n = 21;
                 return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
-              case 16:
-                _context9.n = 18;
-                break;
-              case 17:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context9.n = 18;
-                return this._updateRetry(id, nextRetryCount, msg);
-              case 18:
-                return _context9.a(3, 22);
-              case 19:
-                _context9.p = 19;
-                _context9.n = 20;
-                return this.remove(id);
-              case 20:
-                _context9.n = 22;
-                break;
               case 21:
-                _context9.p = 21;
-                _t2 = _context9.v;
+                _context1.n = 23;
+                break;
+              case 22:
+                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                _context1.n = 23;
+                return this._updateRetry(id, nextRetryCount, msg);
+              case 23:
+                return _context1.a(3, 27);
+              case 24:
+                _context1.p = 24;
+                _context1.n = 25;
+                return this.remove(id);
+              case 25:
+                _context1.n = 27;
+                break;
+              case 26:
+                _context1.p = 26;
+                _t2 = _context1.v;
                 _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
                 console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
-                _context9.n = 22;
+                _context1.n = 27;
                 return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
-              case 22:
-                _context9.n = 7;
-                break;
-              case 23:
-                _context9.n = 25;
-                break;
-              case 24:
-                _context9.p = 24;
-                _t3 = _context9.v;
-                _iterator2.e(_t3);
-              case 25:
-                _context9.p = 25;
-                _iterator2.f();
-                return _context9.f(25);
-              case 26:
-                _context9.n = 28;
-                break;
               case 27:
-                _context9.p = 27;
-                _t4 = _context9.v;
-                console.error("[Offline] Queue fatal:", _t4);
+                _context1.n = 7;
+                break;
               case 28:
-                _context9.p = 28;
-                this.isProcessing = false;
-                _context9.p = 29;
-                _context9.n = 30;
-                return this._getNextProcessDelay();
+                _context1.n = 30;
+                break;
+              case 29:
+                _context1.p = 29;
+                _t3 = _context1.v;
+                _iterator2.e(_t3);
               case 30:
-                nextDelay = _context9.v;
+                _context1.p = 30;
+                _iterator2.f();
+                return _context1.f(30);
+              case 31:
+                _context1.n = 33;
+                break;
+              case 32:
+                _context1.p = 32;
+                _t4 = _context1.v;
+                console.error("[Offline] Queue fatal:", _t4);
+              case 33:
+                _context1.p = 33;
+                this.isProcessing = false;
+                _context1.p = 34;
+                _context1.n = 35;
+                return this._getNextProcessDelay();
+              case 35:
+                nextDelay = _context1.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context9.n = 32;
+                _context1.n = 37;
                 break;
-              case 31:
-                _context9.p = 31;
-                _t5 = _context9.v;
+              case 36:
+                _context1.p = 36;
+                _t5 = _context1.v;
                 console.error("[Offline] Failed to schedule next queue processing:", _t5);
-              case 32:
-                return _context9.f(28);
-              case 33:
-                return _context9.a(2);
+              case 37:
+                return _context1.f(33);
+              case 38:
+                return _context1.a(2);
             }
-          }, _callee9, this, [[29, 31], [19, 21], [11, 13], [6, 24, 25, 26], [5, 27, 28, 33]]);
+          }, _callee1, this, [[34, 36], [24, 26], [13, 18], [6, 29, 30, 31], [5, 32, 33, 38]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14526,13 +15236,13 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this7 = this;
+        var _this8 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this7._scheduleProcessQueue(0);
+          _this8._scheduleProcessQueue(0);
         });
         this._setupBatteryListeners();
 
@@ -14545,7 +15255,7 @@
     }, {
       key: "_setupBatteryListeners",
       value: function _setupBatteryListeners() {
-        var _this8 = this;
+        var _this9 = this;
         if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
           return;
         }
@@ -14554,7 +15264,7 @@
           var handleBatteryChange = function handleBatteryChange() {
             var _sparxstarIntegration2;
             if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
-              _this8._scheduleProcessQueue(0);
+              _this9._scheduleProcessQueue(0);
             }
           };
           battery.addEventListener("levelchange", handleBatteryChange);
@@ -14575,7 +15285,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this9 = this;
+        var _this0 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -14587,46 +15297,48 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this9.processQueueTimeoutId = null;
-          _this9.processQueueDueAt = null;
-          void _this9.processQueue();
+          _this0.processQueueTimeoutId = null;
+          _this0.processQueueDueAt = null;
+          void _this0.processQueue();
         }, safeDelay);
       }
       /** @private */
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
           var pending, nextDelay, now, _iterator3, _step3, item, retryDelay, remainingDelay, _t6;
-          return _regenerator().w(function (_context0) {
-            while (1) switch (_context0.p = _context0.n) {
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.p = _context10.n) {
               case 0:
-                _context0.n = 1;
+                _context10.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context0.v;
+                pending = _context10.v.filter(function (item) {
+                  return item.held !== true;
+                });
                 if (!(pending.length === 0)) {
-                  _context0.n = 2;
+                  _context10.n = 2;
                   break;
                 }
-                return _context0.a(2, null);
+                return _context10.a(2, null);
               case 2:
                 nextDelay = null;
                 now = Date.now();
                 _iterator3 = _createForOfIteratorHelper$1(pending);
-                _context0.p = 3;
+                _context10.p = 3;
                 _iterator3.s();
               case 4:
                 if ((_step3 = _iterator3.n()).done) {
-                  _context0.n = 7;
+                  _context10.n = 7;
                   break;
                 }
                 item = _step3.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context0.n = 5;
+                  _context10.n = 5;
                   break;
                 }
-                return _context0.a(2, 0);
+                return _context10.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -14634,23 +15346,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context0.n = 4;
+                _context10.n = 4;
                 break;
               case 7:
-                _context0.n = 9;
+                _context10.n = 9;
                 break;
               case 8:
-                _context0.p = 8;
-                _t6 = _context0.v;
+                _context10.p = 8;
+                _t6 = _context10.v;
                 _iterator3.e(_t6);
               case 9:
-                _context0.p = 9;
+                _context10.p = 9;
                 _iterator3.f();
-                return _context0.f(9);
+                return _context10.f(9);
               case 10:
-                return _context0.a(2, nextDelay);
+                return _context10.a(2, nextDelay);
             }
-          }, _callee0, this, [[3, 8, 9, 10]]);
+          }, _callee10, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -14748,26 +15460,26 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1() {
-      return _regenerator().w(function (_context1) {
-        while (1) switch (_context1.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
+      return _regenerator().w(function (_context11) {
+        while (1) switch (_context11.n) {
           case 0:
             if (offlineQueue.db) {
-              _context1.n = 2;
+              _context11.n = 2;
               break;
             }
-            _context1.n = 1;
+            _context11.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context1.a(2, offlineQueue);
+            return _context11.a(2, offlineQueue);
         }
-      }, _callee1);
+      }, _callee11);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x0, _x1, _x10, _x11, _x12) {
+  function queueSubmission(_x13, _x14, _x15, _x16, _x17) {
     return _queueSubmission.apply(this, arguments);
   }
 
@@ -14780,18 +15492,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context10) {
-        while (1) switch (_context10.n) {
+      return _regenerator().w(function (_context12) {
+        while (1) switch (_context12.n) {
           case 0:
-            _context10.n = 1;
+            _context12.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context10.v;
-            return _context10.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context12.v;
+            return _context12.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee10);
+      }, _callee12);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -14807,22 +15519,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
       var q, list;
-      return _regenerator().w(function (_context11) {
-        while (1) switch (_context11.n) {
+      return _regenerator().w(function (_context13) {
+        while (1) switch (_context13.n) {
           case 0:
-            _context11.n = 1;
+            _context13.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context11.v;
-            _context11.n = 2;
+            q = _context13.v;
+            _context13.n = 2;
             return q.getAll();
           case 2:
-            list = _context11.v;
-            return _context11.a(2, list.length);
+            list = _context13.v;
+            return _context13.a(2, list.length);
         }
-      }, _callee11);
+      }, _callee13);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -14839,18 +15551,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
       var q;
-      return _regenerator().w(function (_context12) {
-        while (1) switch (_context12.n) {
+      return _regenerator().w(function (_context14) {
+        while (1) switch (_context14.n) {
           case 0:
-            _context12.n = 1;
+            _context14.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context12.v;
-            return _context12.a(2, q.getHeld());
+            q = _context14.v;
+            return _context14.a(2, q.getHeld());
         }
-      }, _callee12);
+      }, _callee14);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -14864,18 +15576,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
       var q;
-      return _regenerator().w(function (_context13) {
-        while (1) switch (_context13.n) {
+      return _regenerator().w(function (_context15) {
+        while (1) switch (_context15.n) {
           case 0:
-            _context13.n = 1;
+            _context15.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context13.v;
-            return _context13.a(2, q.usage());
+            q = _context15.v;
+            return _context15.a(2, q.usage());
         }
-      }, _callee13);
+      }, _callee15);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
@@ -15044,7 +15756,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -15266,10 +15978,16 @@
               _context.p = 11;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
+              // The queue's own message is kept. `QueueFull` names how much
+              // space is taken and how many held recordings are taking it —
+              // the only information the contributor can act on — and
+              // replacing it with "Upload failed completely" threw that away
+              // at the one moment it mattered.
+              queueMessage = _t2 && _t2.message ? _t2.message : "Upload failed completely.";
               store.dispatch({
                 type: "starmus/error",
                 error: {
-                  message: "Upload failed completely.",
+                  message: queueMessage,
                   retryable: false
                 }
               });
@@ -15772,526 +16490,6 @@
   var es_map = {};
 
   var es_map_constructor = {};
-
-  var internalMetadata = {exports: {}};
-
-  var objectGetOwnPropertyNamesExternal = {};
-
-  var hasRequiredObjectGetOwnPropertyNamesExternal;
-
-  function requireObjectGetOwnPropertyNamesExternal () {
-  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
-  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
-  	/* eslint-disable es/no-object-getownpropertynames -- safe */
-  	var classof = requireClassofRaw();
-  	var toIndexedObject = requireToIndexedObject();
-  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
-  	var arraySlice = requireArraySlice();
-
-  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
-  	  ? Object.getOwnPropertyNames(window) : [];
-
-  	var getWindowNames = function (it) {
-  	  try {
-  	    return $getOwnPropertyNames(it);
-  	  } catch (error) {
-  	    return arraySlice(windowNames);
-  	  }
-  	};
-
-  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
-  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
-  	  return windowNames && classof(it) === 'Window'
-  	    ? getWindowNames(it)
-  	    : $getOwnPropertyNames(toIndexedObject(it));
-  	};
-  	return objectGetOwnPropertyNamesExternal;
-  }
-
-  var arrayBufferNonExtensible;
-  var hasRequiredArrayBufferNonExtensible;
-
-  function requireArrayBufferNonExtensible () {
-  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
-  	hasRequiredArrayBufferNonExtensible = 1;
-  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
-  	var fails = requireFails();
-
-  	arrayBufferNonExtensible = fails(function () {
-  	  if (typeof ArrayBuffer == 'function') {
-  	    var buffer = new ArrayBuffer(8);
-  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
-  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
-  	  }
-  	});
-  	return arrayBufferNonExtensible;
-  }
-
-  var objectIsExtensible;
-  var hasRequiredObjectIsExtensible;
-
-  function requireObjectIsExtensible () {
-  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
-  	hasRequiredObjectIsExtensible = 1;
-  	var fails = requireFails();
-  	var isObject = requireIsObject();
-  	var classof = requireClassofRaw();
-  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
-
-  	// eslint-disable-next-line es/no-object-isextensible -- safe
-  	var $isExtensible = Object.isExtensible;
-  	var FAILS_ON_PRIMITIVES = fails(function () { });
-
-  	// `Object.isExtensible` method
-  	// https://tc39.es/ecma262/#sec-object.isextensible
-  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
-  	  if (!isObject(it)) return false;
-  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
-  	  return $isExtensible ? $isExtensible(it) : true;
-  	} : $isExtensible;
-  	return objectIsExtensible;
-  }
-
-  var freezing;
-  var hasRequiredFreezing;
-
-  function requireFreezing () {
-  	if (hasRequiredFreezing) return freezing;
-  	hasRequiredFreezing = 1;
-  	var fails = requireFails();
-
-  	freezing = !fails(function () {
-  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
-  	  return Object.isExtensible(Object.preventExtensions({}));
-  	});
-  	return freezing;
-  }
-
-  var hasRequiredInternalMetadata;
-
-  function requireInternalMetadata () {
-  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
-  	hasRequiredInternalMetadata = 1;
-  	var $ = require_export();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var hiddenKeys = requireHiddenKeys();
-  	var isObject = requireIsObject();
-  	var hasOwn = requireHasOwnProperty();
-  	var defineProperty = requireObjectDefineProperty().f;
-  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
-  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
-  	var isExtensible = requireObjectIsExtensible();
-  	var uid = requireUid();
-  	var FREEZING = requireFreezing();
-
-  	var REQUIRED = false;
-  	var METADATA = uid('meta');
-  	var id = 0;
-
-  	var setMetadata = function (it) {
-  	  defineProperty(it, METADATA, { value: {
-  	    objectID: 'O' + id++, // object ID
-  	    weakData: {}          // weak collections IDs
-  	  } });
-  	};
-
-  	var fastKey = function (it, create) {
-  	  // return a primitive with prefix
-  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return 'F';
-  	    // not necessary to add metadata
-  	    if (!create) return 'E';
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return object ID
-  	  } return it[METADATA].objectID;
-  	};
-
-  	var getWeakData = function (it, create) {
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return true;
-  	    // not necessary to add metadata
-  	    if (!create) return false;
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return the store of weak collections IDs
-  	  } return it[METADATA].weakData;
-  	};
-
-  	// add metadata on freeze-family methods calling
-  	var onFreeze = function (it) {
-  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
-  	  return it;
-  	};
-
-  	var enable = function () {
-  	  meta.enable = function () { /* empty */ };
-  	  REQUIRED = true;
-  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
-  	  var splice = uncurryThis([].splice);
-  	  var test = {};
-  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
-  	  test[METADATA] = 1;
-
-  	  // prevent exposing of metadata key
-  	  if (getOwnPropertyNames(test).length) {
-  	    getOwnPropertyNamesModule.f = function (it) {
-  	      var result = getOwnPropertyNames(it);
-  	      for (var i = 0, length = result.length; i < length; i++) {
-  	        if (result[i] === METADATA) {
-  	          splice(result, i, 1);
-  	          break;
-  	        }
-  	      } return result;
-  	    };
-
-  	    $({ target: 'Object', stat: true, forced: true }, {
-  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
-  	    });
-  	  }
-  	};
-
-  	var meta = internalMetadata.exports = {
-  	  enable: enable,
-  	  fastKey: fastKey,
-  	  getWeakData: getWeakData,
-  	  onFreeze: onFreeze
-  	};
-
-  	hiddenKeys[METADATA] = true;
-  	return internalMetadata.exports;
-  }
-
-  var collection;
-  var hasRequiredCollection;
-
-  function requireCollection () {
-  	if (hasRequiredCollection) return collection;
-  	hasRequiredCollection = 1;
-  	var $ = require_export();
-  	var globalThis = requireGlobalThis();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var isForced = requireIsForced();
-  	var defineBuiltIn = requireDefineBuiltIn();
-  	var InternalMetadataModule = requireInternalMetadata();
-  	var iterate = requireIterate();
-  	var anInstance = requireAnInstance();
-  	var isCallable = requireIsCallable();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var isObject = requireIsObject();
-  	var fails = requireFails();
-  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
-  	var setToStringTag = requireSetToStringTag();
-  	var inheritIfRequired = requireInheritIfRequired();
-
-  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
-  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
-  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
-  	  var ADDER = IS_MAP ? 'set' : 'add';
-  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
-  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
-  	  var Constructor = NativeConstructor;
-  	  var exported = {};
-
-  	  var fixMethod = function (KEY) {
-  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
-  	    defineBuiltIn(NativePrototype, KEY,
-  	      KEY === 'add' ? function add(value) {
-  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
-  	        return this;
-  	      } : KEY === 'delete' ? function (key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'get' ? function get(key) {
-  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'has' ? function has(key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : function set(key, value) {
-  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
-  	        return this;
-  	      }
-  	    );
-  	  };
-
-  	  var REPLACE = isForced(
-  	    CONSTRUCTOR_NAME,
-  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
-  	      new NativeConstructor().entries().next();
-  	    }))
-  	  );
-
-  	  if (REPLACE) {
-  	    // create collection constructor
-  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
-  	    InternalMetadataModule.enable();
-  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
-  	    var instance = new Constructor();
-  	    // early implementations not supports chaining
-  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
-  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
-  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
-  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
-  	    // eslint-disable-next-line no-new -- required for testing
-  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
-  	    // for early implementations -0 and +0 not the same
-  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
-  	      // V8 ~ Chromium 42- fails only with 5+ elements
-  	      var $instance = new NativeConstructor();
-  	      var index = 5;
-  	      while (index--) $instance[ADDER](index, index);
-  	      return !$instance.has(-0);
-  	    });
-
-  	    if (!ACCEPT_ITERABLES) {
-  	      Constructor = wrapper(function (dummy, iterable) {
-  	        anInstance(dummy, NativePrototype);
-  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
-  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	        return that;
-  	      });
-  	      Constructor.prototype = NativePrototype;
-  	      NativePrototype.constructor = Constructor;
-  	    }
-
-  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
-  	      fixMethod('delete');
-  	      fixMethod('has');
-  	      IS_MAP && fixMethod('get');
-  	    }
-
-  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
-
-  	    // weak collections should not contains .clear method
-  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
-  	  }
-
-  	  exported[CONSTRUCTOR_NAME] = Constructor;
-  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
-
-  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
-
-  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
-
-  	  return Constructor;
-  	};
-  	return collection;
-  }
-
-  var collectionStrong;
-  var hasRequiredCollectionStrong;
-
-  function requireCollectionStrong () {
-  	if (hasRequiredCollectionStrong) return collectionStrong;
-  	hasRequiredCollectionStrong = 1;
-  	var create = requireObjectCreate();
-  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-  	var defineBuiltIns = requireDefineBuiltIns();
-  	var bind = requireFunctionBindContext();
-  	var anInstance = requireAnInstance();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var iterate = requireIterate();
-  	var defineIterator = requireIteratorDefine();
-  	var createIterResultObject = requireCreateIterResultObject();
-  	var setSpecies = requireSetSpecies();
-  	var DESCRIPTORS = requireDescriptors();
-  	var fastKey = requireInternalMetadata().fastKey;
-  	var InternalStateModule = requireInternalState();
-
-  	var setInternalState = InternalStateModule.set;
-  	var internalStateGetterFor = InternalStateModule.getterFor;
-
-  	collectionStrong = {
-  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
-  	    var Constructor = wrapper(function (that, iterable) {
-  	      anInstance(that, Prototype);
-  	      setInternalState(that, {
-  	        type: CONSTRUCTOR_NAME,
-  	        index: create(null),
-  	        first: null,
-  	        last: null,
-  	        size: 0
-  	      });
-  	      if (!DESCRIPTORS) that.size = 0;
-  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	    });
-
-  	    var Prototype = Constructor.prototype;
-
-  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
-
-  	    var define = function (that, key, value) {
-  	      var state = getInternalState(that);
-  	      var entry = getEntry(that, key);
-  	      var previous, index;
-  	      // change existing entry
-  	      if (entry) {
-  	        entry.value = value;
-  	      // create new entry
-  	      } else {
-  	        state.last = entry = {
-  	          index: index = fastKey(key, true),
-  	          key: key,
-  	          value: value,
-  	          previous: previous = state.last,
-  	          next: null,
-  	          removed: false
-  	        };
-  	        if (!state.first) state.first = entry;
-  	        if (previous) previous.next = entry;
-  	        if (DESCRIPTORS) state.size++;
-  	        else that.size++;
-  	        // add to index
-  	        if (index !== 'F') state.index[index] = entry;
-  	      } return that;
-  	    };
-
-  	    var getEntry = function (that, key) {
-  	      var state = getInternalState(that);
-  	      // fast case
-  	      var index = fastKey(key);
-  	      var entry;
-  	      if (index !== 'F') return state.index[index];
-  	      // frozen object case
-  	      for (entry = state.first; entry; entry = entry.next) {
-  	        if (entry.key === key) return entry;
-  	      }
-  	    };
-
-  	    defineBuiltIns(Prototype, {
-  	      // `{ Map, Set }.prototype.clear()` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
-  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
-  	      clear: function clear() {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = state.first;
-  	        while (entry) {
-  	          entry.removed = true;
-  	          if (entry.previous) entry.previous = entry.previous.next = null;
-  	          entry = entry.next;
-  	        }
-  	        state.first = state.last = null;
-  	        state.index = create(null);
-  	        if (DESCRIPTORS) state.size = 0;
-  	        else that.size = 0;
-  	      },
-  	      // `{ Map, Set }.prototype.delete(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
-  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
-  	      'delete': function (key) {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = getEntry(that, key);
-  	        if (entry) {
-  	          var next = entry.next;
-  	          var prev = entry.previous;
-  	          delete state.index[entry.index];
-  	          entry.removed = true;
-  	          if (prev) prev.next = next;
-  	          if (next) next.previous = prev;
-  	          if (state.first === entry) state.first = next;
-  	          if (state.last === entry) state.last = prev;
-  	          if (DESCRIPTORS) state.size--;
-  	          else that.size--;
-  	        } return !!entry;
-  	      },
-  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
-  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
-  	      forEach: function forEach(callbackfn /* , that = undefined */) {
-  	        var state = getInternalState(this);
-  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	        var entry;
-  	        while (entry = entry ? entry.next : state.first) {
-  	          boundFunction(entry.value, entry.key, this);
-  	          // revert to the last existing entry
-  	          while (entry && entry.removed) entry = entry.previous;
-  	        }
-  	      },
-  	      // `{ Map, Set}.prototype.has(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.has
-  	      // https://tc39.es/ecma262/#sec-set.prototype.has
-  	      has: function has(key) {
-  	        return !!getEntry(this, key);
-  	      }
-  	    });
-
-  	    defineBuiltIns(Prototype, IS_MAP ? {
-  	      // `Map.prototype.get(key)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.get
-  	      get: function get(key) {
-  	        var entry = getEntry(this, key);
-  	        return entry && entry.value;
-  	      },
-  	      // `Map.prototype.set(key, value)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.set
-  	      set: function set(key, value) {
-  	        return define(this, key === 0 ? 0 : key, value);
-  	      }
-  	    } : {
-  	      // `Set.prototype.add(value)` method
-  	      // https://tc39.es/ecma262/#sec-set.prototype.add
-  	      add: function add(value) {
-  	        return define(this, value = value === 0 ? 0 : value, value);
-  	      }
-  	    });
-  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
-  	      configurable: true,
-  	      get: function () {
-  	        return getInternalState(this).size;
-  	      }
-  	    });
-  	    return Constructor;
-  	  },
-  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
-  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
-  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
-  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
-  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
-  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-map.prototype.values
-  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
-  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-set.prototype.values
-  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
-  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
-  	      setInternalState(this, {
-  	        type: ITERATOR_NAME,
-  	        target: iterated,
-  	        state: getInternalCollectionState(iterated),
-  	        kind: kind,
-  	        last: null
-  	      });
-  	    }, function () {
-  	      var state = getInternalIteratorState(this);
-  	      var kind = state.kind;
-  	      var entry = state.last;
-  	      // revert to the last existing entry
-  	      while (entry && entry.removed) entry = entry.previous;
-  	      // get next entry
-  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
-  	        // or finish the iteration
-  	        state.target = null;
-  	        return createIterResultObject(undefined, true);
-  	      }
-  	      // return step by kind
-  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
-  	      if (kind === 'values') return createIterResultObject(entry.value, false);
-  	      return createIterResultObject([entry.key, entry.value], false);
-  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
-
-  	    // `{ Map, Set }.prototype[@@species]` accessors
-  	    // https://tc39.es/ecma262/#sec-get-map-@@species
-  	    // https://tc39.es/ecma262/#sec-get-set-@@species
-  	    setSpecies(CONSTRUCTOR_NAME);
-  	  }
-  	};
-  	return collectionStrong;
-  }
 
   var hasRequiredEs_map_constructor;
 

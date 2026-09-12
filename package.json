@@ -10,7 +10,8 @@
             "import": "./dist/starmus-audio.js"
         },
         "./transcript": {
-            "import": "./dist/starmus-transcript.js"
+            "import": "./dist/starmus-transcript.esm.js",
+            "default": "./dist/starmus-transcript.js"
         },
         "./css": "./dist/starmus-audio.css",
         "./css/consent": "./dist/starmus-consent.css"
@@ -29,7 +30,7 @@
         "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true });\"",
         "build:css": "postcss src/starmus-audio.css -o dist/starmus-audio.css --no-map && postcss src/css/consent/starmus-consent.css -o dist/starmus-consent.css --no-map",
         "build:js": "rollup -c roll-up.config.mjs",
-        "build:hash": "node scripts/build-starmus.cjs dist/starmus-audio.css dist/starmus-audio.js dist/starmus-transcript.js",
+        "build:hash": "node scripts/build-starmus.cjs dist/starmus-audio.css dist/starmus-audio.js dist/starmus-transcript.js dist/starmus-transcript.esm.js",
         "build": "pnpm run clean && mkdir -p dist && pnpm run build:css && pnpm run build:js && pnpm run build:hash",
         "prebuild": "node scripts/validate-build.cjs",
         "test:unit": "node scripts/run-tests.cjs",
@@ -50,6 +51,10 @@
         },
         {
             "path": "dist/starmus-transcript.js",
+            "limit": "30 KB"
+        },
+        {
+            "path": "dist/starmus-transcript.esm.js",
             "limit": "30 KB"
         }
     ],

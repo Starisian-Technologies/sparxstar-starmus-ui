@@ -140,4 +140,24 @@ export default [
 
         plugins: pluginsFor(TRANSCRIPT_TARGETS),
     },
+
+    // The same slot as an ES module.
+    //
+    // The IIFE above defines a browser global and has no `export`, so the
+    // `./transcript` package subpath pointed its `import` condition at a file
+    // that cannot be imported. A host bundling the package needs the module
+    // build; a host dropping a <script> tag needs the global. Both ship.
+    {
+        input: "src/js/starmus-transcript-provider.js",
+
+        output: {
+            file: "dist/starmus-transcript.esm.js",
+            format: "es",
+            sourcemap: false,
+        },
+
+        external: [],
+
+        plugins: pluginsFor(TRANSCRIPT_TARGETS),
+    },
 ];

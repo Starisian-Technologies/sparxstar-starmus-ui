@@ -24,7 +24,7 @@
 
 import { debugLog } from "./starmus-hooks.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
@@ -140,6 +140,8 @@ class OfflineQueue {
         this.processQueueTimeoutId = null;
         /** @type {number|null} */
         this.processQueueDueAt = null;
+        /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
+        this._addChain = Promise.resolve();
     }
 
     /**
@@ -215,6 +217,26 @@ class OfflineQueue {
      * @returns {Promise<string>} Submission ID
      */
     async add(instanceId, audioBlob, fileName, formFields = {}, metadata = {}) {
+        // Serialized. The budget check reads the store and the insert writes it
+        // in two separate transactions, so two concurrent adds could each see
+        // room and then both insert — two 12 MB Tier A recordings landing in a
+        // 20 MB queue. Chaining them makes check-then-insert effectively
+        // atomic without holding an IndexedDB transaction across an await.
+        const previous = this._addChain;
+        let release;
+        this._addChain = new Promise((resolve) => {
+            release = resolve;
+        });
+        try {
+            await previous;
+            return await this._add(instanceId, audioBlob, fileName, formFields, metadata);
+        } finally {
+            release();
+        }
+    }
+
+    /** @private */
+    async _add(instanceId, audioBlob, fileName, formFields = {}, metadata = {}) {
         if (!this.db) {
             throw new Error("OfflineQueue: DB not initialised");
         }
@@ -401,6 +423,37 @@ class OfflineQueue {
         return all.filter((item) => item.held === true);
     }
 
+    /**
+     * Replace a submission's metadata in place.
+     *
+     * @private
+     * @param {string} id
+     * @param {Object} metadata
+     * @returns {Promise<void>}
+     */
+    async _setMetadata(id, metadata) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.metadata = metadata;
+                    store.put(item);
+                }
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve();
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
     /** @private */
     async _updateRetry(id, retryCount, error) {
         if (!this.db) {
@@ -458,6 +511,21 @@ class OfflineQueue {
                     item;
                 // Whether the bytes reached the server on this attempt.
                 let uploaded = false;
+
+                // Entries queued before the submission id existed have no
+                // `metadata.uploadId`, so every retry would mint a new one and
+                // start a new TUS resource instead of resuming the partial it
+                // already has. Backfilled once and persisted, so the
+                // one-id-per-submission rule reaches recordings already sitting
+                // on devices rather than only new ones.
+                if (typeof metadata?.uploadId !== "string" || metadata.uploadId === "") {
+                    const backfilled = createUploadId();
+                    await this._setMetadata(id, { ...(metadata || {}), uploadId: backfilled });
+                    if (metadata) {
+                        metadata.uploadId = backfilled;
+                    }
+                    debugLog("[Offline] Backfilled upload id for legacy entry:", id);
+                }
 
                 if (item.held) {
                     // Already held for a person. Retrying it on every drain
@@ -523,12 +591,16 @@ class OfflineQueue {
                         emitCompletionEvent(detail);
                     } else {
                         // The upload succeeded but the format cannot be named,
-                        // so no consumer can be told this asset exists. The
-                        // entry is still removed — the asset is on the server
-                        // and re-uploading it on every future drain would burn
-                        // bandwidth the contributor is paying for without ever
-                        // producing a nameable format. What must not happen is
-                        // this passing in silence, so it is reported.
+                        // so `starmus:complete` cannot be built — and nothing
+                        // server-side begins without it (ADR-034). The asset is
+                        // on the server with no consumer told it exists.
+                        //
+                        // Held, not removed. Removing it made the orphan
+                        // invisible: the recording was gone from the device and
+                        // stalled on the server with nobody able to see either
+                        // half. A held entry is not retried, so it costs no
+                        // bandwidth, and it is the only remaining evidence that
+                        // this recording needs a person.
                         console.error(
                             "[Offline] Uploaded but could not build starmus:complete:",
                             { id, fileName, mimeType: metadata?.mimeType || audioBlob.type || "" }
@@ -540,6 +612,11 @@ class OfflineQueue {
                             mimeType: metadata?.mimeType || audioBlob.type || "",
                             captureProfile: metadata?.captureProfile || null,
                         });
+                        await this._hold(
+                            id,
+                            `Uploaded, but the format could not be named (${metadata?.mimeType || audioBlob.type || "unknown"}), so no completion event was emitted.`,
+                        );
+                        continue;
                     }
                 } catch (err) {
                     if (uploaded) {
@@ -675,7 +752,13 @@ class OfflineQueue {
     }
     /** @private */
     async _getNextProcessDelay() {
-        const pending = await this.getAll();
+        // Held entries are excluded. `_hold()` leaves `retryCount` at the
+        // limit, and the branch below returns 0 for anything at the limit — so
+        // a single held recording made the queue reschedule itself immediately,
+        // forever, waking the device to look at an item it will never retry.
+        // On a phone with a failing upload and a low battery that is the worst
+        // possible loop to leave running.
+        const pending = (await this.getAll()).filter((item) => item.held !== true);
         if (pending.length === 0) {
             return null;
         }

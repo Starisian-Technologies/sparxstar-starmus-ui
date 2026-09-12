@@ -9,6 +9,9 @@
         ".": {
             "import": "./dist/starmus-audio.js"
         },
+        "./transcript": {
+            "import": "./dist/starmus-transcript.js"
+        },
         "./css": "./dist/starmus-audio.css",
         "./css/consent": "./dist/starmus-consent.css"
     },

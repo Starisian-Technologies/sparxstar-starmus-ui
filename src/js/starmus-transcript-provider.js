@@ -70,6 +70,7 @@ const providerFactories = [];
  *     engine: string,          // e.g. 'browser-speech-recognition'
  *     model: string|null,      // engine's model/version identifier, or null
  *                              // when the engine does not expose one
+ *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
  *     start(context): void,    // context.emit(segment), context.fail(error)
  *     stop(): void,
  *   }
@@ -200,7 +201,11 @@ registerTranscriptProvider("browser-speech-recognition", createBrowserSpeechProv
  *        never reads a wall clock: a client-supplied absolute timestamp is not
  *        an ordering authority, and the only timeline that exists here is the
  *        recording's own.
- * @param {string} [options.tier='C']         Resolved device tier.
+ * @param {string} options.tier              Resolved device tier. Required, and
+ *        deliberately without a default: `'C'` would silently deny the slot to
+ *        a caller that forgot to pass one, and `'A'` would silently open the
+ *        microphone pipeline for one. The tier is resolved at initialization
+ *        and the caller knows it.
  * @param {string} [options.language]         BCP-47 tag.
  * @param {number} [options.maxDurationMs]    Provider auto-disable bound.
  * @param {function(Object): void} [options.onUpdate] Called with the draft
@@ -211,11 +216,16 @@ registerTranscriptProvider("browser-speech-recognition", createBrowserSpeechProv
 export function openTranscriptSlot({
     sessionId,
     getElapsedMs,
-    tier = "C",
+    tier,
     language,
     maxDurationMs = DEFAULT_MAX_PROVIDER_MS,
     onUpdate,
 }) {
+    if (typeof tier !== "string" || tier === "") {
+        throw new Error(
+            "TRANSCRIPT_SLOT_NO_TIER: tier is required. It decides whether a microphone surface exists at all, and this slot does not guess it.",
+        );
+    }
     // Tier C is file upload only — no microphone, and so no live transcript.
     if (tier === "C") {
         return null;
@@ -235,6 +245,14 @@ export function openTranscriptSlot({
         return null;
     }
 
+    // ADR-038 says the output carries tokens. What a token *is* depends on the
+    // engine: browser speech recognition emits whole utterances, and a future
+    // Yahura live provider is expected to emit words. Calling an utterance a
+    // word token would misdescribe it, and dropping the field would leave a
+    // consumer unable to tell which it received — so the granularity travels
+    // with the draft and defaults to the weaker claim.
+    const tokenGranularity = provider.tokenGranularity === "word" ? "word" : "utterance";
+
     const segments = [];
     let stopTimer = null;
     let running = false;
@@ -251,6 +269,7 @@ export function openTranscriptSlot({
             timeline: "original",
             language: language || null,
             provenance: { engine: provider.engine, model: provider.model },
+            tokenGranularity,
             segments: segments.slice(),
         };
     }
@@ -334,7 +353,16 @@ export function openTranscriptSlot({
             running = true;
             lastStartMs = Math.max(0, Math.round(getElapsedMs()));
             stopTimer = setTimeout(stop, maxDurationMs);
-            provider.start(context);
+            try {
+                provider.start(context);
+            } catch (error) {
+                // A provider that throws on the way up would otherwise leave
+                // the slot marked running with its auto-disable timer armed:
+                // every later start() would no-op and the sensor bound would
+                // fire against a provider that never started.
+                stop();
+                console.warn("[Transcript] Provider failed to start:", error.message);
+            }
         },
         stop,
         draft,

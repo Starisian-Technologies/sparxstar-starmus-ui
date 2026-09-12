@@ -2624,6 +2624,7 @@ var StarmusTranscript = (function (exports) {
    *     engine: string,          // e.g. 'browser-speech-recognition'
    *     model: string|null,      // engine's model/version identifier, or null
    *                              // when the engine does not expose one
+   *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
    *     start(context): void,    // context.emit(segment), context.fail(error)
    *     stop(): void,
    *   }
@@ -2749,7 +2750,11 @@ var StarmusTranscript = (function (exports) {
    *        never reads a wall clock: a client-supplied absolute timestamp is not
    *        an ordering authority, and the only timeline that exists here is the
    *        recording's own.
-   * @param {string} [options.tier='C']         Resolved device tier.
+   * @param {string} options.tier              Resolved device tier. Required, and
+   *        deliberately without a default: `'C'` would silently deny the slot to
+   *        a caller that forgot to pass one, and `'A'` would silently open the
+   *        microphone pipeline for one. The tier is resolved at initialization
+   *        and the caller knows it.
    * @param {string} [options.language]         BCP-47 tag.
    * @param {number} [options.maxDurationMs]    Provider auto-disable bound.
    * @param {function(Object): void} [options.onUpdate] Called with the draft
@@ -2760,12 +2765,14 @@ var StarmusTranscript = (function (exports) {
   function openTranscriptSlot(_ref2) {
     var sessionId = _ref2.sessionId,
       getElapsedMs = _ref2.getElapsedMs,
-      _ref2$tier = _ref2.tier,
-      tier = _ref2$tier === void 0 ? "C" : _ref2$tier,
+      tier = _ref2.tier,
       language = _ref2.language,
       _ref2$maxDurationMs = _ref2.maxDurationMs,
       maxDurationMs = _ref2$maxDurationMs === void 0 ? DEFAULT_MAX_PROVIDER_MS : _ref2$maxDurationMs,
       onUpdate = _ref2.onUpdate;
+    if (typeof tier !== "string" || tier === "") {
+      throw new Error("TRANSCRIPT_SLOT_NO_TIER: tier is required. It decides whether a microphone surface exists at all, and this slot does not guess it.");
+    }
     // Tier C is file upload only — no microphone, and so no live transcript.
     if (tier === "C") {
       return null;
@@ -2796,6 +2803,14 @@ var StarmusTranscript = (function (exports) {
     if (!provider) {
       return null;
     }
+
+    // ADR-038 says the output carries tokens. What a token *is* depends on the
+    // engine: browser speech recognition emits whole utterances, and a future
+    // Yahura live provider is expected to emit words. Calling an utterance a
+    // word token would misdescribe it, and dropping the field would leave a
+    // consumer unable to tell which it received — so the granularity travels
+    // with the draft and defaults to the weaker claim.
+    var tokenGranularity = provider.tokenGranularity === "word" ? "word" : "utterance";
     var segments = [];
     var stopTimer = null;
     var running = false;
@@ -2815,6 +2830,7 @@ var StarmusTranscript = (function (exports) {
           engine: provider.engine,
           model: provider.model
         },
+        tokenGranularity: tokenGranularity,
         segments: segments.slice()
       };
     }
@@ -2896,7 +2912,16 @@ var StarmusTranscript = (function (exports) {
         running = true;
         lastStartMs = Math.max(0, Math.round(getElapsedMs()));
         stopTimer = setTimeout(stop, maxDurationMs);
-        provider.start(context);
+        try {
+          provider.start(context);
+        } catch (error) {
+          // A provider that throws on the way up would otherwise leave
+          // the slot marked running with its auto-disable timer armed:
+          // every later start() would no-op and the sensor bound would
+          // fire against a provider that never started.
+          stop();
+          console.warn("[Transcript] Provider failed to start:", error.message);
+        }
       },
       stop: stop,
       draft: draft,

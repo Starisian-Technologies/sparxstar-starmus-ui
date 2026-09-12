@@ -21,14 +21,23 @@ import {
  * @param {Object} [options]
  * @returns {{provider: Object, captured: Object}}
  */
-function stubProvider({ engine = "stub-engine", model = "stub-1.2" } = {}) {
+function stubProvider({
+    engine = "stub-engine",
+    model = "stub-1.2",
+    tokenGranularity,
+    throwOnStart = false,
+} = {}) {
     const captured = { context: null, started: 0, stopped: 0 };
     registerTranscriptProvider("stub", () => ({
         engine,
         model,
+        ...(tokenGranularity === undefined ? {} : { tokenGranularity }),
         start(context) {
             captured.context = context;
             captured.started += 1;
+            if (throwOnStart) {
+                throw new Error("provider blew up on the way up");
+            }
         },
         stop() {
             captured.stopped += 1;
@@ -65,6 +74,59 @@ test("a slot without a recording clock is refused", () => {
         () => openTranscriptSlot({ sessionId: "s1", tier: "A" }),
         /TRANSCRIPT_SLOT_NO_CLOCK/,
     );
+});
+
+test("a slot without a tier is refused rather than guessed either way", () => {
+    clearTranscriptProviders();
+    stubProvider();
+    assert.throws(
+        () => openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0 }),
+        /TRANSCRIPT_SLOT_NO_TIER/,
+    );
+});
+
+test("the draft says what a token is, and never overclaims word granularity", () => {
+    clearTranscriptProviders();
+    const captured = stubProvider();
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+    });
+    slot.start();
+    captured.context.emit({ text: "kori tanante", isFinal: true });
+    assert.equal(
+        slot.draft().tokenGranularity,
+        "utterance",
+        "an engine that does not claim word tokens must not be reported as producing them",
+    );
+    slot.stop();
+
+    clearTranscriptProviders();
+    const worded = stubProvider({ tokenGranularity: "word" });
+    const wordSlot = openTranscriptSlot({
+        sessionId: "s2",
+        getElapsedMs: () => 0,
+        tier: "A",
+    });
+    wordSlot.start();
+    worded.context.emit({ text: "kori", isFinal: true });
+    assert.equal(wordSlot.draft().tokenGranularity, "word");
+    wordSlot.stop();
+});
+
+test("a provider that throws on start leaves the slot stopped, not stuck running", () => {
+    clearTranscriptProviders();
+    const captured = stubProvider({ throwOnStart: true });
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+    });
+    assert.doesNotThrow(() => slot.start());
+    assert.equal(captured.stopped, 1, "the failed provider is stopped");
+    captured.context.emit({ text: "late", isFinal: true });
+    assert.equal(slot.draft().segments.length, 0, "nothing is accepted afterwards");
 });
 
 test("the draft carries provenance and an original-timeline stamp", () => {

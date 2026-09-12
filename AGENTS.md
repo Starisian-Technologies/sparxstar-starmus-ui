@@ -18,6 +18,9 @@ consent capture, resumable chunked upload, and the live-transcript slot.
 - Live-transcript **slot** — provider-agnostic, its own bundle
   (`dist/starmus-transcript.js`), output is a lowest-authority machine draft
   (ADR-038; see Live-Transcript Slot below)
+- File upload of prerecorded material on the Tier C path, recorded as the
+  `import` capture profile — preserved unchanged, with an attainment record
+  stating that nothing was measured rather than claiming the profile was met
 
 ## What This Package Is NOT
 
@@ -191,6 +194,8 @@ Run `node scripts/validate-build.cjs` (it also runs as `prebuild`).
 | Capture profile sent | validate-build.cjs | Present in upload metadata |
 | Upload watchdog | validate-build.cjs | No-progress (stall) bound only — never a total-duration deadline |
 | No CMS reach | validate-build.cjs | No CMS route, nonce, or page global in `src/js/` |
+| Auth headers | starmus-tus.js | Host-injected via `STARMUS_BOOTSTRAP.uploadHeaders`; this package names no header |
+| Stable upload identity | starmus-tus.js | One id per submission, reused across retries, and the TUS resume fingerprint |
 | One home for limits | validate-build.cjs | No audio-limit literal outside `starmus-capture-profiles.js` |
 | No edit capability | validate-build.cjs | No EDL, offline render, or trim/splice/cut helper |
 
@@ -273,6 +278,8 @@ here. Adding a provider is `registerTranscriptProvider`; nothing else changes.
 | FAIL | A provider bundled into `dist/starmus-audio.js` |
 | FAIL | The slot running on Tier C |
 | FAIL | Provenance omitted, or a placeholder model string standing in for one the engine does not expose |
+| FAIL | `tokenGranularity` claiming `word` for an engine that emits utterances |
+| FAIL | `openTranscriptSlot` called without an explicit `tier` |
 
 ---
 
@@ -324,6 +331,19 @@ From AGENTS.md coding standards:
 
 The offline queue in `starmus-offline.js` must document its eviction policy
 in a JSDoc comment.
+
+**A queued recording is removed on successful upload and on nothing else.** An
+entry that exhausts its retries, or fails with an error retrying cannot fix, is
+marked `held`: kept, no longer retried, and surfaced through
+`getHeldSubmissions()` so a person can act. The queue used to delete both, which
+made it the component that decided a contributor's material was disposable
+because a server returned 400 four times. ADR-011 does not allow that, and on
+these networks the queued blob is often the only copy.
+
+| FAIL | Condition |
+| --- | --- |
+| FAIL | A queue path that deletes a submission for any reason but successful upload |
+| FAIL | Held submissions that no host-visible accessor reports |
 
 ---
 

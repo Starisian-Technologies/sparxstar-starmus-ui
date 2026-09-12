@@ -239,6 +239,28 @@
                         kind: "file",
                         file: action.file,
                         fileName: action.file.name,
+                        // An attached file is prerecorded material, which is
+                        // exactly what ADR-035 calls the `import` profile:
+                        // preserved unchanged, no transcode, resample or
+                        // fold-down. Leaving the profile unset here sent a
+                        // blank one to ingestion on the Tier C path — the very
+                        // condition `AGENTS.md` lists as a build failure.
+                        captureProfile: "import",
+                        // Nothing was captured, so nothing was measured. The
+                        // attainment says so rather than claiming the profile
+                        // was met: `attained: null` is "not applicable", which
+                        // is different from the `false` a missed constraint
+                        // would give. The Spoken Audio Node probes the file
+                        // itself and records what it actually is.
+                        captureAttainment: {
+                            profile: "import",
+                            requested: { sampleRate: null, channelCount: null },
+                            actual: {},
+                            attained: null,
+                            exceeded: [],
+                            unverified: ["sampleRate", "channelCount"],
+                            source: "file-attachment",
+                        },
                         metadata: {
                             duration: 0,
                             mimeType: action.file.type,

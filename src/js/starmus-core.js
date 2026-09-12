@@ -169,7 +169,15 @@ export function initCore(store, instanceId, env) {
         // all. `null` means the recorder never reported one (a file upload via
         // the Tier C fallback), which is itself information the consumer needs.
         const captureAttainment = source.captureAttainment || null;
+        // Minted once per submission and carried into both the immediate
+        // attempt and the queued retry, so a recording that is resumed hours
+        // later still reports the identifier the server knows it by.
+        const uploadId =
+            typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+                ? crypto.randomUUID()
+                : null;
         const metadata = {
+            ...(uploadId === null ? {} : { uploadId }),
             transcript: source.transcript?.trim() || null,
             calibration: calibration.complete
                 ? { gain: calibration.gain, speechLevel: calibration.speechLevel }

@@ -209,7 +209,18 @@ export async function uploadTus(
         throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
     }
     const fields = normalizeFormFields(formFields);
-    const uploadId = createUploadId();
+
+    // One logical upload, one id, across every attempt.
+    //
+    // Minting a fresh UUID per call meant a resumed transfer carried the id
+    // from its first attempt on the server while `starmus:complete` announced
+    // the id from its last — an identifier matching no resource anywhere. The
+    // caller supplies the id it will keep (the offline queue persists it with
+    // the blob); a direct first attempt that has none gets one minted here.
+    const uploadId =
+        typeof metadata.uploadId === "string" && metadata.uploadId.trim() !== ""
+            ? metadata.uploadId
+            : createUploadId();
 
     // Flatten all metadata into TUS metadata (strings only)
     const tusMetadata = {
@@ -290,6 +301,18 @@ export async function uploadTus(
             retryDelays: cfg.retryDelays,
             removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
             checksumAlgorithm: "sha256",
+
+            // Resume by this upload's own id, not by the blob's shape.
+            //
+            // tus-js-client's default fingerprint is derived from name, type,
+            // size and lastModified. A recording is handed over as a bare Blob,
+            // which has no name and no modification time, so two recordings of
+            // the same type and size — a plausible pair on a fixed-length
+            // prompt — collide on one URL-storage key and the second resumes
+            // into the first's half-finished resource. Keying on the id makes
+            // that impossible.
+            fingerprint: () => Promise.resolve(`starmus-upload-${uploadId}`),
+
             metadata: tusMetadata,
             headers,
 

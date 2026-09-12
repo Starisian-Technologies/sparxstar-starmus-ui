@@ -84,9 +84,13 @@ function createOfflineSubmissionId() {
  * Offline submission queue backed by IndexedDB.
  *
  * Eviction policy (currently implemented):
- * - Entries are removed on successful upload.
- * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
- *   next processQueue run (they are not left orphaned indefinitely).
+ * - Entries are removed on successful upload, and only on successful upload.
+ * - An entry that exhausts {@link CONFIG.maxRetries}, or fails with an error
+ *   retrying cannot fix, is marked `held` rather than deleted. It stops being
+ *   retried and starts needing a person. ADR-011 keeps the material
+ *   unconditionally: a contributor does not lose a recording because the
+ *   server said 400 four times, and the bytes are the only copy once the page
+ *   is closed.
  *
  * Target eviction policy (Phase 3 — not yet implemented):
  * - LRU, 20 MB maximum total queue size.
@@ -200,6 +204,8 @@ class OfflineQueue {
             retryCount: 0,
             lastAttempt: null,
             error: null,
+            held: false,
+            heldReason: null,
         };
 
         return new Promise((resolve, reject) => {
@@ -253,6 +259,59 @@ class OfflineQueue {
             };
             tx.onerror = (ev) => reject(ev.target.error);
         });
+    }
+
+    /**
+     * Mark a submission as held: kept, no longer retried, needing a person.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} reason
+     * @returns {Promise<void>}
+     */
+    async _hold(id, reason) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.held = true;
+                    item.heldReason = reason;
+                    item.lastAttempt = Date.now();
+                    store.put(item);
+                }
+            };
+
+            tx.oncomplete = () => {
+                console.warn("[Offline] Held:", id, reason);
+                sparxstarIntegration.reportError("submission_held", {
+                    submissionId: id,
+                    reason,
+                });
+                this._notifyQueueUpdate();
+                resolve();
+            };
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
+    /**
+     * Submissions that are kept but will not be retried without intervention.
+     *
+     * Surfaced so a host can show them rather than let them sit invisibly: a
+     * held recording that nobody is told about is a lost one with extra steps.
+     *
+     * @returns {Promise<Array<Object>>}
+     */
+    async getHeld() {
+        const all = await this.getAll();
+        return all.filter((item) => item.held === true);
     }
 
     /** @private */
@@ -310,9 +369,20 @@ class OfflineQueue {
                 const { id, audioBlob, fileName, formFields, metadata, retryCount, instanceId } =
                     item;
 
+                if (item.held) {
+                    // Already held for a person. Retrying it on every drain
+                    // would burn the contributor's bandwidth to no effect.
+                    continue;
+                }
+
                 if (retryCount >= CONFIG.maxRetries) {
-                    // Remove exhausted items so they do not accumulate indefinitely.
-                    await this.remove(id);
+                    // Held, not removed. Exhausting the retries says the queue
+                    // cannot fix this on its own; it does not say the recording
+                    // is worth less than the storage it occupies (ADR-011).
+                    await this._hold(
+                        id,
+                        `Upload failed ${retryCount} times; the recording is held here and needs attention.`,
+                    );
                     continue;
                 }
 
@@ -379,7 +449,11 @@ class OfflineQueue {
                     const msg = err && err.message ? err.message : String(err);
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                     if (nonRetryable) {
-                        await this.remove(id);
+                        // Retrying will not help, so stop retrying — and keep
+                        // the recording. Deleting it here was the queue
+                        // quietly deciding a contributor's material was
+                        // disposable because a server rejected its shape.
+                        await this._hold(id, `Upload rejected and not retryable: ${msg}`);
                     } else {
                         const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
                         await this._updateRetry(id, nextRetryCount, msg);
@@ -501,12 +575,27 @@ export async function queueSubmission(instanceId, audioBlob, fileName, formField
 /**
  * Returns the count of pending offline submissions.
  *
+ * Counts held submissions too: they are still recordings this device is
+ * holding that the platform has not received.
+ *
  * @returns {Promise<number>}
  */
 export async function getPendingCount() {
     const q = await getOfflineQueue();
     const list = await q.getAll();
     return list.length;
+}
+
+/**
+ * Returns the submissions that are kept but will not be retried on their own.
+ *
+ * A host shows these so someone can act. They are never deleted by the queue.
+ *
+ * @returns {Promise<Array<Object>>}
+ */
+export async function getHeldSubmissions() {
+    const q = await getOfflineQueue();
+    return q.getHeld();
 }
 
 /**
@@ -521,4 +610,5 @@ export function initOffline() {
 if (typeof window !== "undefined") {
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
+    window.StarmusHeldSubmissions = getHeldSubmissions;
 }

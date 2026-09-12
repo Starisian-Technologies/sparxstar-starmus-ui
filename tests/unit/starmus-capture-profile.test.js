@@ -294,3 +294,57 @@ test("the upload id is minted where a failure is caught, not outside it", async 
         "and the id is minted as the first thing inside the handled path",
     );
 });
+
+test("a stored upload id that the upload layer would reject is re-minted, not kept", async () => {
+    // `uploadTus()` replaces any id that is not a UUID v4 with a fresh one. A
+    // queue that only asked "is something there" kept a non-empty invalid id,
+    // so every attempt was silently re-identified — a different fingerprint
+    // each time, never able to resume the partial the last attempt left.
+    const { isUploadId } = await import("../../src/js/starmus-tus.js");
+
+    assert.equal(isUploadId("11111111-2222-4333-8444-555555555555"), true);
+    assert.equal(isUploadId("legacy-id-from-an-older-build"), false, "the case that used to survive");
+    assert.equal(isUploadId(""), false);
+    assert.equal(isUploadId(undefined), false);
+    assert.equal(
+        isUploadId("11111111-2222-3333-8444-555555555555"),
+        false,
+        "version 3 is not version 4",
+    );
+
+    const { readFileSync } = await import("node:fs");
+    const queue = readFileSync("src/js/starmus-offline.js", "utf8");
+    assert.match(
+        queue,
+        /if \(!isUploadId\(metadata\?\.uploadId\)\)/,
+        "and the queue asks the module that decides, rather than keeping a second answer",
+    );
+});
+
+test("releasing a hold refuses an entry that is not held", async () => {
+    // Releasing clears retryCount, lastAttempt and error and schedules an
+    // immediate drain. On an entry merely waiting out its backoff that discards
+    // the backoff, pushing a failing upload straight back onto a bad link at the
+    // contributor's expense. `discardHeld()` guards the same way.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const body = source.slice(source.indexOf("async releaseHold(id)"));
+
+    assert.match(body.slice(0, 2000), /ReleaseRefused/, "a non-held entry is refused");
+    const guard = body.indexOf("item.held !== true");
+    const mutate = body.indexOf("item.held = false;");
+    assert.ok(guard > -1 && mutate > -1);
+    assert.ok(guard < mutate, "and the refusal comes before anything is changed");
+});
+
+test("queue usage is summed without materialising every recording", async () => {
+    // Each record holds its audio Blob. Reading them all to add up sizes
+    // materialised the whole queued set — up to the 20 MB cap — to produce a
+    // single number, against a package budget that keeps far less in memory.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const body = source.slice(source.indexOf("async usage()"), source.indexOf("async usage()") + 2500);
+
+    assert.match(body, /store\.openCursor\(\)/, "usage walks a cursor");
+    assert.doesNotMatch(body, /this\.getAll\(\)/, "and never loads the whole queue to count it");
+});

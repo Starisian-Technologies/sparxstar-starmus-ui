@@ -13577,6 +13577,22 @@
   var UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   /**
+   * Whether a value is usable as an upload identifier.
+   *
+   * Exported because the offline queue has to ask the same question and get the
+   * same answer. It decides whether a stored id survives to the next attempt,
+   * and this module decides whether a supplied one is sent — if those two
+   * disagree, the queue keeps an id the upload silently replaces, and every
+   * retry gets a new fingerprint and cannot resume the partial before it.
+   *
+   * @param {*} value
+   * @returns {boolean}
+   */
+  function isUploadId(value) {
+    return typeof value === "string" && UUID_V4_PATTERN.test(value.trim());
+  }
+
+  /**
    * Sanitises a metadata value for TUS header transmission.
    * Objects are JSON-encoded; all values have control characters stripped.
    *
@@ -13722,7 +13738,7 @@
             // resume fingerprint — an arbitrary string there would let two submissions
             // collide on a resume key, which is the bug the fingerprint change fixed.
             suppliedId = typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
-            uploadId = UUID_V4_PATTERN.test(suppliedId) ? suppliedId : createUploadId();
+            uploadId = isUploadId(suppliedId) ? suppliedId : createUploadId();
             if (suppliedId !== "" && uploadId !== suppliedId) {
               console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
             }
@@ -14862,40 +14878,61 @@
       key: "usage",
       value: (function () {
         var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
-          var all, totalBytes, heldBytes, heldCount, _iterator, _step, _item$audioBlob, item, size;
+          var _this6 = this;
           return _regenerator().w(function (_context6) {
             while (1) switch (_context6.n) {
               case 0:
-                _context6.n = 1;
-                return this.getAll();
+                if (this.db) {
+                  _context6.n = 1;
+                  break;
+                }
+                return _context6.a(2, {
+                  totalBytes: 0,
+                  count: 0,
+                  heldBytes: 0,
+                  heldCount: 0,
+                  maxTotalBytes: CONFIG.maxTotalBytes
+                });
               case 1:
-                all = _context6.v;
-                totalBytes = 0;
-                heldBytes = 0;
-                heldCount = 0;
-                _iterator = _createForOfIteratorHelper$1(all);
-                try {
-                  for (_iterator.s(); !(_step = _iterator.n()).done;) {
-                    item = _step.value;
-                    size = ((_item$audioBlob = item.audioBlob) === null || _item$audioBlob === void 0 ? void 0 : _item$audioBlob.size) || 0;
+                return _context6.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  var count = 0;
+                  var req = store.openCursor();
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  req.onsuccess = function (event) {
+                    var _cursor$value3, _cursor$value4;
+                    var cursor = event.target.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var size = ((_cursor$value3 = cursor.value) === null || _cursor$value3 === void 0 || (_cursor$value3 = _cursor$value3.audioBlob) === null || _cursor$value3 === void 0 ? void 0 : _cursor$value3.size) || 0;
                     totalBytes += size;
-                    if (item.held === true) {
+                    count += 1;
+                    if (((_cursor$value4 = cursor.value) === null || _cursor$value4 === void 0 ? void 0 : _cursor$value4.held) === true) {
                       heldBytes += size;
                       heldCount += 1;
                     }
-                  }
-                } catch (err) {
-                  _iterator.e(err);
-                } finally {
-                  _iterator.f();
-                }
-                return _context6.a(2, {
-                  totalBytes: totalBytes,
-                  count: all.length,
-                  heldBytes: heldBytes,
-                  heldCount: heldCount,
-                  maxTotalBytes: CONFIG.maxTotalBytes
-                });
+                    cursor.continue();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve({
+                      totalBytes: totalBytes,
+                      count: count,
+                      heldBytes: heldBytes,
+                      heldCount: heldCount,
+                      maxTotalBytes: CONFIG.maxTotalBytes
+                    });
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
             }
           }, _callee6, this);
         }));
@@ -14924,7 +14961,7 @@
       key: "releaseHold",
       value: (function () {
         var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id) {
-          var _this6 = this;
+          var _this7 = this;
           return _regenerator().w(function (_context7) {
             while (1) switch (_context7.n) {
               case 0:
@@ -14936,29 +14973,47 @@
               case 1:
                 _context7.n = 2;
                 return new Promise(function (resolve, reject) {
-                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
+                  /** @type {Error|null} */
+                  var refusal = null;
                   req.onsuccess = function () {
                     var item = req.result;
-                    if (item) {
-                      item.held = false;
-                      item.heldReason = null;
-                      item.retryCount = 0;
-                      item.lastAttempt = null;
-                      item.error = null;
-                      store.put(item);
+                    if (!item) {
+                      return;
                     }
+                    // Only a held entry. Releasing clears `retryCount`,
+                    // `lastAttempt` and `error` and schedules an immediate drain,
+                    // so calling it on an entry that is merely waiting out its
+                    // backoff discarded that backoff — a host with a stale id
+                    // could push a failing upload straight back onto a bad link,
+                    // repeatedly, at the contributor's expense. `discardHeld()`
+                    // guards the same way; this is the same state machine.
+                    if (item.held !== true) {
+                      refusal = new Error("ReleaseRefused: ".concat(id, " is not held. Only a held submission can be released; the queue manages its own retries."));
+                      tx.abort();
+                      return;
+                    }
+                    item.held = false;
+                    item.heldReason = null;
+                    item.retryCount = 0;
+                    item.lastAttempt = null;
+                    item.error = null;
+                    store.put(item);
                   };
                   req.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
                   tx.oncomplete = function () {
-                    _this6._notifyQueueUpdate();
+                    _this7._notifyQueueUpdate();
                     resolve();
                   };
+                  tx.onabort = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
                   tx.onerror = function (ev) {
-                    return reject(ev.target.error);
+                    return reject(refusal || ev.target.error);
                   };
                 });
               case 2:
@@ -15091,7 +15146,7 @@
       key: "_setMetadata",
       value: (function () {
         var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, metadata) {
-          var _this7 = this;
+          var _this8 = this;
           return _regenerator().w(function (_context0) {
             while (1) switch (_context0.n) {
               case 0:
@@ -15102,7 +15157,7 @@
                 return _context0.a(2);
               case 1:
                 return _context0.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
+                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -15134,7 +15189,7 @@
       key: "_updateRetry",
       value: (function () {
         var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, retryCount, error) {
-          var _this8 = this;
+          var _this9 = this;
           return _regenerator().w(function (_context1) {
             while (1) switch (_context1.n) {
               case 0:
@@ -15145,7 +15200,7 @@
                 return _context1.a(2);
               case 1:
                 return _context1.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
+                  var tx = _this9.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -15184,7 +15239,7 @@
       value: (function () {
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
           var _sparxstarIntegration;
-          var pending, _iterator2, _step2, _metadata, item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, backfilled, delay, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, result, detail, _metadata6, _metadata7, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
+          var pending, _iterator, _step, _metadata, item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, backfilled, delay, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, result, detail, _metadata6, _metadata7, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
           return _regenerator().w(function (_context10) {
             while (1) switch (_context10.p = _context10.n) {
               case 0:
@@ -15214,15 +15269,15 @@
                 this.isProcessing = true;
                 _context10.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
-                _iterator2 = _createForOfIteratorHelper$1(pending);
+                _iterator = _createForOfIteratorHelper$1(pending);
                 _context10.p = 6;
-                _iterator2.s();
+                _iterator.s();
               case 7:
-                if ((_step2 = _iterator2.n()).done) {
+                if ((_step = _iterator.n()).done) {
                   _context10.n = 25;
                   break;
                 }
-                item = _step2.value;
+                item = _step.value;
                 id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
                 // able to replace it wholesale for a row that has no metadata
                 // object at all.
@@ -15233,7 +15288,15 @@
                 // already has. Backfilled once and persisted, so the
                 // one-id-per-submission rule reaches recordings already sitting
                 // on devices rather than only new ones.
-                if (!(typeof ((_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId) !== "string" || metadata.uploadId === "")) {
+                // The same test the upload module applies, not merely
+                // "is something there". `uploadTus()` replaces any id that is
+                // not a UUID v4 with a freshly minted one, so a stored entry
+                // carrying a non-empty invalid id was left alone here and then
+                // silently re-identified on every attempt — a different
+                // fingerprint each time, and never able to resume the partial
+                // the previous attempt left on the server. Asking the module
+                // that decides keeps one answer to the question.
+                if (isUploadId((_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId)) {
                   _context10.n = 9;
                   break;
                 }
@@ -15391,10 +15454,10 @@
               case 26:
                 _context10.p = 26;
                 _t3 = _context10.v;
-                _iterator2.e(_t3);
+                _iterator.e(_t3);
               case 27:
                 _context10.p = 27;
-                _iterator2.f();
+                _iterator.f();
                 return _context10.f(27);
               case 28:
                 _context10.n = 30;
@@ -15441,13 +15504,13 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this9 = this;
+        var _this0 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this9._scheduleProcessQueue(0);
+          _this0._scheduleProcessQueue(0);
         });
         this._setupBatteryListeners();
 
@@ -15460,7 +15523,7 @@
     }, {
       key: "_setupBatteryListeners",
       value: function _setupBatteryListeners() {
-        var _this0 = this;
+        var _this1 = this;
         if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
           return;
         }
@@ -15469,7 +15532,7 @@
           var handleBatteryChange = function handleBatteryChange() {
             var _sparxstarIntegration2;
             if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
-              _this0._scheduleProcessQueue(0);
+              _this1._scheduleProcessQueue(0);
             }
           };
           battery.addEventListener("levelchange", handleBatteryChange);
@@ -15490,7 +15553,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this1 = this;
+        var _this10 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -15502,9 +15565,9 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this1.processQueueTimeoutId = null;
-          _this1.processQueueDueAt = null;
-          void _this1.processQueue();
+          _this10.processQueueTimeoutId = null;
+          _this10.processQueueDueAt = null;
+          void _this10.processQueue();
         }, safeDelay);
       }
       /** @private */
@@ -15512,7 +15575,7 @@
       key: "_getNextProcessDelay",
       value: (function () {
         var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
-          var pending, nextDelay, now, _iterator3, _step3, item, retryDelay, remainingDelay, _t6;
+          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t6;
           return _regenerator().w(function (_context11) {
             while (1) switch (_context11.p = _context11.n) {
               case 0:
@@ -15530,15 +15593,15 @@
               case 2:
                 nextDelay = null;
                 now = Date.now();
-                _iterator3 = _createForOfIteratorHelper$1(pending);
+                _iterator2 = _createForOfIteratorHelper$1(pending);
                 _context11.p = 3;
-                _iterator3.s();
+                _iterator2.s();
               case 4:
-                if ((_step3 = _iterator3.n()).done) {
+                if ((_step2 = _iterator2.n()).done) {
                   _context11.n = 7;
                   break;
                 }
-                item = _step3.value;
+                item = _step2.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
                   _context11.n = 5;
                   break;
@@ -15559,10 +15622,10 @@
               case 8:
                 _context11.p = 8;
                 _t6 = _context11.v;
-                _iterator3.e(_t6);
+                _iterator2.e(_t6);
               case 9:
                 _context11.p = 9;
-                _iterator3.f();
+                _iterator2.f();
                 return _context11.f(9);
               case 10:
                 return _context11.a(2, nextDelay);

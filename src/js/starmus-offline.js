@@ -24,7 +24,7 @@
 
 import { debugLog } from "./starmus-hooks.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, isUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
@@ -433,25 +433,58 @@ class OfflineQueue {
      * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
      */
     async usage() {
-        const all = await this.getAll();
-        let totalBytes = 0;
-        let heldBytes = 0;
-        let heldCount = 0;
-        for (const item of all) {
-            const size = item.audioBlob?.size || 0;
-            totalBytes += size;
-            if (item.held === true) {
-                heldBytes += size;
-                heldCount += 1;
-            }
+        if (!this.db) {
+            return {
+                totalBytes: 0,
+                count: 0,
+                heldBytes: 0,
+                heldCount: 0,
+                maxTotalBytes: CONFIG.maxTotalBytes,
+            };
         }
-        return {
-            totalBytes,
-            count: all.length,
-            heldBytes,
-            heldCount,
-            maxTotalBytes: CONFIG.maxTotalBytes,
-        };
+
+        // A cursor, not `getAll()`. Every record holds its audio Blob, so
+        // reading them all to add up sizes materialised the entire queued set
+        // — up to the 20 MB cap — against a package budget that keeps blobs in
+        // memory to a fraction of that. A host polling `getQueueUsage()` to
+        // show remaining space was the worst case: repeatedly paying for the
+        // whole queue to learn a single number. The cursor visits records one
+        // at a time and keeps only the running totals.
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const store = tx.objectStore(CONFIG.storeName);
+            let totalBytes = 0;
+            let heldBytes = 0;
+            let heldCount = 0;
+            let count = 0;
+
+            const req = store.openCursor();
+            req.onerror = (ev) => reject(ev.target.error);
+            req.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    return;
+                }
+                const size = cursor.value?.audioBlob?.size || 0;
+                totalBytes += size;
+                count += 1;
+                if (cursor.value?.held === true) {
+                    heldBytes += size;
+                    heldCount += 1;
+                }
+                cursor.continue();
+            };
+
+            tx.oncomplete = () =>
+                resolve({
+                    totalBytes,
+                    count,
+                    heldBytes,
+                    heldCount,
+                    maxTotalBytes: CONFIG.maxTotalBytes,
+                });
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
     }
 
     /**
@@ -477,17 +510,34 @@ class OfflineQueue {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
             const store = tx.objectStore(CONFIG.storeName);
             const req = store.get(id);
+            /** @type {Error|null} */
+            let refusal = null;
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (item) {
-                    item.held = false;
-                    item.heldReason = null;
-                    item.retryCount = 0;
-                    item.lastAttempt = null;
-                    item.error = null;
-                    store.put(item);
+                if (!item) {
+                    return;
                 }
+                // Only a held entry. Releasing clears `retryCount`,
+                // `lastAttempt` and `error` and schedules an immediate drain,
+                // so calling it on an entry that is merely waiting out its
+                // backoff discarded that backoff — a host with a stale id
+                // could push a failing upload straight back onto a bad link,
+                // repeatedly, at the contributor's expense. `discardHeld()`
+                // guards the same way; this is the same state machine.
+                if (item.held !== true) {
+                    refusal = new Error(
+                        `ReleaseRefused: ${id} is not held. Only a held submission can be released; the queue manages its own retries.`,
+                    );
+                    tx.abort();
+                    return;
+                }
+                item.held = false;
+                item.heldReason = null;
+                item.retryCount = 0;
+                item.lastAttempt = null;
+                item.error = null;
+                store.put(item);
             };
 
             req.onerror = (ev) => reject(ev.target.error);
@@ -495,7 +545,8 @@ class OfflineQueue {
                 this._notifyQueueUpdate();
                 resolve();
             };
-            tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(refusal || ev.target.error);
+            tx.onerror = (ev) => reject(refusal || ev.target.error);
         });
         this._scheduleProcessQueue(0);
     }
@@ -658,7 +709,15 @@ class OfflineQueue {
                 // already has. Backfilled once and persisted, so the
                 // one-id-per-submission rule reaches recordings already sitting
                 // on devices rather than only new ones.
-                if (typeof metadata?.uploadId !== "string" || metadata.uploadId === "") {
+                // The same test the upload module applies, not merely
+                // "is something there". `uploadTus()` replaces any id that is
+                // not a UUID v4 with a freshly minted one, so a stored entry
+                // carrying a non-empty invalid id was left alone here and then
+                // silently re-identified on every attempt — a different
+                // fingerprint each time, and never able to resume the partial
+                // the previous attempt left on the server. Asking the module
+                // that decides keeps one answer to the question.
+                if (!isUploadId(metadata?.uploadId)) {
                     const backfilled = createUploadId();
                     // The local variable is replaced, not just the stored row.
                     // Guarding the assignment on `metadata` being truthy left a

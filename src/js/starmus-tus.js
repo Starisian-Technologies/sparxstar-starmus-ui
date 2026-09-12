@@ -203,6 +203,22 @@ const UUID_V4_PATTERN =
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
+ * Whether a value is usable as an upload identifier.
+ *
+ * Exported because the offline queue has to ask the same question and get the
+ * same answer. It decides whether a stored id survives to the next attempt,
+ * and this module decides whether a supplied one is sent — if those two
+ * disagree, the queue keeps an id the upload silently replaces, and every
+ * retry gets a new fingerprint and cannot resume the partial before it.
+ *
+ * @param {*} value
+ * @returns {boolean}
+ */
+export function isUploadId(value) {
+    return typeof value === "string" && UUID_V4_PATTERN.test(value.trim());
+}
+
+/**
  * Sanitises a metadata value for TUS header transmission.
  * Objects are JSON-encoded; all values have control characters stripped.
  *
@@ -297,7 +313,7 @@ export async function uploadTus(
     // collide on a resume key, which is the bug the fingerprint change fixed.
     const suppliedId =
         typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
-    const uploadId = UUID_V4_PATTERN.test(suppliedId) ? suppliedId : createUploadId();
+    const uploadId = isUploadId(suppliedId) ? suppliedId : createUploadId();
     if (suppliedId !== "" && uploadId !== suppliedId) {
         console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
     }

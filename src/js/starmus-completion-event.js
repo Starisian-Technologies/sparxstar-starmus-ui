@@ -67,6 +67,21 @@ export function resolveUploadFormat(mimeType, fileName) {
         return "mp3";
     }
 
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+        return "webm";
+    }
+
     return null;
 }
 
@@ -92,12 +107,12 @@ function readContributorConsent() {
  * arrived, or an empty string when the result carries none.
  *
  * This cannot tell a server-issued identifier from a client-generated one:
- * `uploadDirect` already writes the client's UUID into `uploadId` when the
- * server returns no identifier of its own, so by the time a result reaches
- * here the two are indistinguishable. That fallback is deliberate — the same
- * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
- * handle rather than a guess — but this function does not verify the origin,
- * and callers must not assume it did.
+ * the upload path resolves `uploadId` to the client's UUID when the server
+ * returns no identifier of its own, so by the time a result reaches here the
+ * two are indistinguishable. That fallback is deliberate — the same UUID
+ * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+ * rather than a guess — but this function does not verify the origin, and
+ * callers must not assume it did.
  *
  * @param {Object} result
  * @returns {string}
@@ -132,13 +147,23 @@ export function resolveUploadId(result) {
  * @param {string} [input.contributorId]
  * @param {boolean} [input.calibrationApplied]
  * @param {number} [input.durationMs]
- * @returns {Object|null} null when the format cannot be named.
+ * @returns {Object} Always a detail object. An accepted upload always gets its
+ *          boundary event; see the `format` note below.
  */
 export function buildCompletionDetail(input) {
-    const format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-        return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    const format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
 
     const attainment = input.metadata?.captureAttainment || null;
     const consent = readContributorConsent();

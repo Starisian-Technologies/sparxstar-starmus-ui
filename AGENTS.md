@@ -4,25 +4,36 @@
 
 **This is not a React app. This is not a WordPress plugin.**
 This is a vanilla JS+CSS npm package for audio recording, calibration,
-consent capture, TUS upload, and prosody/teleprompter display.
+consent capture, resumable chunked upload, and the live-transcript slot.
 
 ---
 
 ## What This Package IS
 
 - Audio recorder with device and acoustic calibration
-- TUS chunked upload client (resumable, offline-tolerant)
+- Resumable chunked upload client, offline-tolerant — TUS, and only TUS
 - Offline recording queue (IndexedDB via starmus-offline.js)
-- Prosody/teleprompter engine (recording mode, not a separate product)
 - Consent capture (hookable — see Consent Contract below)
 - State store for recorder lifecycle
-- Transcript controller (live transcript display, where supported)
+- Live-transcript **slot** — provider-agnostic, its own bundle
+  (`dist/starmus-transcript.js`), output is a lowest-authority machine draft
+  (ADR-038; see Live-Transcript Slot below)
+- File upload of prerecorded material on the Tier C path, recorded as the
+  `import` capture profile — preserved unchanged, with an attainment record
+  stating that nothing was measured rather than claiming the profile was met
 
 ## What This Package Is NOT
 
 - Not a waveform viewer or audio player
 - Not a post-processing tool (waveform analysis, trim, noise reduction, spectrogram
   are server-side after upload — never in this package)
+- Not a paced reader. The paced reader, its stylesheet and the transcript-sync
+  controller moved to the elicitation pacing package under ADR-036. Nothing
+  here paces, and nothing here interprets prosody.
+- Not an audio editor. There is no trim, splice, cut, or "effective audio"/EDL
+  capability anywhere in this package, before or after submission (ADR-039).
+  Retake and discard are pre-submission, and they replace a draft rather than
+  edit one.
 - Not a React component
 - Not a WordPress plugin
 - Not a Sky ability — it is a capability that Sky surfaces consume
@@ -52,12 +63,14 @@ Three tiers. Copilot must check the tier before enabling any feature.
 | Device calibration | ✅ | ✅ | ❌ |
 | Acoustic calibration | ✅ | ✅ | ❌ |
 | Canvas / signature pad | ✅ | ✅ | ❌ |
-| Live transcript display | ✅ | ✅ | ❌ |
-| Prosody/teleprompter | ✅ | ✅ | ❌ |
+| Live transcript slot | ✅ | ✅ | ❌ |
 | File upload (fallback) | ✅ | ✅ | ✅ |
 
 **Tier C = file upload only.** No recorder. No microphone access. No canvas.
-No calibration. No live transcript. No prosody. The upload UI is the entire surface.
+No calibration. No live transcript. The upload UI is the entire surface — and a
+Tier C device does not download the transcript bundle either.
+
+Paced reading is not in this table because it is not in this package (ADR-036).
 
 Tier is resolved at initialization via Sirus (see Sirus Integration below).
 Until Sirus is integrated, tier defaults to Tier A for development.
@@ -140,7 +153,14 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // pending OQ-021, so this package reports the format it has rather than
     // deciding an arriving format is inadmissible. The Spoken Audio Node
     // rules on admissibility, where refusing does not cost the recording.
-    format: 'opus' | 'aac-lc' | 'wav' | 'mp3',
+    // `webm` covers a WebM container whose codec was not stated — the
+    // recorder's own fallback produces it. Named rather than resolved to
+    // `opus`, for the reason the other formats are: the Node identifies the
+    // codec from the bytes, and OQ-021 owns the codec question.
+    // `unknown` when this client cannot name what it has. The event still
+    // fires: it is the boundary below, and withholding it for an asset the
+    // server already holds is worse than reporting the gap.
+    format: 'opus' | 'aac-lc' | 'wav' | 'mp3' | 'webm' | 'unknown',
     language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
     consentGranted: boolean,
@@ -162,19 +182,29 @@ extended or deepened.
 
 ---
 
-## Audio Constraints — CI FAIL CONDITIONS
+## Upload Constraints — CI FAIL CONDITIONS
 
-These must pass on every PR. Run `pnpm run lint:js` and review manually.
+Audio constraints are **not** listed here. They belong to a named capture
+profile and are stated once, under *Audio — CI Fail Conditions* further down.
+This section used to restate a platform-wide 16 kHz / mono / Opus-or-AAC
+ceiling, which ADR-035 removed and which contradicted the profile rules in the
+same file — a second home for the same fact, giving opposite answers.
+
+Run `node scripts/validate-build.cjs` (it also runs as `prebuild`).
 
 | Constraint | Enforced By | Value |
-|---|---|---|
-| sampleRate | Manual check in starmus-recorder.js | ≤ 16000 |
-| channels | Manual check in starmus-recorder.js | 1 (mono only) |
-| Format | Manual check | Opus or AAC-LC only. Never WAV. Never uncompressed PCM. |
-| TUS chunk size | validate-build.cjs (add check) | ≤ 512 KB |
-| TUS checksum | Manual check in starmus-tus.js | SHA-256 per chunk |
-| TUS UUID | Manual check in starmus-tus.js | UUID v4 per upload |
-| No full-file endpoint | validate-build.cjs (verify) | Chunked only |
+| --- | --- | --- |
+| TUS chunk size | validate-build.cjs | ≤ 512 KB, clamped at runtime |
+| TUS checksum | validate-build.cjs | SHA-256 per chunk |
+| TUS UUID | starmus-tus.js | UUID v4 per upload; refuses to run without secure generation |
+| No full-file path | validate-build.cjs | The function may not exist, not merely be unexported |
+| Capture profile sent | validate-build.cjs | Present in upload metadata |
+| Upload watchdog | validate-build.cjs | No-progress (stall) bound only — never a total-duration deadline |
+| No CMS reach | validate-build.cjs | No CMS route, nonce, or page global in `src/js/` |
+| Auth headers | starmus-tus.js | Host-injected via `STARMUS_BOOTSTRAP.uploadHeaders`; this package names no header |
+| Stable upload identity | starmus-tus.js | One id per submission, reused across retries, and the TUS resume fingerprint |
+| One home for limits | validate-build.cjs | No audio-limit literal outside `starmus-capture-profiles.js` |
+| No edit capability | validate-build.cjs | No EDL, offline render, or trim/splice/cut helper |
 
 ---
 
@@ -184,7 +214,7 @@ These are enforced by ESLint (.eslintrc.json `no-var: "error"`).
 Run `pnpm run lint:js` and fix all violations before merge.
 
 | Constraint | Check |
-|---|---|
+| --- | --- |
 | No `var` | ESLint: `no-var: "error"` already in .eslintrc.json |
 | Named exports only | No `export default` anywhere |
 | AbortSignal.timeout(5000) | On all fetch calls in starmus-tus.js and starmus-offline.js |
@@ -218,6 +248,73 @@ a mutable config that Sirus can populate at runtime.
 
 ---
 
+## Live-Transcript Slot — ADR-038
+
+`src/js/starmus-transcript-provider.js` is a **slot**, not an engine. It is
+built as its own bundle so a Tier C device never downloads it.
+
+Its output always carries, and only carries:
+
+1. tokens;
+2. timestamps on the **original timeline** — the recording's own, the only
+   timeline that exists (ADR-039);
+3. provenance naming the engine and the model version.
+
+What it is never:
+
+- **Never the boundary mechanism of record.** Speech/silence boundaries are
+  computed server-side by the Spoken Audio Node's VAD, for every recording,
+  language and device tier. A provider being unavailable does not leave a
+  recording without boundaries.
+- **Never word-level alignment of record.** That is ESU's, from Yahura.
+- **Never acoustic analysis.** ADR-036.
+
+What leaves the slot is a **lowest-authority machine draft** — a starting point
+for human correction in ESU, never the transcript.
+
+Browser speech recognition is the first provider (Tier A). It reports no word
+timings, so the built-in provider does not invent any: tokens are stamped
+from the recorder clock and marked `timing: 'approximate'`. The draft carries
+them as `tokens`, at the granularity `tokenGranularity` names — not as
+`segments`, which ADR-038 uses for the Node's server-side speech/silence
+boundaries of record. A future Yahura
+live provider for African languages registers into the same slot with no change
+here. Adding a provider is `registerTranscriptProvider`; nothing else changes.
+
+| FAIL | Condition |
+| --- | --- |
+| FAIL | A provider's output treated as the transcript, or as boundaries of record |
+| FAIL | Fabricated word timings — a timing this package did not measure |
+| FAIL | A provider bundled into `dist/starmus-audio.js` |
+| FAIL | The slot running on Tier C |
+| FAIL | Provenance omitted, or a placeholder model string standing in for one the engine does not expose |
+| FAIL | `tokenGranularity` claiming `word` for an engine that emits utterances |
+| FAIL | `openTranscriptSlot` called with a tier outside `SUPPORTED_TIERS` (it fails closed; a stray `'c'` must not open a microphone) |
+
+---
+
+## Post-Submission Immutability — ADR-039
+
+Before submission the recording is the contributor's local draft: retake and
+discard belong here, and a retake replaces a draft rather than editing it.
+
+After submission nothing in this package touches the audio. There is no trim,
+splice, cut, or "effective audio"/EDL mechanism, and none may be added. Dead
+air and false starts are handled downstream by segmentation and annotation in
+the ESU review surface — data *about* the audio, never instructions to change
+it.
+
+Client-side Web Audio waveform computation is permitted **only** on a local,
+not-yet-uploaded capture blob. A waveform of a stored recording is a server-side
+derivative the Spoken Audio Node produces (ADR-038).
+
+## Asset References — ADR-038
+
+Assets are referenced by immutable identifiers, never by durable storage URL —
+not in events, not in records, not in evidence fields. The upload path returns
+an upload identifier and no URL; short-lived access URLs are requested on demand
+by whoever needs bytes, and this package never needs them.
+
 ## Waveform/Studio Tools — NEVER CLIENT-SIDE
 
 The following are server-side post-processing features. They MUST NOT be
@@ -244,6 +341,39 @@ From AGENTS.md coding standards:
 
 The offline queue in `starmus-offline.js` must document its eviction policy
 in a JSDoc comment.
+
+**A queued recording is removed on successful upload and on nothing else.** An
+entry that exhausts its retries, or fails with an error retrying cannot fix, is
+marked `held`: kept, no longer retried, and surfaced through
+`getHeldSubmissions()` so a person can act. The queue used to delete both, which
+made it the component that decided a contributor's material was disposable
+because a server returned 400 four times. ADR-011 does not allow that, and on
+these networks the queued blob is often the only copy.
+
+| FAIL | Condition |
+| --- | --- |
+| FAIL | A queue path that deletes a submission for any reason but successful upload |
+| FAIL | Held submissions that no host-visible accessor reports |
+| FAIL | A local cleanup failure recorded as an upload failure (it makes the next drain re-upload an asset the server already has) |
+| FAIL | Automatic eviction to make room — see below |
+
+**The 20 MB cap is enforced at the door, not by eviction.** The platform
+standard says LRU; LRU here means deleting a contributor's older recording so a
+newer one fits, which is what ADR-011 forbids. So `add()` refuses a recording
+that will not fit, with an error naming what occupies the space, and
+`getQueueUsage()` lets a host warn someone before they reach that point.
+
+**Held is a state, not a slower deletion.** `releaseHeldSubmission(id)` puts an
+entry back in the queue; `discardHeldSubmission(id, reason)` removes it and is
+the only deletion here that is not a successful upload. Nothing automatic
+reaches it. Without both, held entries accumulate against the byte budget until
+`add()` refuses every new recording — trading one lost recording for the loss of
+recording itself.
+
+**Whose recording loses when a device is genuinely full is not this package's
+call.** It is a sovereignty question and it routes to the platform owner. Until
+it is ruled on, nothing already recorded is deleted without a person deciding
+so — which is what `discardHeldSubmission` requires and why it takes a reason.
 
 ---
 
@@ -345,7 +475,7 @@ JavaScript and TypeScript --- CI Fail Conditions
 | FAIL | API call without timeout (`AbortSignal.timeout(5000)` minimum) |
 | FAIL | Event listener without throttle or debounce |
 | FAIL | Continuous interval without bounded execution |
-| FAIL | JS bundle exceeds 150 KB gzipped |
+| FAIL | JS bundle exceeds 150 KB gzipped. Enforced by `pnpm run size-check` (size-limit, brotli budgets in `package.json`) — the budget that fails a build is the one there, and the two are kept consistent. |
 | FAIL | Blob in memory exceeds 5 MB |
 | FAIL | Sensor active beyond 5000ms without auto-disable |
 | FAIL | Infinite retry loop --- max 3 attempts with exponential backoff |

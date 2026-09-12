@@ -2910,6 +2910,10 @@
             source: merge(state.source, {
               kind: "blob",
               blob: action.payload.blob,
+              // A previously attached file is cleared, so `kind` and
+              // the payload cannot disagree. See `file-attached`
+              // below for what leaving the other one set costs.
+              file: null,
               fileName: action.payload.fileName,
               metadata: {
                 duration: state.recorder.duration || 0,
@@ -2936,7 +2940,42 @@
             source: merge(state.source, {
               kind: "file",
               file: action.file,
+              // The recorded blob is cleared, not left beside the
+              // file. `handleSubmit()` reads `source.blob || source.file`,
+              // so a contributor who recorded and then attached a
+              // file uploaded the *recording* under the *file's*
+              // name, carrying the file's mime type, size and the
+              // `import` profile. That is a mislabelled contribution
+              // — the wrong audio described as something it is not —
+              // which for an archive is worse than an upload that
+              // fails outright.
+              blob: null,
               fileName: action.file.name,
+              // An attached file is prerecorded material, which is
+              // exactly what ADR-035 calls the `import` profile:
+              // preserved unchanged, no transcode, resample or
+              // fold-down. Leaving the profile unset here sent a
+              // blank one to ingestion on the Tier C path — the very
+              // condition `AGENTS.md` lists as a build failure.
+              captureProfile: "import",
+              // Nothing was captured, so nothing was measured. The
+              // attainment says so rather than claiming the profile
+              // was met: `attained: null` is "not applicable", which
+              // is different from the `false` a missed constraint
+              // would give. The Spoken Audio Node probes the file
+              // itself and records what it actually is.
+              captureAttainment: {
+                profile: "import",
+                requested: {
+                  sampleRate: null,
+                  channelCount: null
+                },
+                actual: {},
+                attained: null,
+                exceeded: [],
+                unverified: ["sampleRate", "channelCount"],
+                source: "file-attachment"
+              },
               metadata: {
                 duration: 0,
                 mimeType: action.file.type,
@@ -6567,39 +6606,6 @@
 
   requireEs_array_concat();
 
-  var es_array_find = {};
-
-  var hasRequiredEs_array_find;
-
-  function requireEs_array_find () {
-  	if (hasRequiredEs_array_find) return es_array_find;
-  	hasRequiredEs_array_find = 1;
-  	var $ = require_export();
-  	var $find = requireArrayIteration().find;
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	var FIND = 'find';
-  	var SKIPS_HOLES = true;
-
-  	// Shouldn't skip holes
-  	// eslint-disable-next-line es/no-array-prototype-find -- testing
-  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
-
-  	// `Array.prototype.find` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.find
-  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
-  	  find: function find(callbackfn /* , that = undefined */) {
-  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables(FIND);
-  	return es_array_find;
-  }
-
-  requireEs_array_find();
-
   var es_array_from = {};
 
   var checkCorrectnessOfIteration;
@@ -7270,6 +7276,27 @@
   }
 
   requireEs_arrayBuffer_slice();
+
+  var es_object_assign = {};
+
+  var hasRequiredEs_object_assign;
+
+  function requireEs_object_assign () {
+  	if (hasRequiredEs_object_assign) return es_object_assign;
+  	hasRequiredEs_object_assign = 1;
+  	var $ = require_export();
+  	var assign = requireObjectAssign();
+
+  	// `Object.assign` method
+  	// https://tc39.es/ecma262/#sec-object.assign
+  	// eslint-disable-next-line es/no-object-assign -- required for testing
+  	$({ target: 'Object', stat: true, arity: 2, forced: Object.assign !== assign }, {
+  	  assign: assign
+  	});
+  	return es_object_assign;
+  }
+
+  requireEs_object_assign();
 
   var es_object_entries = {};
 
@@ -8649,6 +8676,558 @@
   }
 
   requireEs_regexp_toString();
+
+  var es_set = {};
+
+  var es_set_constructor = {};
+
+  var internalMetadata = {exports: {}};
+
+  var objectGetOwnPropertyNamesExternal = {};
+
+  var hasRequiredObjectGetOwnPropertyNamesExternal;
+
+  function requireObjectGetOwnPropertyNamesExternal () {
+  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
+  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
+  	/* eslint-disable es/no-object-getownpropertynames -- safe */
+  	var classof = requireClassofRaw();
+  	var toIndexedObject = requireToIndexedObject();
+  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+  	var arraySlice = requireArraySlice();
+
+  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
+  	  ? Object.getOwnPropertyNames(window) : [];
+
+  	var getWindowNames = function (it) {
+  	  try {
+  	    return $getOwnPropertyNames(it);
+  	  } catch (error) {
+  	    return arraySlice(windowNames);
+  	  }
+  	};
+
+  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
+  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
+  	  return windowNames && classof(it) === 'Window'
+  	    ? getWindowNames(it)
+  	    : $getOwnPropertyNames(toIndexedObject(it));
+  	};
+  	return objectGetOwnPropertyNamesExternal;
+  }
+
+  var arrayBufferNonExtensible;
+  var hasRequiredArrayBufferNonExtensible;
+
+  function requireArrayBufferNonExtensible () {
+  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
+  	hasRequiredArrayBufferNonExtensible = 1;
+  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
+  	var fails = requireFails();
+
+  	arrayBufferNonExtensible = fails(function () {
+  	  if (typeof ArrayBuffer == 'function') {
+  	    var buffer = new ArrayBuffer(8);
+  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
+  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
+  	  }
+  	});
+  	return arrayBufferNonExtensible;
+  }
+
+  var objectIsExtensible;
+  var hasRequiredObjectIsExtensible;
+
+  function requireObjectIsExtensible () {
+  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
+  	hasRequiredObjectIsExtensible = 1;
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
+
+  	// eslint-disable-next-line es/no-object-isextensible -- safe
+  	var $isExtensible = Object.isExtensible;
+  	var FAILS_ON_PRIMITIVES = fails(function () { });
+
+  	// `Object.isExtensible` method
+  	// https://tc39.es/ecma262/#sec-object.isextensible
+  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
+  	  if (!isObject(it)) return false;
+  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
+  	  return $isExtensible ? $isExtensible(it) : true;
+  	} : $isExtensible;
+  	return objectIsExtensible;
+  }
+
+  var freezing;
+  var hasRequiredFreezing;
+
+  function requireFreezing () {
+  	if (hasRequiredFreezing) return freezing;
+  	hasRequiredFreezing = 1;
+  	var fails = requireFails();
+
+  	freezing = !fails(function () {
+  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
+  	  return Object.isExtensible(Object.preventExtensions({}));
+  	});
+  	return freezing;
+  }
+
+  var hasRequiredInternalMetadata;
+
+  function requireInternalMetadata () {
+  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
+  	hasRequiredInternalMetadata = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var hiddenKeys = requireHiddenKeys();
+  	var isObject = requireIsObject();
+  	var hasOwn = requireHasOwnProperty();
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
+  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
+  	var isExtensible = requireObjectIsExtensible();
+  	var uid = requireUid();
+  	var FREEZING = requireFreezing();
+
+  	var REQUIRED = false;
+  	var METADATA = uid('meta');
+  	var id = 0;
+
+  	var setMetadata = function (it) {
+  	  defineProperty(it, METADATA, { value: {
+  	    objectID: 'O' + id++, // object ID
+  	    weakData: {}          // weak collections IDs
+  	  } });
+  	};
+
+  	var fastKey = function (it, create) {
+  	  // return a primitive with prefix
+  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return 'F';
+  	    // not necessary to add metadata
+  	    if (!create) return 'E';
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return object ID
+  	  } return it[METADATA].objectID;
+  	};
+
+  	var getWeakData = function (it, create) {
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return true;
+  	    // not necessary to add metadata
+  	    if (!create) return false;
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return the store of weak collections IDs
+  	  } return it[METADATA].weakData;
+  	};
+
+  	// add metadata on freeze-family methods calling
+  	var onFreeze = function (it) {
+  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
+  	  return it;
+  	};
+
+  	var enable = function () {
+  	  meta.enable = function () { /* empty */ };
+  	  REQUIRED = true;
+  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
+  	  var splice = uncurryThis([].splice);
+  	  var test = {};
+  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+  	  test[METADATA] = 1;
+
+  	  // prevent exposing of metadata key
+  	  if (getOwnPropertyNames(test).length) {
+  	    getOwnPropertyNamesModule.f = function (it) {
+  	      var result = getOwnPropertyNames(it);
+  	      for (var i = 0, length = result.length; i < length; i++) {
+  	        if (result[i] === METADATA) {
+  	          splice(result, i, 1);
+  	          break;
+  	        }
+  	      } return result;
+  	    };
+
+  	    $({ target: 'Object', stat: true, forced: true }, {
+  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
+  	    });
+  	  }
+  	};
+
+  	var meta = internalMetadata.exports = {
+  	  enable: enable,
+  	  fastKey: fastKey,
+  	  getWeakData: getWeakData,
+  	  onFreeze: onFreeze
+  	};
+
+  	hiddenKeys[METADATA] = true;
+  	return internalMetadata.exports;
+  }
+
+  var collection;
+  var hasRequiredCollection;
+
+  function requireCollection () {
+  	if (hasRequiredCollection) return collection;
+  	hasRequiredCollection = 1;
+  	var $ = require_export();
+  	var globalThis = requireGlobalThis();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var isForced = requireIsForced();
+  	var defineBuiltIn = requireDefineBuiltIn();
+  	var InternalMetadataModule = requireInternalMetadata();
+  	var iterate = requireIterate();
+  	var anInstance = requireAnInstance();
+  	var isCallable = requireIsCallable();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var isObject = requireIsObject();
+  	var fails = requireFails();
+  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+  	var setToStringTag = requireSetToStringTag();
+  	var inheritIfRequired = requireInheritIfRequired();
+
+  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
+  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
+  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
+  	  var ADDER = IS_MAP ? 'set' : 'add';
+  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
+  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
+  	  var Constructor = NativeConstructor;
+  	  var exported = {};
+
+  	  var fixMethod = function (KEY) {
+  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
+  	    defineBuiltIn(NativePrototype, KEY,
+  	      KEY === 'add' ? function add(value) {
+  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
+  	        return this;
+  	      } : KEY === 'delete' ? function (key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'get' ? function get(key) {
+  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'has' ? function has(key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : function set(key, value) {
+  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
+  	        return this;
+  	      }
+  	    );
+  	  };
+
+  	  var REPLACE = isForced(
+  	    CONSTRUCTOR_NAME,
+  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
+  	      new NativeConstructor().entries().next();
+  	    }))
+  	  );
+
+  	  if (REPLACE) {
+  	    // create collection constructor
+  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
+  	    InternalMetadataModule.enable();
+  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
+  	    var instance = new Constructor();
+  	    // early implementations not supports chaining
+  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
+  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
+  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
+  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
+  	    // eslint-disable-next-line no-new -- required for testing
+  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
+  	    // for early implementations -0 and +0 not the same
+  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
+  	      // V8 ~ Chromium 42- fails only with 5+ elements
+  	      var $instance = new NativeConstructor();
+  	      var index = 5;
+  	      while (index--) $instance[ADDER](index, index);
+  	      return !$instance.has(-0);
+  	    });
+
+  	    if (!ACCEPT_ITERABLES) {
+  	      Constructor = wrapper(function (dummy, iterable) {
+  	        anInstance(dummy, NativePrototype);
+  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
+  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	        return that;
+  	      });
+  	      Constructor.prototype = NativePrototype;
+  	      NativePrototype.constructor = Constructor;
+  	    }
+
+  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
+  	      fixMethod('delete');
+  	      fixMethod('has');
+  	      IS_MAP && fixMethod('get');
+  	    }
+
+  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
+
+  	    // weak collections should not contains .clear method
+  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
+  	  }
+
+  	  exported[CONSTRUCTOR_NAME] = Constructor;
+  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
+
+  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
+
+  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
+
+  	  return Constructor;
+  	};
+  	return collection;
+  }
+
+  var collectionStrong;
+  var hasRequiredCollectionStrong;
+
+  function requireCollectionStrong () {
+  	if (hasRequiredCollectionStrong) return collectionStrong;
+  	hasRequiredCollectionStrong = 1;
+  	var create = requireObjectCreate();
+  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+  	var defineBuiltIns = requireDefineBuiltIns();
+  	var bind = requireFunctionBindContext();
+  	var anInstance = requireAnInstance();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var iterate = requireIterate();
+  	var defineIterator = requireIteratorDefine();
+  	var createIterResultObject = requireCreateIterResultObject();
+  	var setSpecies = requireSetSpecies();
+  	var DESCRIPTORS = requireDescriptors();
+  	var fastKey = requireInternalMetadata().fastKey;
+  	var InternalStateModule = requireInternalState();
+
+  	var setInternalState = InternalStateModule.set;
+  	var internalStateGetterFor = InternalStateModule.getterFor;
+
+  	collectionStrong = {
+  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
+  	    var Constructor = wrapper(function (that, iterable) {
+  	      anInstance(that, Prototype);
+  	      setInternalState(that, {
+  	        type: CONSTRUCTOR_NAME,
+  	        index: create(null),
+  	        first: null,
+  	        last: null,
+  	        size: 0
+  	      });
+  	      if (!DESCRIPTORS) that.size = 0;
+  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	    });
+
+  	    var Prototype = Constructor.prototype;
+
+  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
+
+  	    var define = function (that, key, value) {
+  	      var state = getInternalState(that);
+  	      var entry = getEntry(that, key);
+  	      var previous, index;
+  	      // change existing entry
+  	      if (entry) {
+  	        entry.value = value;
+  	      // create new entry
+  	      } else {
+  	        state.last = entry = {
+  	          index: index = fastKey(key, true),
+  	          key: key,
+  	          value: value,
+  	          previous: previous = state.last,
+  	          next: null,
+  	          removed: false
+  	        };
+  	        if (!state.first) state.first = entry;
+  	        if (previous) previous.next = entry;
+  	        if (DESCRIPTORS) state.size++;
+  	        else that.size++;
+  	        // add to index
+  	        if (index !== 'F') state.index[index] = entry;
+  	      } return that;
+  	    };
+
+  	    var getEntry = function (that, key) {
+  	      var state = getInternalState(that);
+  	      // fast case
+  	      var index = fastKey(key);
+  	      var entry;
+  	      if (index !== 'F') return state.index[index];
+  	      // frozen object case
+  	      for (entry = state.first; entry; entry = entry.next) {
+  	        if (entry.key === key) return entry;
+  	      }
+  	    };
+
+  	    defineBuiltIns(Prototype, {
+  	      // `{ Map, Set }.prototype.clear()` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
+  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
+  	      clear: function clear() {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = state.first;
+  	        while (entry) {
+  	          entry.removed = true;
+  	          if (entry.previous) entry.previous = entry.previous.next = null;
+  	          entry = entry.next;
+  	        }
+  	        state.first = state.last = null;
+  	        state.index = create(null);
+  	        if (DESCRIPTORS) state.size = 0;
+  	        else that.size = 0;
+  	      },
+  	      // `{ Map, Set }.prototype.delete(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
+  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
+  	      'delete': function (key) {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = getEntry(that, key);
+  	        if (entry) {
+  	          var next = entry.next;
+  	          var prev = entry.previous;
+  	          delete state.index[entry.index];
+  	          entry.removed = true;
+  	          if (prev) prev.next = next;
+  	          if (next) next.previous = prev;
+  	          if (state.first === entry) state.first = next;
+  	          if (state.last === entry) state.last = prev;
+  	          if (DESCRIPTORS) state.size--;
+  	          else that.size--;
+  	        } return !!entry;
+  	      },
+  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
+  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
+  	      forEach: function forEach(callbackfn /* , that = undefined */) {
+  	        var state = getInternalState(this);
+  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	        var entry;
+  	        while (entry = entry ? entry.next : state.first) {
+  	          boundFunction(entry.value, entry.key, this);
+  	          // revert to the last existing entry
+  	          while (entry && entry.removed) entry = entry.previous;
+  	        }
+  	      },
+  	      // `{ Map, Set}.prototype.has(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.has
+  	      // https://tc39.es/ecma262/#sec-set.prototype.has
+  	      has: function has(key) {
+  	        return !!getEntry(this, key);
+  	      }
+  	    });
+
+  	    defineBuiltIns(Prototype, IS_MAP ? {
+  	      // `Map.prototype.get(key)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.get
+  	      get: function get(key) {
+  	        var entry = getEntry(this, key);
+  	        return entry && entry.value;
+  	      },
+  	      // `Map.prototype.set(key, value)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.set
+  	      set: function set(key, value) {
+  	        return define(this, key === 0 ? 0 : key, value);
+  	      }
+  	    } : {
+  	      // `Set.prototype.add(value)` method
+  	      // https://tc39.es/ecma262/#sec-set.prototype.add
+  	      add: function add(value) {
+  	        return define(this, value = value === 0 ? 0 : value, value);
+  	      }
+  	    });
+  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
+  	      configurable: true,
+  	      get: function () {
+  	        return getInternalState(this).size;
+  	      }
+  	    });
+  	    return Constructor;
+  	  },
+  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
+  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
+  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
+  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
+  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
+  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-map.prototype.values
+  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
+  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-set.prototype.values
+  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
+  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
+  	      setInternalState(this, {
+  	        type: ITERATOR_NAME,
+  	        target: iterated,
+  	        state: getInternalCollectionState(iterated),
+  	        kind: kind,
+  	        last: null
+  	      });
+  	    }, function () {
+  	      var state = getInternalIteratorState(this);
+  	      var kind = state.kind;
+  	      var entry = state.last;
+  	      // revert to the last existing entry
+  	      while (entry && entry.removed) entry = entry.previous;
+  	      // get next entry
+  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
+  	        // or finish the iteration
+  	        state.target = null;
+  	        return createIterResultObject(undefined, true);
+  	      }
+  	      // return step by kind
+  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
+  	      if (kind === 'values') return createIterResultObject(entry.value, false);
+  	      return createIterResultObject([entry.key, entry.value], false);
+  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
+
+  	    // `{ Map, Set }.prototype[@@species]` accessors
+  	    // https://tc39.es/ecma262/#sec-get-map-@@species
+  	    // https://tc39.es/ecma262/#sec-get-set-@@species
+  	    setSpecies(CONSTRUCTOR_NAME);
+  	  }
+  	};
+  	return collectionStrong;
+  }
+
+  var hasRequiredEs_set_constructor;
+
+  function requireEs_set_constructor () {
+  	if (hasRequiredEs_set_constructor) return es_set_constructor;
+  	hasRequiredEs_set_constructor = 1;
+  	var collection = requireCollection();
+  	var collectionStrong = requireCollectionStrong();
+
+  	// `Set` constructor
+  	// https://tc39.es/ecma262/#sec-set-objects
+  	collection('Set', function (init) {
+  	  return function Set() { return init(this, arguments.length ? arguments[0] : undefined); };
+  	}, collectionStrong);
+  	return es_set_constructor;
+  }
+
+  var hasRequiredEs_set;
+
+  function requireEs_set () {
+  	if (hasRequiredEs_set) return es_set;
+  	hasRequiredEs_set = 1;
+  	// TODO: Remove this module from `core-js@4` since it's replaced to module below
+  	requireEs_set_constructor();
+  	return es_set;
+  }
+
+  requireEs_set();
 
   var es_string_padStart = {};
 
@@ -12906,6 +13485,34 @@
   /* ---- Config ---- */
 
   /**
+   * Resolve the authorization headers the host supplies for uploads.
+   *
+   * `bootstrap.nonce` was retired by ADR-034: the package used to read it and set
+   * a CMS authentication header itself, which made it hold a CMS header name. A
+   * host that has not migrated now passes `nonce` into a package that ignores it,
+   * and the result is an upload sent with no authorization at all — a 401 with
+   * nothing saying why, retried by the queue until the entry is held.
+   *
+   * So the misconfiguration is named where it happens. It is not fatal: a host
+   * whose ingestion needs no headers is legitimate, and refusing here would cost
+   * a recording (ADR-011) to enforce a convention the package cannot verify.
+   *
+   * @param {Object} bootstrap The host bootstrap object.
+   * @returns {Object} Headers to send, possibly empty.
+   */
+  function resolveUploadHeaders(bootstrap) {
+    var headers = bootstrap && bootstrap.uploadHeaders && _typeof$9(bootstrap.uploadHeaders) === "object" ? bootstrap.uploadHeaders : {};
+    if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
+      // The remedy names no header: which one carries the nonce is the
+      // host's to know and ADR-034 keeps it out of this package entirely —
+      // as the build check that rejected an earlier draft of this very
+      // message enforces.
+      console.warn("[Starmus] bootstrap.nonce is no longer read (ADR-034) and no " + "bootstrap.uploadHeaders was supplied, so this upload carries no " + "authorization header. A host that previously relied on nonce must " + "now supply its own header for it in bootstrap.uploadHeaders.");
+    }
+    return headers;
+  }
+
+  /**
    * Returns a configuration object merged from tier-defaults and global overrides.
    *
    * @returns {Object} Upload configuration
@@ -12920,12 +13527,20 @@
       retryDelays: [0, 2000, 4000],
       removeFingerprintOnSuccess: true,
       maxChunkRetries: 3,
-      requestTimeoutMs: 5000,
+      // A stall watchdog, not a deadline. The old code aborted the whole
+      // upload after 5 s, which on a 2G link ends every upload of a real
+      // recording before it finishes and then discards the transferred
+      // bytes — the opposite of what a resumable client is for. What is
+      // actually a fault is *no progress at all* for this long; a slow but
+      // moving transfer is the normal case here and is left alone.
+      stallTimeoutMs: 120000,
       endpoint: bootstrap.restUrl ? "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus") : "",
-      nonce: bootstrap.nonce || "",
+      // Host-injected. ADR-034: this package sends no CMS nonce and knows no
+      // CMS header name. Whatever the host's ingestion needs to authorize the
+      // transfer, the host supplies here.
+      headers: resolveUploadHeaders(bootstrap),
       endpoints: bootstrap.restUrl ? {
-        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus"),
-        directUpload: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/upload-fallback")
+        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus")
       } : {}
     };
     var globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
@@ -12952,6 +13567,32 @@
   /* ---- Helpers ---- */
 
   /**
+   * Metadata this module owns. A host form field may not overwrite one.
+   *
+   * @type {ReadonlySet<string>}
+   */
+  var RESERVED_METADATA_KEYS = new Set(["upload_uuid", "captureProfile", "captureAttainment", "filename", "filetype"]);
+
+  /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
+  var UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  /**
+   * Whether a value is usable as an upload identifier.
+   *
+   * Exported because the offline queue has to ask the same question and get the
+   * same answer. It decides whether a stored id survives to the next attempt,
+   * and this module decides whether a supplied one is sent — if those two
+   * disagree, the queue keeps an id the upload silently replaces, and every
+   * retry gets a new fingerprint and cannot resume the partial before it.
+   *
+   * @param {*} value
+   * @returns {boolean}
+   */
+  function isUploadId(value) {
+    return typeof value === "string" && UUID_V4_PATTERN.test(value.trim());
+  }
+
+  /**
    * Sanitises a metadata value for TUS header transmission.
    * Objects are JSON-encoded; all values have control characters stripped.
    *
@@ -12972,6 +13613,17 @@
   function normalizeFormFields(fields) {
     return fields && _typeof$9(fields) === "object" ? fields : {};
   }
+
+  /**
+   * Mint a UUID v4, refusing to run where secure randomness is unavailable.
+   *
+   * Exported so `starmus-core.js` mints the submission's id the same way rather
+   * than keeping a second, weaker copy: its own version used `crypto.randomUUID`
+   * only, which is absent on browsers this package supports, and there the
+   * submission silently lost its stable identity across retries.
+   *
+   * @returns {string}
+   */
   function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
@@ -12989,24 +13641,8 @@
     throw new Error("Secure UUID generation is not available in this runtime");
   }
 
-  /* ---- Direct Upload (fallback) ---- */
-
-  /**
-   * Uploads a recording blob directly to the WordPress REST API using FormData.
-   * Used when TUS is unavailable or the endpoint is not configured.
-   *
-   * @param {Blob} blob - Audio blob
-   * @param {string} fileName - File name for the upload
-   * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
-   * @param {Object} [metadata={}] - Additional metadata
-   * @param {string} [instanceId=''] - Recorder instance ID
-   * @param {function} [onProgress] - Progress callback (loaded, total)
-   * @returns {Promise<Object>} Server response
-   */
-  function uploadDirect(_x2, _x3) {
-    return _uploadDirect.apply(this, arguments);
-  }
   /* ---- TUS Upload ---- */
+
   /**
    * Uploads a recording blob using the TUS resumable-upload protocol.
    *
@@ -13018,149 +13654,25 @@
    * @param {function} [onProgress] - Progress callback (bytesUploaded, bytesTotal)
    * @returns {Promise<Object>} Server response
    */
-  function _uploadDirect() {
-    _uploadDirect = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
-      var _cfg$endpoints;
-      var formFields,
-        metadata,
-        instanceId,
-        onProgress,
-        cfg,
-        nonce,
-        requestTimeoutMs,
-        endpoint,
-        fields,
-        fd,
-        uploadId,
-        _i3,
-        _Object$entries3,
-        _Object$entries3$_i,
-        key,
-        val,
-        _args2 = arguments;
-      return _regenerator().w(function (_context2) {
-        while (1) switch (_context2.n) {
-          case 0:
-            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
-            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
-            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
-            onProgress = _args2.length > 5 ? _args2[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || "";
-            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000; // ADR-034: this package holds no CMS path. The host injects the endpoint
-            // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
-            // package silently CMS-coupled and contradicted its own architecture doc.
-            // Failing loudly is correct — a default that posts a speaker's recording
-            // to a guessed URL is worse than not uploading it.
-            endpoint = (_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload;
-            if (endpoint) {
-              _context2.n = 1;
-              break;
-            }
-            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
-          case 1:
-            fields = normalizeFormFields(formFields);
-            if (blob instanceof Blob) {
-              _context2.n = 2;
-              break;
-            }
-            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
-          case 2:
-            fd = new FormData();
-            uploadId = createUploadId();
-            fd.append("audio_file", blob, fileName);
-            fd.append("upload_uuid", uploadId);
-            for (_i3 = 0, _Object$entries3 = Object.entries(fields); _i3 < _Object$entries3.length; _i3++) {
-              _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
-              fd.append(key, String(val));
-            }
-            if (metadata.transcript) {
-              fd.append("transcription", metadata.transcript);
-            }
-            if (metadata.calibration) {
-              fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-            }
-            if (metadata.env) {
-              fd.append("_starmus_env", JSON.stringify(metadata.env));
-            }
-            if (metadata.tier) {
-              fd.append("tier", metadata.tier);
-            }
-            if (instanceId) {
-              fd.append("instanceId", instanceId);
-            }
-            return _context2.a(2, new Promise(function (resolve, reject) {
-              var xhr = new XMLHttpRequest();
-              var timeout = setTimeout(function () {
-                xhr.abort();
-                reject(new Error("Direct upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
-              xhr.upload.addEventListener("progress", function (e) {
-                if (onProgress && e.lengthComputable) {
-                  onProgress(e.loaded, e.total);
-                }
-              });
-              xhr.addEventListener("load", function () {
-                clearTimeout(timeout);
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    var _parsed$data, _parsed$data2;
-                    var parsed = JSON.parse(xhr.responseText);
-                    // Default successful HTTP responses to success: true, while
-                    // still allowing an explicit server-provided success value
-                    // (including false) to override the default.
-                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
-                    // The server's identifier wins over the client-generated
-                    // one, in whichever spelling it arrives. Checking only
-                    // `uploadId` and writing the local id into that field made
-                    // the local id outrank a server `upload_id` downstream,
-                    // because completion reads `uploadId` first.
-                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
-                      return typeof value === "string" && value.trim() !== "";
-                    }) || uploadId;
-                    resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
-                      success: success,
-                      uploadId: parsedUploadId
-                    }));
-                  } catch (_unused) {
-                    resolve({
-                      success: true,
-                      uploadId: uploadId,
-                      raw: xhr.responseText
-                    });
-                  }
-                } else {
-                  reject(new Error("Direct upload failed: HTTP ".concat(xhr.status, " \u2014 ").concat(xhr.responseText)));
-                }
-              });
-              xhr.addEventListener("error", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload network error"));
-              });
-              xhr.addEventListener("abort", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload aborted"));
-              });
-              xhr.open("POST", endpoint);
-              if (nonce) {
-                xhr.setRequestHeader("X-WP-Nonce", nonce);
-              }
-              xhr.send(fd);
-            }));
-        }
-      }, _callee2);
-    }));
-    return _uploadDirect.apply(this, arguments);
-  }
-  function uploadTus(_x4, _x5) {
+  function uploadTus(_x2, _x3) {
     return _uploadTus.apply(this, arguments);
   }
 
-  /* ---- Priority Upload (TUS → Direct fallback) ---- */
+  /* ---- Upload entry point ---- */
 
   /**
-   * Attempts TUS upload first; falls back to direct upload on failure.
-   * Wrapped in circuit breaker to prevent repeated hammering.
+   * Uploads a recording over the resumable chunked path, wrapped in the circuit
+   * breaker so a broken endpoint is not hammered.
+   *
+   * There is no second path. When this rejects, the caller keeps the recording:
+   * `starmus-core.js` and the offline queue both hold the blob and retry later,
+   * which is what ADR-011's unconditional capture requires and what resumption
+   * is for. The previous full-file fallback did the opposite — it discarded
+   * every transferred byte and re-sent the whole recording over the link that
+   * had just failed.
+   *
+   * The name is kept because it is this module's public surface; the priority
+   * it once expressed no longer has anything to rank.
    *
    * @param {Object} options - Upload options
    * @param {Blob} options.blob - Audio blob
@@ -13172,43 +13684,66 @@
    * @returns {Promise<Object>} Upload result
    */
   function _uploadTus() {
-    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(blob, fileName) {
-      var _cfg$endpoints2;
+    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
+      var _cfg$endpoints;
       var formFields,
         metadata,
         instanceId,
         _onProgress,
         cfg,
-        nonce,
         tusEndpoint,
         fields,
+        suppliedId,
         uploadId,
         tusMetadata,
-        _i4,
-        _Object$entries4,
-        _Object$entries4$_i,
+        captureProfile,
+        _i3,
+        _Object$entries3,
+        _Object$entries3$_i,
         key,
         val,
         headers,
-        _args3 = arguments;
-      return _regenerator().w(function (_context3) {
-        while (1) switch (_context3.n) {
+        stallTimeoutMs,
+        _args2 = arguments;
+      return _regenerator().w(function (_context2) {
+        while (1) switch (_context2.n) {
           case 0:
-            formFields = _args3.length > 2 && _args3[2] !== undefined ? _args3[2] : {};
-            metadata = _args3.length > 3 && _args3[3] !== undefined ? _args3[3] : {};
-            instanceId = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : "";
-            _onProgress = _args3.length > 5 ? _args3[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || ""; // ADR-034: host-injected, never a CMS path held by this package.
-            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus);
+            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
+            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
+            _onProgress = _args2.length > 5 ? _args2[5] : undefined;
+            cfg = getConfig(); // ADR-034: host-injected, never a CMS path held by this package.
+            tusEndpoint = cfg.endpoint || ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.tus);
             if (tusEndpoint) {
-              _context3.n = 1;
+              _context2.n = 1;
               break;
             }
             throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
           case 1:
-            fields = normalizeFormFields(formFields);
-            uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
+            if (blob instanceof Blob) {
+              _context2.n = 2;
+              break;
+            }
+            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+          case 2:
+            fields = normalizeFormFields(formFields); // One logical upload, one id, across every attempt.
+            //
+            // Minting a fresh UUID per call meant a resumed transfer carried the id
+            // from its first attempt on the server while `starmus:complete` announced
+            // the id from its last — an identifier matching no resource anywhere. The
+            // caller supplies the id it will keep (the offline queue persists it with
+            // the blob); a direct first attempt that has none gets one minted here.
+            // A caller-supplied id is used only if it is actually a UUID v4. This is a
+            // public function, and the id becomes both the TUS `upload_uuid` and the
+            // resume fingerprint — an arbitrary string there would let two submissions
+            // collide on a resume key, which is the bug the fingerprint change fixed.
+            suppliedId = typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
+            uploadId = isUploadId(suppliedId) ? suppliedId : createUploadId();
+            if (suppliedId !== "" && uploadId !== suppliedId) {
+              console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
+            }
+
+            // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
               upload_uuid: sanitizeMetadata(uploadId),
               filename: sanitizeMetadata(fileName),
@@ -13218,46 +13753,146 @@
               transcript: sanitizeMetadata(metadata.transcript || ""),
               calibration: sanitizeMetadata(metadata.calibration || ""),
               env: sanitizeMetadata(metadata.env || "")
-            }; // Merge form fields into TUS metadata
-            for (_i4 = 0, _Object$entries4 = Object.entries(fields); _i4 < _Object$entries4.length; _i4++) {
-              _Object$entries4$_i = _slicedToArray$1(_Object$entries4[_i4], 2), key = _Object$entries4$_i[0], val = _Object$entries4$_i[1];
-              tusMetadata[key] = sanitizeMetadata(val);
+              // ADR-035 and the capture-to-ingestion contract: the capture profile
+              // travels with the asset, so a later reader can tell whether a
+              // measurement taken from it is admissible. It was being built in
+              // starmus-core.js and then dropped here, which meant it reached
+              // ingestion on no path at all.
+              //
+              // The key *name* is owed jointly by both sides of that contract and is
+              // not this package's to settle, so this reuses the name already fixed
+              // by `starmus:complete` rather than inventing a second one. When the
+              // seam names the key, this changes with it.
+            }; // The profile key is present with a value, or absent. Never present and
+            // empty: the Spoken Audio Node distinguishes "arrived with no profile"
+            // (stored, flagged, not a measurement source) from a profile it cannot
+            // read, and an empty string collapses the two. ADR-011 still holds — the
+            // recording goes either way; what it does not do is misdescribe itself.
+            //
+            // Sanitised and trimmed *before* the test, not after it. A value of only
+            // spaces or control separators is truthy, so testing the raw property sent
+            // a present-but-blank profile — the exact state this rule exists to
+            // prevent, passing the build check while violating the rule that check
+            // enforces.
+            captureProfile = sanitizeMetadata(metadata.captureProfile).trim();
+            if (captureProfile) {
+              tusMetadata.captureProfile = captureProfile;
+            } else {
+              console.warn("[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.");
+              sparxstarIntegration.reportError("upload_without_capture_profile", {
+                instanceId: instanceId,
+                tier: metadata.tier
+              });
             }
-            headers = {};
-            if (nonce) {
-              headers["X-WP-Nonce"] = nonce;
+            if (metadata.captureAttainment) {
+              tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
             }
-            return _context3.a(2, new Promise(function (resolve, reject) {
+
+            // Merge form fields into TUS metadata — but never over a reserved key.
+            //
+            // The profile and the upload id are validated above and then were merged
+            // over by whatever the host's form happened to be named. A field called
+            // `captureProfile` could replace the validated value with an empty string,
+            // satisfying the build check and violating the rule it enforces.
+            _i3 = 0, _Object$entries3 = Object.entries(fields);
+          case 3:
+            if (!(_i3 < _Object$entries3.length)) {
+              _context2.n = 6;
+              break;
+            }
+            _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
+            if (!RESERVED_METADATA_KEYS.has(key)) {
+              _context2.n = 4;
+              break;
+            }
+            console.warn("[TUS] Ignoring form field '".concat(key, "': it is reserved capture metadata and the host does not set it."));
+            return _context2.a(3, 5);
+          case 4:
+            tusMetadata[key] = sanitizeMetadata(val);
+          case 5:
+            _i3++;
+            _context2.n = 3;
+            break;
+          case 6:
+            // Host-injected only (ADR-034). A CMS nonce header used to be set here.
+            headers = Object.assign({}, cfg.headers);
+            stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : 120000;
+            return _context2.a(2, new Promise(function (resolve, reject) {
               var settled = false;
-              var timeoutId = null;
+              var stallTimer = null;
+              function clearStallWatchdog() {
+                if (stallTimer) {
+                  clearTimeout(stallTimer);
+                  stallTimer = null;
+                }
+              }
+
+              /**
+               * Restart the no-progress window. Called once before `start()` and
+               * again on every progress event, so the deadline only ever fires when
+               * the transfer has genuinely stopped moving — not because the whole
+               * upload is taking a long time, which on these networks is normal.
+               *
+               * The abort deliberately leaves the TUS fingerprint in place
+               * (`removeFingerprintOnSuccess` only clears it on success). The next
+               * attempt then finds the stored upload — see the resume lookup before
+               * `start()` below — and continues from the last acknowledged offset
+               * instead of re-sending the original from byte zero, which ADR-038
+               * forbids.
+               */
+              function armStallWatchdog() {
+                clearStallWatchdog();
+                stallTimer = setTimeout(function () {
+                  if (settled) {
+                    return;
+                  }
+                  settled = true;
+                  upload.abort();
+                  reject(new Error("TUS_UPLOAD_STALLED: no progress for ".concat(stallTimeoutMs, "ms; resumable from the last acknowledged offset")));
+                }, stallTimeoutMs);
+              }
               var upload = new Upload(blob, {
                 endpoint: tusEndpoint,
                 chunkSize: cfg.chunkSize,
                 retryDelays: cfg.retryDelays,
                 removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
                 checksumAlgorithm: "sha256",
+                // Resume by this upload's own id, not by the blob's shape.
+                //
+                // tus-js-client's default fingerprint is derived from name, type,
+                // size and lastModified. A recording is handed over as a bare Blob,
+                // which has no name and no modification time, so two recordings of
+                // the same type and size — a plausible pair on a fixed-length
+                // prompt — collide on one URL-storage key and the second resumes
+                // into the first's half-finished resource. Keying on the id makes
+                // that impossible.
+                fingerprint: function fingerprint() {
+                  return Promise.resolve("starmus-upload-".concat(uploadId));
+                },
                 metadata: tusMetadata,
                 headers: headers,
                 onProgress: function onProgress(bytesUploaded, bytesTotal) {
+                  armStallWatchdog();
                   if (_onProgress) {
                     _onProgress(bytesUploaded, bytesTotal);
                   }
                 },
                 onSuccess: function onSuccess() {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
+                  // No storage URL is returned. `upload.url` is the TUS
+                  // resource handle; tus-js-client keeps it for resumption and
+                  // nothing here needs to hand it onward. ADR-038 keeps durable
+                  // storage URLs out of events, records and evidence fields —
+                  // assets are referenced by id — and the cheapest way to honor
+                  // that is not to emit a URL at all.
                   resolve({
                     success: true,
-                    url: upload.url,
                     uploadId: uploadId
                   });
                 },
                 onError: function onError(err) {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
                   console.error("[TUS] Upload error:", err);
                   sparxstarIntegration.reportError("tus_upload_error", {
@@ -13268,67 +13903,116 @@
                   reject(err);
                 }
               });
-              var requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
-              timeoutId = setTimeout(function () {
+
+              // Resume before starting, or the fingerprint is a key nobody reads.
+              //
+              // `upload.start()` does not consult URL storage on its own: tus-js-client
+              // requires findPreviousUploads() then resumeFromPreviousUpload() first.
+              // Without this the stall watchdog's abort left a half-finished resource
+              // on the server and the next attempt began a new one from byte zero —
+              // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
+              // of what the comment above it claimed.
+              //
+              // A storage read that fails rejects rather than starting over; see the
+              // `catch` below. An earlier version of this comment said the opposite,
+              // describing behaviour the fix beneath it had already replaced — which
+              // is how a resumability guarantee gets undone by someone trusting the
+              // comment over the code.
+              upload.findPreviousUploads().then(function (previous) {
+                if (Array.isArray(previous) && previous.length > 0) {
+                  // The most recent match: an earlier attempt on this exact
+                  // submission, since the fingerprint is the submission id.
+                  upload.resumeFromPreviousUpload(previous[previous.length - 1]);
+                }
+                if (settled) {
+                  return;
+                }
+                armStallWatchdog();
+                // Inside the chain, not a `finally` after it: a synchronous
+                // throw from `start()` — a malformed endpoint, a browser that
+                // refuses the request — would otherwise reject only the
+                // internal chain, leaving the promise this function returned
+                // pending forever with the watchdog armed and the caller with
+                // no error and no result.
+                upload.start();
+              }).catch(function (err) {
+                // A storage read that failed is not permission to start over.
+                // Without the lookup this cannot establish that no partial
+                // transfer exists, and starting fresh would re-send from byte
+                // zero and orphan whatever is already on the server — the
+                // re-upload ADR-038 forbids. Rejecting hands it back to the
+                // offline queue, which keeps the recording and tries again;
+                // the earlier behaviour here traded the contributor's
+                // bandwidth for the convenience of not failing.
                 if (settled) {
                   return;
                 }
                 settled = true;
-                upload.abort();
-                reject(new Error("TUS upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
-              upload.start();
+                clearStallWatchdog();
+                try {
+                  upload.abort();
+                } catch (_unused) {
+                  // Never started, or already aborted. Nothing to undo.
+                }
+                reject(new Error("TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (".concat(err.message, "). Not starting over.")));
+              });
+            }));
+        }
+      }, _callee2);
+    }));
+    return _uploadTus.apply(this, arguments);
+  }
+  function uploadWithPriority(_x4) {
+    return _uploadWithPriority.apply(this, arguments);
+  }
+  function _uploadWithPriority() {
+    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(_ref) {
+      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress;
+      return _regenerator().w(function (_context3) {
+        while (1) switch (_context3.n) {
+          case 0:
+            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
+            return _context3.a(2, uploadCircuitBreaker.execute(function () {
+              return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
             }));
         }
       }, _callee3);
     }));
-    return _uploadTus.apply(this, arguments);
-  }
-  function uploadWithPriority(_x6) {
     return _uploadWithPriority.apply(this, arguments);
   }
-  function _uploadWithPriority() {
-    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(_ref) {
-      var _cfg$endpoints3;
-      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress, cfg, hasTusEndpoint;
-      return _regenerator().w(function (_context5) {
-        while (1) switch (_context5.n) {
-          case 0:
-            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
-            cfg = getConfig();
-            hasTusEndpoint = !!(cfg.endpoint || (_cfg$endpoints3 = cfg.endpoints) !== null && _cfg$endpoints3 !== void 0 && _cfg$endpoints3.tus);
-            return _context5.a(2, uploadCircuitBreaker.execute(/*#__PURE__*/_asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4() {
-              var _t2;
-              return _regenerator().w(function (_context4) {
-                while (1) switch (_context4.p = _context4.n) {
-                  case 0:
-                    if (!hasTusEndpoint) {
-                      _context4.n = 4;
-                      break;
-                    }
-                    _context4.p = 1;
-                    _context4.n = 2;
-                    return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
-                  case 2:
-                    return _context4.a(2, _context4.v);
-                  case 3:
-                    _context4.p = 3;
-                    _t2 = _context4.v;
-                    console.warn("[TUS] Falling back to direct upload:", _t2.message);
-                    sparxstarIntegration.reportError("tus_fallback_to_direct", {
-                      error: _t2.message,
-                      instanceId: instanceId
-                    });
-                  case 4:
-                    return _context4.a(2, uploadDirect(blob, fileName, formFields, metadata, instanceId, onProgress));
-                }
-              }, _callee4, null, [[1, 3]]);
-            }))));
-        }
-      }, _callee5);
-    }));
-    return _uploadWithPriority.apply(this, arguments);
+
+  var es_array_find = {};
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
   }
+
+  requireEs_array_find();
 
   var es_array_includes = {};
 
@@ -13509,6 +14193,21 @@
     if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
       return "mp3";
     }
+
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+      return "webm";
+    }
     return null;
   }
 
@@ -13531,12 +14230,12 @@
    * arrived, or an empty string when the result carries none.
    *
    * This cannot tell a server-issued identifier from a client-generated one:
-   * `uploadDirect` already writes the client's UUID into `uploadId` when the
-   * server returns no identifier of its own, so by the time a result reaches
-   * here the two are indistinguishable. That fallback is deliberate — the same
-   * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
-   * handle rather than a guess — but this function does not verify the origin,
-   * and callers must not assume it did.
+   * the upload path resolves `uploadId` to the client's UUID when the server
+   * returns no identifier of its own, so by the time a result reaches here the
+   * two are indistinguishable. That fallback is deliberate — the same UUID
+   * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+   * rather than a guess — but this function does not verify the origin, and
+   * callers must not assume it did.
    *
    * @param {Object} result
    * @returns {string}
@@ -13567,14 +14266,24 @@
    * @param {string} [input.contributorId]
    * @param {boolean} [input.calibrationApplied]
    * @param {number} [input.durationMs]
-   * @returns {Object|null} null when the format cannot be named.
+   * @returns {Object} Always a detail object. An accepted upload always gets its
+   *          boundary event; see the `format` note below.
    */
   function buildCompletionDetail(input) {
     var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
-    var format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-      return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    var format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
     var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
     var consent = readContributorConsent();
     return {
@@ -13609,6 +14318,32 @@
     }));
     return true;
   }
+
+  var es_array_filter = {};
+
+  var hasRequiredEs_array_filter;
+
+  function requireEs_array_filter () {
+  	if (hasRequiredEs_array_filter) return es_array_filter;
+  	hasRequiredEs_array_filter = 1;
+  	var $ = require_export();
+  	var $filter = requireArrayIteration().filter;
+  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
+
+  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
+
+  	// `Array.prototype.filter` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.filter
+  	// with adding support of @@species
+  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
+  	  filter: function filter(callbackfn /* , thisArg */) {
+  	    return $filter(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+  	return es_array_filter;
+  }
+
+  requireEs_array_filter();
 
   var es_array_map = {};
 
@@ -13665,11 +14400,32 @@
       // 10 MB — Tier B
       C: 5 * 1024 * 1024 // 5 MB  — Tier C (default)
     },
-    defaultMaxBlobSize: 5 * 1024 * 1024
+    defaultMaxBlobSize: 5 * 1024 * 1024,
+    /**
+     * Total queue budget, from the platform's IndexedDB standard (20 MB).
+     *
+     * How it is spent is the part that needed deciding. The standard also says
+     * LRU, and LRU here means silently deleting the oldest recording to make
+     * room — which is the behaviour ADR-011 exists to prevent, and the one this
+     * queue was just changed to stop doing.
+     *
+     * So the budget is enforced at the door, not by eviction. When a new
+     * recording will not fit, the add is refused with an error naming what is
+     * occupying the space. The contributor is present and can act; a held
+     * recording from last week cannot advocate for itself.
+     *
+     * **Which recording loses when storage is genuinely full is not this
+     * module's call to make** — it is a sovereignty question about whose
+     * material is expendable, and it routes to the platform owner. Until it is
+     * ruled on, nothing is deleted automatically.
+     */
+    maxTotalBytes: 20 * 1024 * 1024
   };
 
   /** Tracks whether the singleton queue has installed its network listener. */
   var networkListenerInstalled = false;
+  /** Tracks whether the singleton queue has installed its battery listener. */
+  var batteryListenerInstalled = false;
 
   /**
    * Resolves the maximum blob size permitted for the given metadata's tier.
@@ -13709,14 +14465,30 @@
    * Offline submission queue backed by IndexedDB.
    *
    * Eviction policy (currently implemented):
-   * - Entries are removed on successful upload.
-   * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
-   *   next processQueue run (they are not left orphaned indefinitely).
+   * - Entries are removed on successful upload, and only on successful upload.
+   * - An entry that exhausts {@link CONFIG.maxRetries}, or fails with an error
+   *   retrying cannot fix, is marked `held` rather than deleted. It stops being
+   *   retried and starts needing a person. ADR-011 keeps the material
+   *   unconditionally: a contributor does not lose a recording because the
+   *   server said 400 four times, and the bytes are the only copy once the page
+   *   is closed.
+   * - Held is a state, not a slower deletion: `releaseHold()` puts an entry back
+   *   in the queue and `discardHeld()` removes it on an explicit instruction.
+   *   Without those a device fills with entries nobody can clear until `add()`
+   *   refuses every new recording — trading one lost recording for the loss of
+   *   recording itself.
    *
-   * Target eviction policy (Phase 3 — not yet implemented):
-   * - LRU, 20 MB maximum total queue size.
-   * - Entries older than 7 days are eligible for automatic eviction.
-   * - Eviction will run on queue initialization and after each successful upload.
+   * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
+   *   enforced at `add()`: a recording that will not fit is refused with an error
+   *   naming what is occupying the space. Nothing is evicted to make room.
+   *
+   * That last point is a deliberate departure from the platform standard's "LRU".
+   * LRU here means deleting a contributor's older recording so a newer one fits,
+   * which is the behaviour ADR-011 forbids and the one this queue was changed to
+   * stop. Whose material is expendable when a device is genuinely full is a
+   * sovereignty question for the platform owner, not a default this module picks.
+   * Until it is ruled on, the person standing in front of the device is told, and
+   * nothing already recorded is lost without someone deciding so.
    *
    * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
    */
@@ -13731,6 +14503,7 @@
       this.processQueueTimeoutId = null;
       /** @type {number|null} */
       this.processQueueDueAt = null;
+      /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
     }
 
     /**
@@ -13862,13 +14635,79 @@
                   metadata: metadata,
                   retryCount: 0,
                   lastAttempt: null,
-                  error: null
-                };
+                  error: null,
+                  held: false,
+                  heldReason: null
+                }; // The whole-queue budget is counted and the record inserted inside one
+                // readwrite transaction.
+                //
+                // Per-blob was the only bound before; the platform standard also caps
+                // the queue as a whole, and without that, repeated failures accumulate
+                // held entries until IndexedDB refuses the transaction — a quota error
+                // at `add()` loses the recording being made right now, which is the
+                // worst possible moment to find out.
+                //
+                // Counting in a separate transaction and inserting in another let two
+                // adds each see room and then both insert. A promise chain fixed that
+                // only within one tab's queue instance; a second tab has its own, reads
+                // the same store, and the 20 MB cap is exceeded anyway. IndexedDB
+                // serializes overlapping readwrite transactions on a store across every
+                // tab of the origin, so doing both here is the guarantee itself rather
+                // than an approximation of it — and it is the only mechanism, so there
+                // is no question which one is load-bearing.
                 return _context2.a(2, new Promise(function (resolve, reject) {
                   var tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
-                  store.add(item);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  /** @type {Error|null} Set when the queue is full, to reject with. */
+                  var refusal = null;
+                  var settled = false;
+
+                  /**
+                   * @param {Error} error
+                   * @returns {void}
+                   */
+                  var fail = function fail(error) {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
+                    reject(error);
+                  };
+                  var cursorReq = store.openCursor();
+                  cursorReq.onerror = function (ev) {
+                    return fail(ev.target.error);
+                  };
+                  cursorReq.onsuccess = function (event) {
+                    var cursor = event.target.result;
+                    if (cursor) {
+                      var _cursor$value, _cursor$value2;
+                      var size = ((_cursor$value = cursor.value) === null || _cursor$value === void 0 || (_cursor$value = _cursor$value.audioBlob) === null || _cursor$value === void 0 ? void 0 : _cursor$value.size) || 0;
+                      totalBytes += size;
+                      if (((_cursor$value2 = cursor.value) === null || _cursor$value2 === void 0 ? void 0 : _cursor$value2.held) === true) {
+                        heldBytes += size;
+                        heldCount += 1;
+                      }
+                      cursor.continue();
+                      return;
+                    }
+
+                    // The store is counted and this transaction still holds it.
+                    if (totalBytes + safeBlob.size > CONFIG.maxTotalBytes) {
+                      var heldNote = heldCount > 0 ? " ".concat(heldCount, " held recording(s) occupy ").concat((heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
+                      refusal = new Error("QueueFull: the offline queue holds ".concat((totalBytes / 1024 / 1024).toFixed(2), " MB of ") + "".concat((CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2), " MB and this recording needs ") + "".concat((safeBlob.size / 1024 / 1024).toFixed(2), " MB.").concat(heldNote, " ") + "Nothing is deleted to make room.");
+                      tx.abort();
+                      return;
+                    }
+                    store.add(item);
+                  };
                   tx.oncomplete = function () {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
                     debugLog("[Offline] Queued:", item.id);
                     _this2._notifyQueueUpdate();
                     if (navigator.onLine) {
@@ -13876,8 +14715,11 @@
                     }
                     resolve(item.id);
                   };
+                  tx.onabort = function (ev) {
+                    return fail(refusal || ev.target.error || new Error("OfflineQueue: the add transaction was aborted."));
+                  };
                   tx.onerror = function (ev) {
-                    return reject(ev.target.error);
+                    return fail(refusal || ev.target.error);
                   };
                 }));
             }
@@ -13965,11 +14807,20 @@
           return _remove.apply(this, arguments);
         }
         return remove;
-      }() /** @private */)
+      }()
+      /**
+       * Mark a submission as held: kept, no longer retried, needing a person.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} reason
+       * @returns {Promise<void>}
+       */
+      )
     }, {
-      key: "_updateRetry",
+      key: "_hold",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, retryCount, error) {
+        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, reason) {
           var _this5 = this;
           return _regenerator().w(function (_context5) {
             while (1) switch (_context5.n) {
@@ -13982,6 +14833,374 @@
               case 1:
                 return _context5.a(2, new Promise(function (resolve, reject) {
                   var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (item) {
+                      item.held = true;
+                      item.heldReason = reason;
+                      item.lastAttempt = Date.now();
+                      store.put(item);
+                    }
+                  };
+                  tx.oncomplete = function () {
+                    console.warn("[Offline] Held:", id, reason);
+                    sparxstarIntegration.reportError("submission_held", {
+                      submissionId: id,
+                      reason: reason
+                    });
+                    _this5._notifyQueueUpdate();
+                    resolve();
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee5, this);
+        }));
+        function _hold(_x5, _x6) {
+          return _hold2.apply(this, arguments);
+        }
+        return _hold;
+      }()
+      /**
+       * What the queue is currently holding, in bytes and in entries.
+       *
+       * Exported through `getQueueUsage()` so a host can show the contributor how
+       * full the device is before they find out by being refused.
+       *
+       * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+       */
+      )
+    }, {
+      key: "usage",
+      value: (function () {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
+          var _this6 = this;
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
+              case 0:
+                if (this.db) {
+                  _context6.n = 1;
+                  break;
+                }
+                return _context6.a(2, {
+                  totalBytes: 0,
+                  count: 0,
+                  heldBytes: 0,
+                  heldCount: 0,
+                  maxTotalBytes: CONFIG.maxTotalBytes
+                });
+              case 1:
+                return _context6.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  var count = 0;
+                  var req = store.openCursor();
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  req.onsuccess = function (event) {
+                    var _cursor$value3, _cursor$value4;
+                    var cursor = event.target.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var size = ((_cursor$value3 = cursor.value) === null || _cursor$value3 === void 0 || (_cursor$value3 = _cursor$value3.audioBlob) === null || _cursor$value3 === void 0 ? void 0 : _cursor$value3.size) || 0;
+                    totalBytes += size;
+                    count += 1;
+                    if (((_cursor$value4 = cursor.value) === null || _cursor$value4 === void 0 ? void 0 : _cursor$value4.held) === true) {
+                      heldBytes += size;
+                      heldCount += 1;
+                    }
+                    cursor.continue();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve({
+                      totalBytes: totalBytes,
+                      count: count,
+                      heldBytes: heldBytes,
+                      heldCount: heldCount,
+                      maxTotalBytes: CONFIG.maxTotalBytes
+                    });
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee6, this);
+        }));
+        function usage() {
+          return _usage.apply(this, arguments);
+        }
+        return usage;
+      }()
+      /**
+       * Put a held submission back in the queue.
+       *
+       * The counterpart to `_hold()`, and the reason holding is a state rather
+       * than a slow deletion. Without a way out, held entries accumulate against
+       * the queue's byte budget until `add()` refuses every new recording — which
+       * would trade "lose one old recording" for "lose the ability to record at
+       * all", a worse outcome than the deletion holding replaced.
+       *
+       * The retry count resets, because a person releasing an entry is saying the
+       * condition that stopped it has changed.
+       *
+       * @param {string} id
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "releaseHold",
+      value: (function () {
+        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id) {
+          var _this7 = this;
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
+              case 0:
+                if (this.db) {
+                  _context7.n = 1;
+                  break;
+                }
+                return _context7.a(2);
+              case 1:
+                _context7.n = 2;
+                return new Promise(function (resolve, reject) {
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  /** @type {Error|null} */
+                  var refusal = null;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!item) {
+                      return;
+                    }
+                    // Only a held entry. Releasing clears `retryCount`,
+                    // `lastAttempt` and `error` and schedules an immediate drain,
+                    // so calling it on an entry that is merely waiting out its
+                    // backoff discarded that backoff — a host with a stale id
+                    // could push a failing upload straight back onto a bad link,
+                    // repeatedly, at the contributor's expense. `discardHeld()`
+                    // guards the same way; this is the same state machine.
+                    if (item.held !== true) {
+                      refusal = new Error("ReleaseRefused: ".concat(id, " is not held. Only a held submission can be released; the queue manages its own retries."));
+                      tx.abort();
+                      return;
+                    }
+                    item.held = false;
+                    item.heldReason = null;
+                    item.retryCount = 0;
+                    item.lastAttempt = null;
+                    item.error = null;
+                    store.put(item);
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    _this7._notifyQueueUpdate();
+                    resolve();
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                });
+              case 2:
+                this._scheduleProcessQueue(0);
+              case 3:
+                return _context7.a(2);
+            }
+          }, _callee7, this);
+        }));
+        function releaseHold(_x7) {
+          return _releaseHold.apply(this, arguments);
+        }
+        return releaseHold;
+      }()
+      /**
+       * Delete a held submission, on a person's explicit instruction.
+       *
+       * The only deletion in this module that is not a successful upload, and it
+       * exists because the alternative is a device that fills with recordings
+       * nobody can clear. It is deliberately not reachable from any automatic
+       * path: ADR-011 forbids this module deciding a contributor's material is
+       * expendable, and nothing here decides. Someone does, and says why.
+       *
+       * @param {string} id
+       * @param {string} reason Required, and recorded before the entry goes.
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "discardHeld",
+      value: (function () {
+        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id, reason) {
+          var given, all, item;
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
+              case 0:
+                // Required, not merely recorded. This is the one deletion here that is
+                // not a successful upload, and the reason is what makes it a decision
+                // someone took rather than something that happened. Accepting a blank
+                // one and logging "(no reason given)" left the only non-upload
+                // deletion path in the module able to run with no rationale at all —
+                // the audit trail this method exists to produce, absent from the one
+                // event that needs it.
+                given = typeof reason === "string" ? reason.trim() : "";
+                if (!(given === "")) {
+                  _context8.n = 1;
+                  break;
+                }
+                throw new Error("DiscardRefused: ".concat(id, " needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one."));
+              case 1:
+                _context8.n = 2;
+                return this.getAll();
+              case 2:
+                all = _context8.v;
+                item = all.find(function (entry) {
+                  return entry.id === id;
+                });
+                if (item) {
+                  _context8.n = 3;
+                  break;
+                }
+                return _context8.a(2);
+              case 3:
+                if (!(item.held !== true)) {
+                  _context8.n = 4;
+                  break;
+                }
+                throw new Error("DiscardRefused: ".concat(id, " is not held. Only a held submission can be discarded, and only on an explicit instruction."));
+              case 4:
+                console.warn("[Offline] Discarded on instruction:", id, given);
+                sparxstarIntegration.reportError("submission_discarded", {
+                  submissionId: id,
+                  reason: given,
+                  heldReason: item.heldReason || null
+                });
+                _context8.n = 5;
+                return this.remove(id);
+              case 5:
+                return _context8.a(2);
+            }
+          }, _callee8, this);
+        }));
+        function discardHeld(_x8, _x9) {
+          return _discardHeld.apply(this, arguments);
+        }
+        return discardHeld;
+      }()
+      /**
+       * Submissions that are kept but will not be retried without intervention.
+       *
+       * Surfaced so a host can show them rather than let them sit invisibly: a
+       * held recording that nobody is told about is a lost one with extra steps.
+       *
+       * @returns {Promise<Array<Object>>}
+       */
+      )
+    }, {
+      key: "getHeld",
+      value: (function () {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
+          var all;
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
+              case 0:
+                _context9.n = 1;
+                return this.getAll();
+              case 1:
+                all = _context9.v;
+                return _context9.a(2, all.filter(function (item) {
+                  return item.held === true;
+                }));
+            }
+          }, _callee9, this);
+        }));
+        function getHeld() {
+          return _getHeld.apply(this, arguments);
+        }
+        return getHeld;
+      }()
+      /**
+       * Replace a submission's metadata in place.
+       *
+       * @private
+       * @param {string} id
+       * @param {Object} metadata
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "_setMetadata",
+      value: (function () {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, metadata) {
+          var _this8 = this;
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
+              case 0:
+                if (this.db) {
+                  _context0.n = 1;
+                  break;
+                }
+                return _context0.a(2);
+              case 1:
+                return _context0.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (item) {
+                      item.metadata = metadata;
+                      store.put(item);
+                    }
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve();
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee0, this);
+        }));
+        function _setMetadata(_x0, _x1) {
+          return _setMetadata2.apply(this, arguments);
+        }
+        return _setMetadata;
+      }() /** @private */)
+    }, {
+      key: "_updateRetry",
+      value: (function () {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, retryCount, error) {
+          var _this9 = this;
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.n) {
+              case 0:
+                if (this.db) {
+                  _context1.n = 1;
+                  break;
+                }
+                return _context1.a(2);
+              case 1:
+                return _context1.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this9.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -14001,9 +15220,9 @@
                   };
                 }));
             }
-          }, _callee5, this);
+          }, _callee1, this);
         }));
-        function _updateRetry(_x5, _x6, _x7) {
+        function _updateRetry(_x10, _x11, _x12) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -14018,71 +15237,112 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
           var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3, _t4;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.p = _context6.n) {
+          var pending, _iterator, _step, _metadata, item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, backfilled, delay, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, result, detail, _metadata6, _metadata7, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.p = _context10.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context6.n = 1;
+                  _context10.n = 1;
                   break;
                 }
-                return _context6.a(2);
+                return _context10.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context6.n = 2;
-                  break;
-                }
-                this._scheduleProcessQueue(CONFIG.retryDelays[1]);
-                return _context6.a(2);
-              case 2:
-                this.isProcessing = true;
-                _context6.p = 3;
-                _context6.n = 4;
+                _context10.n = 2;
                 return this.getAll();
-              case 4:
-                pending = _context6.v;
+              case 2:
+                pending = _context10.v;
                 if (!(pending.length === 0)) {
-                  _context6.n = 5;
+                  _context10.n = 3;
                   break;
                 }
-                return _context6.a(2);
-              case 5:
+                return _context10.a(2);
+              case 3:
+                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
+                  _context10.n = 4;
+                  break;
+                }
+                return _context10.a(2);
+              case 4:
+                this.isProcessing = true;
+                _context10.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator = _createForOfIteratorHelper$1(pending);
-                _context6.p = 6;
+                _context10.p = 6;
                 _iterator.s();
               case 7:
                 if ((_step = _iterator.n()).done) {
-                  _context6.n = 17;
+                  _context10.n = 25;
                   break;
                 }
                 item = _step.value;
-                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId;
-                if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context6.n = 9;
+                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
+                // able to replace it wholesale for a row that has no metadata
+                // object at all.
+                metadata = item.metadata; // Whether the bytes reached the server on this attempt.
+                uploaded = false; // Entries queued before the submission id existed have no
+                // `metadata.uploadId`, so every retry would mint a new one and
+                // start a new TUS resource instead of resuming the partial it
+                // already has. Backfilled once and persisted, so the
+                // one-id-per-submission rule reaches recordings already sitting
+                // on devices rather than only new ones.
+                // The same test the upload module applies, not merely
+                // "is something there". `uploadTus()` replaces any id that is
+                // not a UUID v4 with a freshly minted one, so a stored entry
+                // carrying a non-empty invalid id was left alone here and then
+                // silently re-identified on every attempt — a different
+                // fingerprint each time, and never able to resume the partial
+                // the previous attempt left on the server. Asking the module
+                // that decides keeps one answer to the question.
+                if (isUploadId((_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId)) {
+                  _context10.n = 9;
                   break;
                 }
-                _context6.n = 8;
-                return this.remove(id);
+                backfilled = createUploadId(); // The local variable is replaced, not just the stored row.
+                // Guarding the assignment on `metadata` being truthy left a
+                // row that had no metadata at all still passing `undefined`
+                // into this first attempt: the upload minted a *different*
+                // id, and the next drain — now reading the persisted one —
+                // could not resume the partial that first attempt left on
+                // the server. The backfill has to reach the attempt it was
+                // written for, not only the one after it.
+                metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
+                  uploadId: backfilled
+                });
+                _context10.n = 8;
+                return this._setMetadata(id, metadata);
               case 8:
-                return _context6.a(3, 16);
               case 9:
+                if (!item.held) {
+                  _context10.n = 10;
+                  break;
+                }
+                return _context10.a(3, 24);
+              case 10:
+                if (!(retryCount >= CONFIG.maxRetries)) {
+                  _context10.n = 12;
+                  break;
+                }
+                _context10.n = 11;
+                return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
+              case 11:
+                return _context10.a(3, 24);
+              case 12:
                 if (!(item.lastAttempt !== null)) {
-                  _context6.n = 10;
+                  _context10.n = 13;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context6.n = 10;
+                  _context10.n = 13;
                   break;
                 }
-                return _context6.a(3, 16);
-              case 10:
-                _context6.p = 10;
-                _context6.n = 11;
+                return _context10.a(3, 24);
+              case 13:
+                _context10.p = 13;
+                _context10.n = 14;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -14090,8 +15350,16 @@
                   metadata: metadata,
                   instanceId: instanceId
                 });
-              case 11:
-                result = _context6.v;
+              case 14:
+                result = _context10.v;
+                // Set here, the moment the bytes are known to have landed —
+                // not at the end of the block. Setting it last made the
+                // `if (uploaded)` guard below unreachable: everything that
+                // can throw between here and there threw first, so the
+                // protection against re-uploading an accepted asset did
+                // nothing at all.
+                uploaded = true;
+
                 // `starmus:complete` is the boundary before any
                 // server-side processing (ADR-034). A queued upload that
                 // drains is as complete as an immediate one, so it fires
@@ -14103,102 +15371,124 @@
                   metadata: metadata,
                   formFields: formFields,
                   fileName: fileName,
-                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                  durationMs: (_metadata$durationMs = metadata === null || metadata === void 0 ? void 0 : metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                  mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || audioBlob.type || "",
+                  durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
                   language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
-                  contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
-                  calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
-                });
-                if (detail) {
-                  emitCompletionEvent(detail);
-                } else {
-                  // The upload succeeded but the format cannot be named,
-                  // so no consumer can be told this asset exists. The
-                  // entry is still removed — the asset is on the server
-                  // and re-uploading it on every future drain would burn
-                  // bandwidth the contributor is paying for without ever
-                  // producing a nameable format. What must not happen is
-                  // this passing in silence, so it is reported.
-                  console.error("[Offline] Uploaded but could not build starmus:complete:", {
-                    id: id,
-                    fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
-                  });
-                  sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                  contributorId: ((_metadata4 = metadata) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.env) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.identifiers) === null || _metadata4 === void 0 ? void 0 : _metadata4.visitorId) || "",
+                  calibrationApplied: !!((_metadata5 = metadata) !== null && _metadata5 !== void 0 && _metadata5.calibration)
+                }); // Always emitted. A format this client cannot name is
+                // reported as `unknown` rather than suppressing the event:
+                // `starmus:complete` is the boundary before any server-side
+                // processing (ADR-034), and withholding it left the asset on
+                // the server with nobody told it existed, recoverable only
+                // by a person noticing a held entry. The Node rules on the
+                // format, where refusing does not cost the recording.
+                emitCompletionEvent(detail);
+                if (detail.format === "unknown") {
+                  sparxstarIntegration.reportError("upload_format_unnamed", {
                     submissionId: id,
                     instanceId: instanceId,
                     fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                    mimeType: ((_metadata6 = metadata) === null || _metadata6 === void 0 ? void 0 : _metadata6.mimeType) || audioBlob.type || "",
+                    captureProfile: ((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.captureProfile) || null
                   });
                 }
-                _context6.n = 12;
-                return this.remove(id);
-              case 12:
-                _context6.n = 16;
+                _context10.n = 21;
                 break;
-              case 13:
-                _context6.p = 13;
-                _t = _context6.v;
+              case 15:
+                _context10.p = 15;
+                _t = _context10.v;
+                if (!uploaded) {
+                  _context10.n = 17;
+                  break;
+                }
+                // Reaching here after a successful transfer means the
+                // completion handling threw, not the upload. Re-queuing
+                // or retrying would send an asset the server already
+                // has. Hold it instead, so a person can see it and the
+                // next drain does not upload it again.
+                _msg = _t && _t.message ? _t.message : String(_t);
+                console.error("[Offline] Uploaded, but completion failed:", id, _msg);
+                _context10.n = 16;
+                return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
+              case 16:
+                return _context10.a(3, 24);
+              case 17:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context6.n = 15;
+                  _context10.n = 19;
                   break;
                 }
-                _context6.n = 14;
-                return this.remove(id);
-              case 14:
-                _context6.n = 16;
-                break;
-              case 15:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context6.n = 16;
-                return this._updateRetry(id, nextRetryCount, msg);
-              case 16:
-                _context6.n = 7;
-                break;
-              case 17:
-                _context6.n = 19;
-                break;
+                _context10.n = 18;
+                return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
               case 18:
-                _context6.p = 18;
-                _t2 = _context6.v;
-                _iterator.e(_t2);
-              case 19:
-                _context6.p = 19;
-                _iterator.f();
-                return _context6.f(19);
-              case 20:
-                _context6.n = 22;
+                _context10.n = 20;
                 break;
+              case 19:
+                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                _context10.n = 20;
+                return this._updateRetry(id, nextRetryCount, msg);
+              case 20:
+                return _context10.a(3, 24);
               case 21:
-                _context6.p = 21;
-                _t3 = _context6.v;
-                console.error("[Offline] Queue fatal:", _t3);
+                _context10.p = 21;
+                _context10.n = 22;
+                return this.remove(id);
               case 22:
-                _context6.p = 22;
-                this.isProcessing = false;
-                _context6.p = 23;
-                _context6.n = 24;
-                return this._getNextProcessDelay();
+                _context10.n = 24;
+                break;
+              case 23:
+                _context10.p = 23;
+                _t2 = _context10.v;
+                _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
+                console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
+                _context10.n = 24;
+                return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
               case 24:
-                nextDelay = _context6.v;
+                _context10.n = 7;
+                break;
+              case 25:
+                _context10.n = 27;
+                break;
+              case 26:
+                _context10.p = 26;
+                _t3 = _context10.v;
+                _iterator.e(_t3);
+              case 27:
+                _context10.p = 27;
+                _iterator.f();
+                return _context10.f(27);
+              case 28:
+                _context10.n = 30;
+                break;
+              case 29:
+                _context10.p = 29;
+                _t4 = _context10.v;
+                console.error("[Offline] Queue fatal:", _t4);
+              case 30:
+                _context10.p = 30;
+                this.isProcessing = false;
+                _context10.p = 31;
+                _context10.n = 32;
+                return this._getNextProcessDelay();
+              case 32:
+                nextDelay = _context10.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context6.n = 26;
+                _context10.n = 34;
                 break;
-              case 25:
-                _context6.p = 25;
-                _t4 = _context6.v;
-                console.error("[Offline] Failed to schedule next queue processing:", _t4);
-              case 26:
-                return _context6.f(22);
-              case 27:
-                return _context6.a(2);
+              case 33:
+                _context10.p = 33;
+                _t5 = _context10.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t5);
+              case 34:
+                return _context10.f(30);
+              case 35:
+                return _context10.a(2);
             }
-          }, _callee6, this, [[23, 25], [10, 13], [6, 18, 19, 20], [3, 21, 22, 27]]);
+          }, _callee10, this, [[31, 33], [21, 23], [13, 15], [6, 26, 27, 28], [5, 29, 30, 35]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14214,19 +15504,40 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this6 = this;
+        var _this0 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this6._scheduleProcessQueue(0);
+          _this0._scheduleProcessQueue(0);
         });
+        this._setupBatteryListeners();
 
         // Flush pending items on startup when already online.
         if (navigator.onLine) {
           this._scheduleProcessQueue(0);
         }
+      }
+      /** @private */
+    }, {
+      key: "_setupBatteryListeners",
+      value: function _setupBatteryListeners() {
+        var _this1 = this;
+        if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
+          return;
+        }
+        batteryListenerInstalled = true;
+        navigator.getBattery().then(function (battery) {
+          var handleBatteryChange = function handleBatteryChange() {
+            var _sparxstarIntegration2;
+            if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
+              _this1._scheduleProcessQueue(0);
+            }
+          };
+          battery.addEventListener("levelchange", handleBatteryChange);
+          battery.addEventListener("chargingchange", handleBatteryChange);
+        });
       }
       /** @private */
     }, {
@@ -14242,7 +15553,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this7 = this;
+        var _this10 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -14254,46 +15565,48 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this7.processQueueTimeoutId = null;
-          _this7.processQueueDueAt = null;
-          void _this7.processQueue();
+          _this10.processQueueTimeoutId = null;
+          _this10.processQueueDueAt = null;
+          void _this10.processQueue();
         }, safeDelay);
       }
       /** @private */
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
-          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t5;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.p = _context7.n) {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
+          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t6;
+          return _regenerator().w(function (_context11) {
+            while (1) switch (_context11.p = _context11.n) {
               case 0:
-                _context7.n = 1;
+                _context11.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context7.v;
+                pending = _context11.v.filter(function (item) {
+                  return item.held !== true;
+                });
                 if (!(pending.length === 0)) {
-                  _context7.n = 2;
+                  _context11.n = 2;
                   break;
                 }
-                return _context7.a(2, null);
+                return _context11.a(2, null);
               case 2:
                 nextDelay = null;
                 now = Date.now();
                 _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context7.p = 3;
+                _context11.p = 3;
                 _iterator2.s();
               case 4:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context7.n = 7;
+                  _context11.n = 7;
                   break;
                 }
                 item = _step2.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context7.n = 5;
+                  _context11.n = 5;
                   break;
                 }
-                return _context7.a(2, 0);
+                return _context11.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -14301,23 +15614,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context7.n = 4;
+                _context11.n = 4;
                 break;
               case 7:
-                _context7.n = 9;
+                _context11.n = 9;
                 break;
               case 8:
-                _context7.p = 8;
-                _t5 = _context7.v;
-                _iterator2.e(_t5);
+                _context11.p = 8;
+                _t6 = _context11.v;
+                _iterator2.e(_t6);
               case 9:
-                _context7.p = 9;
+                _context11.p = 9;
                 _iterator2.f();
-                return _context7.f(9);
+                return _context11.f(9);
               case 10:
-                return _context7.a(2, nextDelay);
+                return _context11.a(2, nextDelay);
             }
-          }, _callee7, this, [[3, 8, 9, 10]]);
+          }, _callee11, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -14415,47 +15728,50 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
-      return _regenerator().w(function (_context8) {
-        while (1) switch (_context8.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
+      return _regenerator().w(function (_context12) {
+        while (1) switch (_context12.n) {
           case 0:
             if (offlineQueue.db) {
-              _context8.n = 2;
+              _context12.n = 2;
               break;
             }
-            _context8.n = 1;
+            _context12.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context8.a(2, offlineQueue);
+            return _context12.a(2, offlineQueue);
         }
-      }, _callee8);
+      }, _callee12);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x8, _x9, _x0, _x1, _x10) {
+  function queueSubmission(_x13, _x14, _x15, _x16, _x17) {
     return _queueSubmission.apply(this, arguments);
   }
 
   /**
    * Returns the count of pending offline submissions.
    *
+   * Counts held submissions too: they are still recordings this device is
+   * holding that the platform has not received.
+   *
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context9) {
-        while (1) switch (_context9.n) {
+      return _regenerator().w(function (_context13) {
+        while (1) switch (_context13.n) {
           case 0:
-            _context9.n = 1;
+            _context13.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context9.v;
-            return _context9.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context13.v;
+            return _context13.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee9);
+      }, _callee13);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -14464,29 +15780,140 @@
   }
 
   /**
+   * Returns the submissions that are kept but will not be retried on their own.
+   *
+   * A host shows these so someone can act. They are never deleted by the queue.
+   *
+   * @returns {Promise<Array<Object>>}
+   */
+  function _getPendingCount() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
+      var q, list;
+      return _regenerator().w(function (_context14) {
+        while (1) switch (_context14.n) {
+          case 0:
+            _context14.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context14.v;
+            _context14.n = 2;
+            return q.getAll();
+          case 2:
+            list = _context14.v;
+            return _context14.a(2, list.length);
+        }
+      }, _callee14);
+    }));
+    return _getPendingCount.apply(this, arguments);
+  }
+  function getHeldSubmissions() {
+    return _getHeldSubmissions.apply(this, arguments);
+  }
+
+  /**
+   * How full the offline queue is.
+   *
+   * A host shows this so a contributor learns the device is nearly full before a
+   * recording is refused, rather than at the moment they finish speaking.
+   *
+   * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+   */
+  function _getHeldSubmissions() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
+      var q;
+      return _regenerator().w(function (_context15) {
+        while (1) switch (_context15.n) {
+          case 0:
+            _context15.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context15.v;
+            return _context15.a(2, q.getHeld());
+        }
+      }, _callee15);
+    }));
+    return _getHeldSubmissions.apply(this, arguments);
+  }
+  function getQueueUsage() {
+    return _getQueueUsage.apply(this, arguments);
+  }
+
+  /**
+   * Put a held submission back in the queue and try it again.
+   *
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  function _getQueueUsage() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+      var q;
+      return _regenerator().w(function (_context16) {
+        while (1) switch (_context16.n) {
+          case 0:
+            _context16.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context16.v;
+            return _context16.a(2, q.usage());
+        }
+      }, _callee16);
+    }));
+    return _getQueueUsage.apply(this, arguments);
+  }
+  function releaseHeldSubmission(_x18) {
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+
+  /**
+   * Delete a held submission, on a person's explicit instruction.
+   *
+   * The only deletion here that is not a successful upload. Nothing automatic
+   * reaches it.
+   *
+   * @param {string} id
+   * @param {string} reason
+   * @returns {Promise<void>}
+   */
+  function _releaseHeldSubmission() {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17(id) {
+      var q;
+      return _regenerator().w(function (_context17) {
+        while (1) switch (_context17.n) {
+          case 0:
+            _context17.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context17.v;
+            return _context17.a(2, q.releaseHold(id));
+        }
+      }, _callee17);
+    }));
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+  function discardHeldSubmission(_x19, _x20) {
+    return _discardHeldSubmission.apply(this, arguments);
+  }
+
+  /**
    * Initialises the offline queue. Alias of getOfflineQueue.
    *
    * @returns {Promise<OfflineQueue>}
    */
-  function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
-      var q, list;
-      return _regenerator().w(function (_context0) {
-        while (1) switch (_context0.n) {
+  function _discardHeldSubmission() {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18(id, reason) {
+      var q;
+      return _regenerator().w(function (_context18) {
+        while (1) switch (_context18.n) {
           case 0:
-            _context0.n = 1;
+            _context18.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context0.v;
-            _context0.n = 2;
-            return q.getAll();
-          case 2:
-            list = _context0.v;
-            return _context0.a(2, list.length);
+            q = _context18.v;
+            return _context18.a(2, q.discardHeld(id, reason));
         }
-      }, _callee0);
+      }, _callee18);
     }));
-    return _getPendingCount.apply(this, arguments);
+    return _discardHeldSubmission.apply(this, arguments);
   }
   function initOffline() {
     return getOfflineQueue();
@@ -14494,6 +15921,10 @@
   if (typeof window !== "undefined") {
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
+    window.StarmusHeldSubmissions = getHeldSubmissions;
+    window.StarmusQueueUsage = getQueueUsage;
+    window.StarmusReleaseHeldSubmission = releaseHeldSubmission;
+    window.StarmusDiscardHeldSubmission = discardHeldSubmission;
   }
 
   /**
@@ -14537,7 +15968,7 @@
       return null;
     }
     try {
-      var redirect = new URL(candidate, window.location.origin);
+      var redirect = new URL(candidate, window.location.href);
       var isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
       return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
     } catch (_unused) {
@@ -14651,7 +16082,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, transferred, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -14672,13 +16103,33 @@
               return _context.a(2);
             case 1:
               // ADR-035 / capture-to-ingestion contract: the capture profile travels
-              // with the asset. This object is what the direct and TUS serializers
-              // send and what the offline queue persists for later retry, so the
-              // profile has to be in it here or it reaches ingestion on no path at
-              // all. `null` means the recorder never reported one (a file upload via
-              // the Tier C fallback), which is itself information the consumer needs.
-              captureAttainment = source.captureAttainment || null;
+              // with the asset. This object is what the upload serializes and what
+              // the offline queue persists for later retry, so the profile has to be
+              // in it here or it reaches ingestion on no path at all. A recorded
+              // session carries the profile the recorder attained; an attached file
+              // carries `import`. `null` is left for a source that reported no
+              // profile at all, which is itself information the consumer needs — the
+              // Node stores such an asset and marks it inadmissible for measurement
+              // rather than refusing it.
+              captureAttainment = source.captureAttainment || null; // Minted once per submission and carried into both the immediate
+              // attempt and the queued retry, so a recording that is resumed hours
+              // later still reports the identifier the server knows it by.
+              //
+              // Through the upload module's helper rather than `crypto.randomUUID`
+              // directly: that API is missing on browsers this package supports, and
+              // reaching for it alone left the id unset on exactly those devices —
+              // where a retry over a bad link is likeliest and a stable identity
+              // matters most.
               metadata = {
+                // Minted inside the try below, not here. `createUploadId()` throws
+                // on a runtime with no secure randomness — an insecure origin on an
+                // old Android is exactly such a runtime, and exactly the device
+                // this package exists for — and a throw out here landed outside
+                // every handler, rejecting the submit with the captured blob never
+                // queued and no error dispatched. ADR-011 keeps the material
+                // whatever else breaks, so the record the queue needs is built
+                // first and the part that can fail happens where it is caught.
+                uploadId: null,
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 calibration: calibration.complete ? {
                   gain: calibration.gain,
@@ -14697,7 +16148,14 @@
               store.dispatch({
                 type: "starmus/submit-start"
               });
+
+              // Whether the bytes reached the server. Everything after that point —
+              // naming the format, building the completion detail, notifying the
+              // host — can still fail, and none of those failures mean the recording
+              // needs sending again.
+              transferred = false;
               _context.p = 2;
+              metadata.uploadId = createUploadId();
               if (navigator.onLine) {
                 _context.n = 3;
                 break;
@@ -14720,6 +16178,9 @@
               });
             case 4:
               result = _context.v;
+              if (result && result.success) {
+                transferred = true;
+              }
               store.dispatch({
                 type: "starmus/submit-complete",
                 payload: result
@@ -14727,59 +16188,50 @@
 
               // Emit starmus:complete — boundary between recording and server-side processing.
               // Nothing downstream triggers until this event fires.
-              if (!(result && result.success)) {
-                _context.n = 6;
-                break;
-              }
-              completedState = store.getState();
-              completedSource = completedState.source || {};
-              completedCalibration = completedState.calibration || {};
-              detail = buildCompletionDetail({
-                instanceId: instanceId,
-                result: result,
-                metadata: metadata,
-                formFields: formFields,
-                fileName: fileName,
-                mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
-                durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
-                language: completedSource.language,
-                contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
-                calibrationApplied: !!completedCalibration.complete
-              });
-              if (detail) {
-                _context.n = 5;
-                break;
-              }
-              throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
-            case 5:
-              emitCompletionEvent(detail);
-              redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
-              if (redirect) {
-                setTimeout(function () {
-                  window.location.href = redirect;
-                }, 1500);
-              }
+              if (result && result.success) {
+                completedState = store.getState();
+                completedSource = completedState.source || {};
+                completedCalibration = completedState.calibration || {};
+                detail = buildCompletionDetail({
+                  instanceId: instanceId,
+                  result: result,
+                  metadata: metadata,
+                  formFields: formFields,
+                  fileName: fileName,
+                  mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
+                  durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
+                  language: completedSource.language,
+                  contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
+                  calibrationApplied: !!completedCalibration.complete
+                });
+                emitCompletionEvent(detail);
+                redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
+                if (redirect) {
+                  setTimeout(function () {
+                    window.location.href = redirect;
+                  }, 1500);
+                }
 
-              // Notify parent frame (modal context) safely
-              if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
-                try {
-                  if (window.parent && window.parent !== window) {
-                    void window.parent.location.href; // Throws if cross-origin
-                    if (window.parent.jQuery) {
-                      window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
-                        audioPostId: result.data.post_id
-                      }]);
+                // Notify parent frame (modal context) safely
+                if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
+                  try {
+                    if (window.parent && window.parent !== window) {
+                      void window.parent.location.href; // Throws if cross-origin
+                      if (window.parent.jQuery) {
+                        window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
+                          audioPostId: result.data.post_id
+                        }]);
+                      }
                     }
+                  } catch (_unused2) {
+                    // Cross-origin — silently skip
                   }
-                } catch (_unused2) {
-                  // Cross-origin — silently skip
                 }
               }
-            case 6:
-              _context.n = 14;
+              _context.n = 10;
               break;
-            case 7:
-              _context.p = 7;
+            case 5:
+              _context.p = 5;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -14790,57 +16242,94 @@
                 fileSize: audioBlob.size
               });
               message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
-              if (!retryableUploadError) {
-                _context.n = 13;
+              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
+              if (!transferred) {
+                _context.n = 6;
                 break;
               }
-              _context.p = 8;
-              _context.n = 9;
+              // The upload succeeded and something after it did not — the
+              // redirect resolution or the parent-frame notification below.
+              // Queueing now would send the same recording a second time,
+              // which costs the contributor bandwidth they have already
+              // spent and leaves the platform holding two copies of one
+              // take. The asset is on the server; what failed is this
+              // client's handling afterwards, and that is reported rather
+              // than retried.
+              //
+              // The upload identifier goes with the report. Without it the
+              // only record of which asset this was died with the page: the
+              // bytes are on the server under an id nothing local still
+              // names, and nobody can reconcile the two.
+              console.error("[Core] Uploaded, but could not complete:", message, {
+                uploadId: metadata.uploadId
+              });
+              sparxstarIntegration.reportError("post_upload_failure", {
+                error: message,
+                instanceId: instanceId,
+                uploadId: metadata.uploadId,
+                tier: stateEnv.tier
+              });
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  message: message,
+                  retryable: false,
+                  uploadId: metadata.uploadId
+                }
+              });
+              return _context.a(2);
+            case 6:
+              _context.p = 6;
+              _context.n = 7;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
-            case 9:
+            case 7:
               submissionId = _context.v;
               store.dispatch({
                 type: "starmus/submit-queued",
                 submissionId: submissionId
               });
-              _context.n = 10;
+              _context.n = 8;
               return getPendingCount();
-            case 10:
+            case 8:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
                   count: pending
                 });
               }
-              _context.n = 12;
+              if (!retryableUploadError) {
+                // Held, but not something the queue will clear on its own.
+                store.dispatch({
+                  type: "starmus/error",
+                  error: {
+                    message: message,
+                    retryable: false
+                  }
+                });
+              }
+              _context.n = 10;
               break;
-            case 11:
-              _context.p = 11;
+            case 9:
+              _context.p = 9;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
+              // The queue's own message is kept. `QueueFull` names how much
+              // space is taken and how many held recordings are taking it —
+              // the only information the contributor can act on — and
+              // replacing it with "Upload failed completely" threw that away
+              // at the one moment it mattered.
+              queueMessage = _t2 && _t2.message ? _t2.message : "Upload failed completely.";
               store.dispatch({
                 type: "starmus/error",
                 error: {
-                  message: "Upload failed completely.",
+                  message: queueMessage,
                   retryable: false
                 }
               });
-            case 12:
-              _context.n = 14;
-              break;
-            case 13:
-              store.dispatch({
-                type: "starmus/error",
-                error: {
-                  message: message,
-                  retryable: false
-                }
-              });
-            case 14:
+            case 10:
               return _context.a(2);
           }
-        }, _callee, null, [[8, 11], [2, 7]]);
+        }, _callee, null, [[6, 9], [2, 5]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }
@@ -15337,526 +16826,6 @@
 
   var es_map_constructor = {};
 
-  var internalMetadata = {exports: {}};
-
-  var objectGetOwnPropertyNamesExternal = {};
-
-  var hasRequiredObjectGetOwnPropertyNamesExternal;
-
-  function requireObjectGetOwnPropertyNamesExternal () {
-  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
-  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
-  	/* eslint-disable es/no-object-getownpropertynames -- safe */
-  	var classof = requireClassofRaw();
-  	var toIndexedObject = requireToIndexedObject();
-  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
-  	var arraySlice = requireArraySlice();
-
-  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
-  	  ? Object.getOwnPropertyNames(window) : [];
-
-  	var getWindowNames = function (it) {
-  	  try {
-  	    return $getOwnPropertyNames(it);
-  	  } catch (error) {
-  	    return arraySlice(windowNames);
-  	  }
-  	};
-
-  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
-  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
-  	  return windowNames && classof(it) === 'Window'
-  	    ? getWindowNames(it)
-  	    : $getOwnPropertyNames(toIndexedObject(it));
-  	};
-  	return objectGetOwnPropertyNamesExternal;
-  }
-
-  var arrayBufferNonExtensible;
-  var hasRequiredArrayBufferNonExtensible;
-
-  function requireArrayBufferNonExtensible () {
-  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
-  	hasRequiredArrayBufferNonExtensible = 1;
-  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
-  	var fails = requireFails();
-
-  	arrayBufferNonExtensible = fails(function () {
-  	  if (typeof ArrayBuffer == 'function') {
-  	    var buffer = new ArrayBuffer(8);
-  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
-  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
-  	  }
-  	});
-  	return arrayBufferNonExtensible;
-  }
-
-  var objectIsExtensible;
-  var hasRequiredObjectIsExtensible;
-
-  function requireObjectIsExtensible () {
-  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
-  	hasRequiredObjectIsExtensible = 1;
-  	var fails = requireFails();
-  	var isObject = requireIsObject();
-  	var classof = requireClassofRaw();
-  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
-
-  	// eslint-disable-next-line es/no-object-isextensible -- safe
-  	var $isExtensible = Object.isExtensible;
-  	var FAILS_ON_PRIMITIVES = fails(function () { });
-
-  	// `Object.isExtensible` method
-  	// https://tc39.es/ecma262/#sec-object.isextensible
-  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
-  	  if (!isObject(it)) return false;
-  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
-  	  return $isExtensible ? $isExtensible(it) : true;
-  	} : $isExtensible;
-  	return objectIsExtensible;
-  }
-
-  var freezing;
-  var hasRequiredFreezing;
-
-  function requireFreezing () {
-  	if (hasRequiredFreezing) return freezing;
-  	hasRequiredFreezing = 1;
-  	var fails = requireFails();
-
-  	freezing = !fails(function () {
-  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
-  	  return Object.isExtensible(Object.preventExtensions({}));
-  	});
-  	return freezing;
-  }
-
-  var hasRequiredInternalMetadata;
-
-  function requireInternalMetadata () {
-  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
-  	hasRequiredInternalMetadata = 1;
-  	var $ = require_export();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var hiddenKeys = requireHiddenKeys();
-  	var isObject = requireIsObject();
-  	var hasOwn = requireHasOwnProperty();
-  	var defineProperty = requireObjectDefineProperty().f;
-  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
-  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
-  	var isExtensible = requireObjectIsExtensible();
-  	var uid = requireUid();
-  	var FREEZING = requireFreezing();
-
-  	var REQUIRED = false;
-  	var METADATA = uid('meta');
-  	var id = 0;
-
-  	var setMetadata = function (it) {
-  	  defineProperty(it, METADATA, { value: {
-  	    objectID: 'O' + id++, // object ID
-  	    weakData: {}          // weak collections IDs
-  	  } });
-  	};
-
-  	var fastKey = function (it, create) {
-  	  // return a primitive with prefix
-  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return 'F';
-  	    // not necessary to add metadata
-  	    if (!create) return 'E';
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return object ID
-  	  } return it[METADATA].objectID;
-  	};
-
-  	var getWeakData = function (it, create) {
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return true;
-  	    // not necessary to add metadata
-  	    if (!create) return false;
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return the store of weak collections IDs
-  	  } return it[METADATA].weakData;
-  	};
-
-  	// add metadata on freeze-family methods calling
-  	var onFreeze = function (it) {
-  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
-  	  return it;
-  	};
-
-  	var enable = function () {
-  	  meta.enable = function () { /* empty */ };
-  	  REQUIRED = true;
-  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
-  	  var splice = uncurryThis([].splice);
-  	  var test = {};
-  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
-  	  test[METADATA] = 1;
-
-  	  // prevent exposing of metadata key
-  	  if (getOwnPropertyNames(test).length) {
-  	    getOwnPropertyNamesModule.f = function (it) {
-  	      var result = getOwnPropertyNames(it);
-  	      for (var i = 0, length = result.length; i < length; i++) {
-  	        if (result[i] === METADATA) {
-  	          splice(result, i, 1);
-  	          break;
-  	        }
-  	      } return result;
-  	    };
-
-  	    $({ target: 'Object', stat: true, forced: true }, {
-  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
-  	    });
-  	  }
-  	};
-
-  	var meta = internalMetadata.exports = {
-  	  enable: enable,
-  	  fastKey: fastKey,
-  	  getWeakData: getWeakData,
-  	  onFreeze: onFreeze
-  	};
-
-  	hiddenKeys[METADATA] = true;
-  	return internalMetadata.exports;
-  }
-
-  var collection;
-  var hasRequiredCollection;
-
-  function requireCollection () {
-  	if (hasRequiredCollection) return collection;
-  	hasRequiredCollection = 1;
-  	var $ = require_export();
-  	var globalThis = requireGlobalThis();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var isForced = requireIsForced();
-  	var defineBuiltIn = requireDefineBuiltIn();
-  	var InternalMetadataModule = requireInternalMetadata();
-  	var iterate = requireIterate();
-  	var anInstance = requireAnInstance();
-  	var isCallable = requireIsCallable();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var isObject = requireIsObject();
-  	var fails = requireFails();
-  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
-  	var setToStringTag = requireSetToStringTag();
-  	var inheritIfRequired = requireInheritIfRequired();
-
-  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
-  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
-  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
-  	  var ADDER = IS_MAP ? 'set' : 'add';
-  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
-  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
-  	  var Constructor = NativeConstructor;
-  	  var exported = {};
-
-  	  var fixMethod = function (KEY) {
-  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
-  	    defineBuiltIn(NativePrototype, KEY,
-  	      KEY === 'add' ? function add(value) {
-  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
-  	        return this;
-  	      } : KEY === 'delete' ? function (key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'get' ? function get(key) {
-  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'has' ? function has(key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : function set(key, value) {
-  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
-  	        return this;
-  	      }
-  	    );
-  	  };
-
-  	  var REPLACE = isForced(
-  	    CONSTRUCTOR_NAME,
-  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
-  	      new NativeConstructor().entries().next();
-  	    }))
-  	  );
-
-  	  if (REPLACE) {
-  	    // create collection constructor
-  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
-  	    InternalMetadataModule.enable();
-  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
-  	    var instance = new Constructor();
-  	    // early implementations not supports chaining
-  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
-  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
-  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
-  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
-  	    // eslint-disable-next-line no-new -- required for testing
-  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
-  	    // for early implementations -0 and +0 not the same
-  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
-  	      // V8 ~ Chromium 42- fails only with 5+ elements
-  	      var $instance = new NativeConstructor();
-  	      var index = 5;
-  	      while (index--) $instance[ADDER](index, index);
-  	      return !$instance.has(-0);
-  	    });
-
-  	    if (!ACCEPT_ITERABLES) {
-  	      Constructor = wrapper(function (dummy, iterable) {
-  	        anInstance(dummy, NativePrototype);
-  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
-  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	        return that;
-  	      });
-  	      Constructor.prototype = NativePrototype;
-  	      NativePrototype.constructor = Constructor;
-  	    }
-
-  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
-  	      fixMethod('delete');
-  	      fixMethod('has');
-  	      IS_MAP && fixMethod('get');
-  	    }
-
-  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
-
-  	    // weak collections should not contains .clear method
-  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
-  	  }
-
-  	  exported[CONSTRUCTOR_NAME] = Constructor;
-  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
-
-  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
-
-  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
-
-  	  return Constructor;
-  	};
-  	return collection;
-  }
-
-  var collectionStrong;
-  var hasRequiredCollectionStrong;
-
-  function requireCollectionStrong () {
-  	if (hasRequiredCollectionStrong) return collectionStrong;
-  	hasRequiredCollectionStrong = 1;
-  	var create = requireObjectCreate();
-  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-  	var defineBuiltIns = requireDefineBuiltIns();
-  	var bind = requireFunctionBindContext();
-  	var anInstance = requireAnInstance();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var iterate = requireIterate();
-  	var defineIterator = requireIteratorDefine();
-  	var createIterResultObject = requireCreateIterResultObject();
-  	var setSpecies = requireSetSpecies();
-  	var DESCRIPTORS = requireDescriptors();
-  	var fastKey = requireInternalMetadata().fastKey;
-  	var InternalStateModule = requireInternalState();
-
-  	var setInternalState = InternalStateModule.set;
-  	var internalStateGetterFor = InternalStateModule.getterFor;
-
-  	collectionStrong = {
-  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
-  	    var Constructor = wrapper(function (that, iterable) {
-  	      anInstance(that, Prototype);
-  	      setInternalState(that, {
-  	        type: CONSTRUCTOR_NAME,
-  	        index: create(null),
-  	        first: null,
-  	        last: null,
-  	        size: 0
-  	      });
-  	      if (!DESCRIPTORS) that.size = 0;
-  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	    });
-
-  	    var Prototype = Constructor.prototype;
-
-  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
-
-  	    var define = function (that, key, value) {
-  	      var state = getInternalState(that);
-  	      var entry = getEntry(that, key);
-  	      var previous, index;
-  	      // change existing entry
-  	      if (entry) {
-  	        entry.value = value;
-  	      // create new entry
-  	      } else {
-  	        state.last = entry = {
-  	          index: index = fastKey(key, true),
-  	          key: key,
-  	          value: value,
-  	          previous: previous = state.last,
-  	          next: null,
-  	          removed: false
-  	        };
-  	        if (!state.first) state.first = entry;
-  	        if (previous) previous.next = entry;
-  	        if (DESCRIPTORS) state.size++;
-  	        else that.size++;
-  	        // add to index
-  	        if (index !== 'F') state.index[index] = entry;
-  	      } return that;
-  	    };
-
-  	    var getEntry = function (that, key) {
-  	      var state = getInternalState(that);
-  	      // fast case
-  	      var index = fastKey(key);
-  	      var entry;
-  	      if (index !== 'F') return state.index[index];
-  	      // frozen object case
-  	      for (entry = state.first; entry; entry = entry.next) {
-  	        if (entry.key === key) return entry;
-  	      }
-  	    };
-
-  	    defineBuiltIns(Prototype, {
-  	      // `{ Map, Set }.prototype.clear()` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
-  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
-  	      clear: function clear() {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = state.first;
-  	        while (entry) {
-  	          entry.removed = true;
-  	          if (entry.previous) entry.previous = entry.previous.next = null;
-  	          entry = entry.next;
-  	        }
-  	        state.first = state.last = null;
-  	        state.index = create(null);
-  	        if (DESCRIPTORS) state.size = 0;
-  	        else that.size = 0;
-  	      },
-  	      // `{ Map, Set }.prototype.delete(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
-  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
-  	      'delete': function (key) {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = getEntry(that, key);
-  	        if (entry) {
-  	          var next = entry.next;
-  	          var prev = entry.previous;
-  	          delete state.index[entry.index];
-  	          entry.removed = true;
-  	          if (prev) prev.next = next;
-  	          if (next) next.previous = prev;
-  	          if (state.first === entry) state.first = next;
-  	          if (state.last === entry) state.last = prev;
-  	          if (DESCRIPTORS) state.size--;
-  	          else that.size--;
-  	        } return !!entry;
-  	      },
-  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
-  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
-  	      forEach: function forEach(callbackfn /* , that = undefined */) {
-  	        var state = getInternalState(this);
-  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	        var entry;
-  	        while (entry = entry ? entry.next : state.first) {
-  	          boundFunction(entry.value, entry.key, this);
-  	          // revert to the last existing entry
-  	          while (entry && entry.removed) entry = entry.previous;
-  	        }
-  	      },
-  	      // `{ Map, Set}.prototype.has(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.has
-  	      // https://tc39.es/ecma262/#sec-set.prototype.has
-  	      has: function has(key) {
-  	        return !!getEntry(this, key);
-  	      }
-  	    });
-
-  	    defineBuiltIns(Prototype, IS_MAP ? {
-  	      // `Map.prototype.get(key)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.get
-  	      get: function get(key) {
-  	        var entry = getEntry(this, key);
-  	        return entry && entry.value;
-  	      },
-  	      // `Map.prototype.set(key, value)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.set
-  	      set: function set(key, value) {
-  	        return define(this, key === 0 ? 0 : key, value);
-  	      }
-  	    } : {
-  	      // `Set.prototype.add(value)` method
-  	      // https://tc39.es/ecma262/#sec-set.prototype.add
-  	      add: function add(value) {
-  	        return define(this, value = value === 0 ? 0 : value, value);
-  	      }
-  	    });
-  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
-  	      configurable: true,
-  	      get: function () {
-  	        return getInternalState(this).size;
-  	      }
-  	    });
-  	    return Constructor;
-  	  },
-  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
-  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
-  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
-  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
-  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
-  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-map.prototype.values
-  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
-  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-set.prototype.values
-  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
-  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
-  	      setInternalState(this, {
-  	        type: ITERATOR_NAME,
-  	        target: iterated,
-  	        state: getInternalCollectionState(iterated),
-  	        kind: kind,
-  	        last: null
-  	      });
-  	    }, function () {
-  	      var state = getInternalIteratorState(this);
-  	      var kind = state.kind;
-  	      var entry = state.last;
-  	      // revert to the last existing entry
-  	      while (entry && entry.removed) entry = entry.previous;
-  	      // get next entry
-  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
-  	        // or finish the iteration
-  	        state.target = null;
-  	        return createIterResultObject(undefined, true);
-  	      }
-  	      // return step by kind
-  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
-  	      if (kind === 'values') return createIterResultObject(entry.value, false);
-  	      return createIterResultObject([entry.key, entry.value], false);
-  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
-
-  	    // `{ Map, Set }.prototype[@@species]` accessors
-  	    // https://tc39.es/ecma262/#sec-get-map-@@species
-  	    // https://tc39.es/ecma262/#sec-get-set-@@species
-  	    setSpecies(CONSTRUCTOR_NAME);
-  	  }
-  	};
-  	return collectionStrong;
-  }
-
   var hasRequiredEs_map_constructor;
 
   function requireEs_map_constructor () {
@@ -16172,7 +17141,11 @@
    * @property {CaptureProfileName} profile
    * @property {{sampleRate: number|null, channelCount: number|null}} requested
    * @property {{sampleRate?: number, channelCount?: number}} actual
-   * @property {boolean} attained    True only when every constrained value was verified within its limit.
+   * @property {boolean|null} attained True only when every constrained value was
+   *   verified within its limit; `false` when one was missed; `null` when the
+   *   question does not apply, which is the `import` profile's case — nothing was
+   *   captured, so nothing was measured, and `false` would claim a constraint was
+   *   missed rather than never posed.
    * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
    * @property {string[]} unverified Constrained values the device did not report at all.
    */

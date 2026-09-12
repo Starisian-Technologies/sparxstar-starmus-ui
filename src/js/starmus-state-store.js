@@ -223,6 +223,10 @@
                     source: merge(state.source, {
                         kind: "blob",
                         blob: action.payload.blob,
+                        // A previously attached file is cleared, so `kind` and
+                        // the payload cannot disagree. See `file-attached`
+                        // below for what leaving the other one set costs.
+                        file: null,
                         fileName: action.payload.fileName,
                         metadata: {
                             duration: state.recorder.duration || 0,
@@ -248,7 +252,39 @@
                     source: merge(state.source, {
                         kind: "file",
                         file: action.file,
+                        // The recorded blob is cleared, not left beside the
+                        // file. `handleSubmit()` reads `source.blob || source.file`,
+                        // so a contributor who recorded and then attached a
+                        // file uploaded the *recording* under the *file's*
+                        // name, carrying the file's mime type, size and the
+                        // `import` profile. That is a mislabelled contribution
+                        // — the wrong audio described as something it is not —
+                        // which for an archive is worse than an upload that
+                        // fails outright.
+                        blob: null,
                         fileName: action.file.name,
+                        // An attached file is prerecorded material, which is
+                        // exactly what ADR-035 calls the `import` profile:
+                        // preserved unchanged, no transcode, resample or
+                        // fold-down. Leaving the profile unset here sent a
+                        // blank one to ingestion on the Tier C path — the very
+                        // condition `AGENTS.md` lists as a build failure.
+                        captureProfile: "import",
+                        // Nothing was captured, so nothing was measured. The
+                        // attainment says so rather than claiming the profile
+                        // was met: `attained: null` is "not applicable", which
+                        // is different from the `false` a missed constraint
+                        // would give. The Spoken Audio Node probes the file
+                        // itself and records what it actually is.
+                        captureAttainment: {
+                            profile: "import",
+                            requested: { sampleRate: null, channelCount: null },
+                            actual: {},
+                            attained: null,
+                            exceeded: [],
+                            unverified: ["sampleRate", "channelCount"],
+                            source: "file-attachment",
+                        },
                         metadata: {
                             duration: 0,
                             mimeType: action.file.type,

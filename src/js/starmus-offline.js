@@ -24,7 +24,7 @@
 
 import { debugLog } from "./starmus-hooks.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, isUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
@@ -40,6 +40,25 @@ const CONFIG = {
         C: 5 * 1024 * 1024, // 5 MB  — Tier C (default)
     },
     defaultMaxBlobSize: 5 * 1024 * 1024,
+    /**
+     * Total queue budget, from the platform's IndexedDB standard (20 MB).
+     *
+     * How it is spent is the part that needed deciding. The standard also says
+     * LRU, and LRU here means silently deleting the oldest recording to make
+     * room — which is the behaviour ADR-011 exists to prevent, and the one this
+     * queue was just changed to stop doing.
+     *
+     * So the budget is enforced at the door, not by eviction. When a new
+     * recording will not fit, the add is refused with an error naming what is
+     * occupying the space. The contributor is present and can act; a held
+     * recording from last week cannot advocate for itself.
+     *
+     * **Which recording loses when storage is genuinely full is not this
+     * module's call to make** — it is a sovereignty question about whose
+     * material is expendable, and it routes to the platform owner. Until it is
+     * ruled on, nothing is deleted automatically.
+     */
+    maxTotalBytes: 20 * 1024 * 1024,
 };
 
 /** Tracks whether the singleton queue has installed its network listener. */
@@ -89,14 +108,30 @@ function createOfflineSubmissionId() {
  * Offline submission queue backed by IndexedDB.
  *
  * Eviction policy (currently implemented):
- * - Entries are removed on successful upload.
- * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
- *   next processQueue run (they are not left orphaned indefinitely).
+ * - Entries are removed on successful upload, and only on successful upload.
+ * - An entry that exhausts {@link CONFIG.maxRetries}, or fails with an error
+ *   retrying cannot fix, is marked `held` rather than deleted. It stops being
+ *   retried and starts needing a person. ADR-011 keeps the material
+ *   unconditionally: a contributor does not lose a recording because the
+ *   server said 400 four times, and the bytes are the only copy once the page
+ *   is closed.
+ * - Held is a state, not a slower deletion: `releaseHold()` puts an entry back
+ *   in the queue and `discardHeld()` removes it on an explicit instruction.
+ *   Without those a device fills with entries nobody can clear until `add()`
+ *   refuses every new recording — trading one lost recording for the loss of
+ *   recording itself.
  *
- * Target eviction policy (Phase 3 — not yet implemented):
- * - LRU, 20 MB maximum total queue size.
- * - Entries older than 7 days are eligible for automatic eviction.
- * - Eviction will run on queue initialization and after each successful upload.
+ * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
+ *   enforced at `add()`: a recording that will not fit is refused with an error
+ *   naming what is occupying the space. Nothing is evicted to make room.
+ *
+ * That last point is a deliberate departure from the platform standard's "LRU".
+ * LRU here means deleting a contributor's older recording so a newer one fits,
+ * which is the behaviour ADR-011 forbids and the one this queue was changed to
+ * stop. Whose material is expendable when a device is genuinely full is a
+ * sovereignty question for the platform owner, not a default this module picks.
+ * Until it is ruled on, the person standing in front of the device is told, and
+ * nothing already recorded is lost without someone deciding so.
  *
  * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
  */
@@ -110,6 +145,7 @@ class OfflineQueue {
         this.processQueueTimeoutId = null;
         /** @type {number|null} */
         this.processQueueDueAt = null;
+        /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
     }
 
     /**
@@ -209,14 +245,89 @@ class OfflineQueue {
             retryCount: 0,
             lastAttempt: null,
             error: null,
+            held: false,
+            heldReason: null,
         };
 
+        // The whole-queue budget is counted and the record inserted inside one
+        // readwrite transaction.
+        //
+        // Per-blob was the only bound before; the platform standard also caps
+        // the queue as a whole, and without that, repeated failures accumulate
+        // held entries until IndexedDB refuses the transaction — a quota error
+        // at `add()` loses the recording being made right now, which is the
+        // worst possible moment to find out.
+        //
+        // Counting in a separate transaction and inserting in another let two
+        // adds each see room and then both insert. A promise chain fixed that
+        // only within one tab's queue instance; a second tab has its own, reads
+        // the same store, and the 20 MB cap is exceeded anyway. IndexedDB
+        // serializes overlapping readwrite transactions on a store across every
+        // tab of the origin, so doing both here is the guarantee itself rather
+        // than an approximation of it — and it is the only mechanism, so there
+        // is no question which one is load-bearing.
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
             const store = tx.objectStore(CONFIG.storeName);
-            store.add(item);
+
+            let totalBytes = 0;
+            let heldBytes = 0;
+            let heldCount = 0;
+            /** @type {Error|null} Set when the queue is full, to reject with. */
+            let refusal = null;
+            let settled = false;
+
+            /**
+             * @param {Error} error
+             * @returns {void}
+             */
+            const fail = (error) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                reject(error);
+            };
+
+            const cursorReq = store.openCursor();
+            cursorReq.onerror = (ev) => fail(ev.target.error);
+            cursorReq.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const size = cursor.value?.audioBlob?.size || 0;
+                    totalBytes += size;
+                    if (cursor.value?.held === true) {
+                        heldBytes += size;
+                        heldCount += 1;
+                    }
+                    cursor.continue();
+                    return;
+                }
+
+                // The store is counted and this transaction still holds it.
+                if (totalBytes + safeBlob.size > CONFIG.maxTotalBytes) {
+                    const heldNote =
+                        heldCount > 0
+                            ? ` ${heldCount} held recording(s) occupy ${(heldBytes / 1024 / 1024).toFixed(2)} MB and need attention before more will fit.`
+                            : "";
+                    refusal = new Error(
+                        `QueueFull: the offline queue holds ${(totalBytes / 1024 / 1024).toFixed(2)} MB of ` +
+                            `${(CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2)} MB and this recording needs ` +
+                            `${(safeBlob.size / 1024 / 1024).toFixed(2)} MB.${heldNote} ` +
+                            "Nothing is deleted to make room.",
+                    );
+                    tx.abort();
+                    return;
+                }
+
+                store.add(item);
+            };
 
             tx.oncomplete = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
                 debugLog("[Offline] Queued:", item.id);
                 this._notifyQueueUpdate();
                 if (navigator.onLine) {
@@ -225,7 +336,13 @@ class OfflineQueue {
                 resolve(item.id);
             };
 
-            tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) =>
+                fail(
+                    refusal ||
+                        ev.target.error ||
+                        new Error("OfflineQueue: the add transaction was aborted."),
+                );
+            tx.onerror = (ev) => fail(refusal || ev.target.error);
         });
     }
 
@@ -263,6 +380,264 @@ class OfflineQueue {
                 this._notifyQueueUpdate();
                 resolve();
             };
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
+    /**
+     * Mark a submission as held: kept, no longer retried, needing a person.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} reason
+     * @returns {Promise<void>}
+     */
+    async _hold(id, reason) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.held = true;
+                    item.heldReason = reason;
+                    item.lastAttempt = Date.now();
+                    store.put(item);
+                }
+            };
+
+            tx.oncomplete = () => {
+                console.warn("[Offline] Held:", id, reason);
+                sparxstarIntegration.reportError("submission_held", {
+                    submissionId: id,
+                    reason,
+                });
+                this._notifyQueueUpdate();
+                resolve();
+            };
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
+    /**
+     * What the queue is currently holding, in bytes and in entries.
+     *
+     * Exported through `getQueueUsage()` so a host can show the contributor how
+     * full the device is before they find out by being refused.
+     *
+     * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+     */
+    async usage() {
+        if (!this.db) {
+            return {
+                totalBytes: 0,
+                count: 0,
+                heldBytes: 0,
+                heldCount: 0,
+                maxTotalBytes: CONFIG.maxTotalBytes,
+            };
+        }
+
+        // A cursor, not `getAll()`. Every record holds its audio Blob, so
+        // reading them all to add up sizes materialised the entire queued set
+        // — up to the 20 MB cap — against a package budget that keeps blobs in
+        // memory to a fraction of that. A host polling `getQueueUsage()` to
+        // show remaining space was the worst case: repeatedly paying for the
+        // whole queue to learn a single number. The cursor visits records one
+        // at a time and keeps only the running totals.
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const store = tx.objectStore(CONFIG.storeName);
+            let totalBytes = 0;
+            let heldBytes = 0;
+            let heldCount = 0;
+            let count = 0;
+
+            const req = store.openCursor();
+            req.onerror = (ev) => reject(ev.target.error);
+            req.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    return;
+                }
+                const size = cursor.value?.audioBlob?.size || 0;
+                totalBytes += size;
+                count += 1;
+                if (cursor.value?.held === true) {
+                    heldBytes += size;
+                    heldCount += 1;
+                }
+                cursor.continue();
+            };
+
+            tx.oncomplete = () =>
+                resolve({
+                    totalBytes,
+                    count,
+                    heldBytes,
+                    heldCount,
+                    maxTotalBytes: CONFIG.maxTotalBytes,
+                });
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
+    /**
+     * Put a held submission back in the queue.
+     *
+     * The counterpart to `_hold()`, and the reason holding is a state rather
+     * than a slow deletion. Without a way out, held entries accumulate against
+     * the queue's byte budget until `add()` refuses every new recording — which
+     * would trade "lose one old recording" for "lose the ability to record at
+     * all", a worse outcome than the deletion holding replaced.
+     *
+     * The retry count resets, because a person releasing an entry is saying the
+     * condition that stopped it has changed.
+     *
+     * @param {string} id
+     * @returns {Promise<void>}
+     */
+    async releaseHold(id) {
+        if (!this.db) {
+            return;
+        }
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+            /** @type {Error|null} */
+            let refusal = null;
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (!item) {
+                    return;
+                }
+                // Only a held entry. Releasing clears `retryCount`,
+                // `lastAttempt` and `error` and schedules an immediate drain,
+                // so calling it on an entry that is merely waiting out its
+                // backoff discarded that backoff — a host with a stale id
+                // could push a failing upload straight back onto a bad link,
+                // repeatedly, at the contributor's expense. `discardHeld()`
+                // guards the same way; this is the same state machine.
+                if (item.held !== true) {
+                    refusal = new Error(
+                        `ReleaseRefused: ${id} is not held. Only a held submission can be released; the queue manages its own retries.`,
+                    );
+                    tx.abort();
+                    return;
+                }
+                item.held = false;
+                item.heldReason = null;
+                item.retryCount = 0;
+                item.lastAttempt = null;
+                item.error = null;
+                store.put(item);
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => {
+                this._notifyQueueUpdate();
+                resolve();
+            };
+            tx.onabort = (ev) => reject(refusal || ev.target.error);
+            tx.onerror = (ev) => reject(refusal || ev.target.error);
+        });
+        this._scheduleProcessQueue(0);
+    }
+
+    /**
+     * Delete a held submission, on a person's explicit instruction.
+     *
+     * The only deletion in this module that is not a successful upload, and it
+     * exists because the alternative is a device that fills with recordings
+     * nobody can clear. It is deliberately not reachable from any automatic
+     * path: ADR-011 forbids this module deciding a contributor's material is
+     * expendable, and nothing here decides. Someone does, and says why.
+     *
+     * @param {string} id
+     * @param {string} reason Required, and recorded before the entry goes.
+     * @returns {Promise<void>}
+     */
+    async discardHeld(id, reason) {
+        // Required, not merely recorded. This is the one deletion here that is
+        // not a successful upload, and the reason is what makes it a decision
+        // someone took rather than something that happened. Accepting a blank
+        // one and logging "(no reason given)" left the only non-upload
+        // deletion path in the module able to run with no rationale at all —
+        // the audit trail this method exists to produce, absent from the one
+        // event that needs it.
+        const given = typeof reason === "string" ? reason.trim() : "";
+        if (given === "") {
+            throw new Error(
+                `DiscardRefused: ${id} needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one.`,
+            );
+        }
+
+        const all = await this.getAll();
+        const item = all.find((entry) => entry.id === id);
+        if (!item) {
+            return;
+        }
+        if (item.held !== true) {
+            throw new Error(
+                `DiscardRefused: ${id} is not held. Only a held submission can be discarded, and only on an explicit instruction.`,
+            );
+        }
+        console.warn("[Offline] Discarded on instruction:", id, given);
+        sparxstarIntegration.reportError("submission_discarded", {
+            submissionId: id,
+            reason: given,
+            heldReason: item.heldReason || null,
+        });
+        await this.remove(id);
+    }
+
+    /**
+     * Submissions that are kept but will not be retried without intervention.
+     *
+     * Surfaced so a host can show them rather than let them sit invisibly: a
+     * held recording that nobody is told about is a lost one with extra steps.
+     *
+     * @returns {Promise<Array<Object>>}
+     */
+    async getHeld() {
+        const all = await this.getAll();
+        return all.filter((item) => item.held === true);
+    }
+
+    /**
+     * Replace a submission's metadata in place.
+     *
+     * @private
+     * @param {string} id
+     * @param {Object} metadata
+     * @returns {Promise<void>}
+     */
+    async _setMetadata(id, metadata) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.metadata = metadata;
+                    store.put(item);
+                }
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve();
             tx.onerror = (ev) => reject(ev.target.error);
         });
     }
@@ -320,12 +695,57 @@ class OfflineQueue {
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
-                const { id, audioBlob, fileName, formFields, metadata, retryCount, instanceId } =
-                    item;
+                const { id, audioBlob, fileName, formFields, retryCount, instanceId } = item;
+                // Not destructured as a `const`: the backfill below has to be
+                // able to replace it wholesale for a row that has no metadata
+                // object at all.
+                let { metadata } = item;
+                // Whether the bytes reached the server on this attempt.
+                let uploaded = false;
+
+                // Entries queued before the submission id existed have no
+                // `metadata.uploadId`, so every retry would mint a new one and
+                // start a new TUS resource instead of resuming the partial it
+                // already has. Backfilled once and persisted, so the
+                // one-id-per-submission rule reaches recordings already sitting
+                // on devices rather than only new ones.
+                // The same test the upload module applies, not merely
+                // "is something there". `uploadTus()` replaces any id that is
+                // not a UUID v4 with a freshly minted one, so a stored entry
+                // carrying a non-empty invalid id was left alone here and then
+                // silently re-identified on every attempt — a different
+                // fingerprint each time, and never able to resume the partial
+                // the previous attempt left on the server. Asking the module
+                // that decides keeps one answer to the question.
+                if (!isUploadId(metadata?.uploadId)) {
+                    const backfilled = createUploadId();
+                    // The local variable is replaced, not just the stored row.
+                    // Guarding the assignment on `metadata` being truthy left a
+                    // row that had no metadata at all still passing `undefined`
+                    // into this first attempt: the upload minted a *different*
+                    // id, and the next drain — now reading the persisted one —
+                    // could not resume the partial that first attempt left on
+                    // the server. The backfill has to reach the attempt it was
+                    // written for, not only the one after it.
+                    metadata = { ...(metadata || {}), uploadId: backfilled };
+                    await this._setMetadata(id, metadata);
+                    debugLog("[Offline] Backfilled upload id for legacy entry:", id);
+                }
+
+                if (item.held) {
+                    // Already held for a person. Retrying it on every drain
+                    // would burn the contributor's bandwidth to no effect.
+                    continue;
+                }
 
                 if (retryCount >= CONFIG.maxRetries) {
-                    // Remove exhausted items so they do not accumulate indefinitely.
-                    await this.remove(id);
+                    // Held, not removed. Exhausting the retries says the queue
+                    // cannot fix this on its own; it does not say the recording
+                    // is worth less than the storage it occupies (ADR-011).
+                    await this._hold(
+                        id,
+                        `Upload failed ${retryCount} times; the recording is held here and needs attention.`,
+                    );
                     continue;
                 }
 
@@ -346,6 +766,14 @@ class OfflineQueue {
                         instanceId,
                     });
 
+                    // Set here, the moment the bytes are known to have landed —
+                    // not at the end of the block. Setting it last made the
+                    // `if (uploaded)` guard below unreachable: everything that
+                    // can throw between here and there threw first, so the
+                    // protection against re-uploading an accepted asset did
+                    // nothing at all.
+                    uploaded = true;
+
                     // `starmus:complete` is the boundary before any
                     // server-side processing (ADR-034). A queued upload that
                     // drains is as complete as an immediate one, so it fires
@@ -364,21 +792,16 @@ class OfflineQueue {
                         calibrationApplied: !!metadata?.calibration,
                     });
 
-                    if (detail) {
-                        emitCompletionEvent(detail);
-                    } else {
-                        // The upload succeeded but the format cannot be named,
-                        // so no consumer can be told this asset exists. The
-                        // entry is still removed — the asset is on the server
-                        // and re-uploading it on every future drain would burn
-                        // bandwidth the contributor is paying for without ever
-                        // producing a nameable format. What must not happen is
-                        // this passing in silence, so it is reported.
-                        console.error(
-                            "[Offline] Uploaded but could not build starmus:complete:",
-                            { id, fileName, mimeType: metadata?.mimeType || audioBlob.type || "" }
-                        );
-                        sparxstarIntegration.reportError("completion_detail_unbuildable", {
+                    // Always emitted. A format this client cannot name is
+                    // reported as `unknown` rather than suppressing the event:
+                    // `starmus:complete` is the boundary before any server-side
+                    // processing (ADR-034), and withholding it left the asset on
+                    // the server with nobody told it existed, recoverable only
+                    // by a person noticing a held entry. The Node rules on the
+                    // format, where refusing does not cost the recording.
+                    emitCompletionEvent(detail);
+                    if (detail.format === "unknown") {
+                        sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
                             instanceId,
                             fileName,
@@ -386,17 +809,46 @@ class OfflineQueue {
                             captureProfile: metadata?.captureProfile || null,
                         });
                     }
-
-                    await this.remove(id);
                 } catch (err) {
+                    if (uploaded) {
+                        // Reaching here after a successful transfer means the
+                        // completion handling threw, not the upload. Re-queuing
+                        // or retrying would send an asset the server already
+                        // has. Hold it instead, so a person can see it and the
+                        // next drain does not upload it again.
+                        const msg = err && err.message ? err.message : String(err);
+                        console.error("[Offline] Uploaded, but completion failed:", id, msg);
+                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`);
+                        continue;
+                    }
                     const msg = err && err.message ? err.message : String(err);
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                     if (nonRetryable) {
-                        await this.remove(id);
+                        // Retrying will not help, so stop retrying — and keep
+                        // the recording. Deleting it here was the queue
+                        // quietly deciding a contributor's material was
+                        // disposable because a server rejected its shape.
+                        await this._hold(id, `Upload rejected and not retryable: ${msg}`);
                     } else {
                         const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
                         await this._updateRetry(id, nextRetryCount, msg);
                     }
+                    continue;
+                }
+
+                // Cleanup, outside the transfer's try. An IndexedDB delete that
+                // fails is a storage problem, not an upload one; recorded as an
+                // upload failure it left the entry retryable and the next drain
+                // uploaded the same recording again.
+                try {
+                    await this.remove(id);
+                } catch (cleanupError) {
+                    const msg =
+                        cleanupError && cleanupError.message
+                            ? cleanupError.message
+                            : String(cleanupError);
+                    console.error("[Offline] Uploaded but could not clear the entry:", id, msg);
+                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`);
                 }
             }
         } catch (fatal) {
@@ -491,7 +943,13 @@ class OfflineQueue {
     }
     /** @private */
     async _getNextProcessDelay() {
-        const pending = await this.getAll();
+        // Held entries are excluded. `_hold()` leaves `retryCount` at the
+        // limit, and the branch below returns 0 for anything at the limit — so
+        // a single held recording made the queue reschedule itself immediately,
+        // forever, waking the device to look at an item it will never retry.
+        // On a phone with a failing upload and a low battery that is the worst
+        // possible loop to leave running.
+        const pending = (await this.getAll()).filter((item) => item.held !== true);
         if (pending.length === 0) {
             return null;
         }
@@ -610,12 +1068,66 @@ export async function queueSubmission(instanceId, audioBlob, fileName, formField
 /**
  * Returns the count of pending offline submissions.
  *
+ * Counts held submissions too: they are still recordings this device is
+ * holding that the platform has not received.
+ *
  * @returns {Promise<number>}
  */
 export async function getPendingCount() {
     const q = await getOfflineQueue();
     const list = await q.getAll();
     return list.length;
+}
+
+/**
+ * Returns the submissions that are kept but will not be retried on their own.
+ *
+ * A host shows these so someone can act. They are never deleted by the queue.
+ *
+ * @returns {Promise<Array<Object>>}
+ */
+export async function getHeldSubmissions() {
+    const q = await getOfflineQueue();
+    return q.getHeld();
+}
+
+/**
+ * How full the offline queue is.
+ *
+ * A host shows this so a contributor learns the device is nearly full before a
+ * recording is refused, rather than at the moment they finish speaking.
+ *
+ * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+ */
+export async function getQueueUsage() {
+    const q = await getOfflineQueue();
+    return q.usage();
+}
+
+/**
+ * Put a held submission back in the queue and try it again.
+ *
+ * @param {string} id
+ * @returns {Promise<void>}
+ */
+export async function releaseHeldSubmission(id) {
+    const q = await getOfflineQueue();
+    return q.releaseHold(id);
+}
+
+/**
+ * Delete a held submission, on a person's explicit instruction.
+ *
+ * The only deletion here that is not a successful upload. Nothing automatic
+ * reaches it.
+ *
+ * @param {string} id
+ * @param {string} reason
+ * @returns {Promise<void>}
+ */
+export async function discardHeldSubmission(id, reason) {
+    const q = await getOfflineQueue();
+    return q.discardHeld(id, reason);
 }
 
 /**
@@ -630,4 +1142,8 @@ export function initOffline() {
 if (typeof window !== "undefined") {
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
+    window.StarmusHeldSubmissions = getHeldSubmissions;
+    window.StarmusQueueUsage = getQueueUsage;
+    window.StarmusReleaseHeldSubmission = releaseHeldSubmission;
+    window.StarmusDiscardHeldSubmission = discardHeldSubmission;
 }

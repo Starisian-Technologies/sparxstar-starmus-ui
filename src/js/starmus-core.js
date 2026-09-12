@@ -22,7 +22,7 @@
 "use strict";
 
 import { CommandBus } from "./starmus-hooks.js";
-import { uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
 import { queueSubmission, getPendingCount } from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
@@ -183,13 +183,34 @@ export function initCore(store, instanceId, env) {
         }
 
         // ADR-035 / capture-to-ingestion contract: the capture profile travels
-        // with the asset. This object is what the direct and TUS serializers
-        // send and what the offline queue persists for later retry, so the
-        // profile has to be in it here or it reaches ingestion on no path at
-        // all. `null` means the recorder never reported one (a file upload via
-        // the Tier C fallback), which is itself information the consumer needs.
+        // with the asset. This object is what the upload serializes and what
+        // the offline queue persists for later retry, so the profile has to be
+        // in it here or it reaches ingestion on no path at all. A recorded
+        // session carries the profile the recorder attained; an attached file
+        // carries `import`. `null` is left for a source that reported no
+        // profile at all, which is itself information the consumer needs — the
+        // Node stores such an asset and marks it inadmissible for measurement
+        // rather than refusing it.
         const captureAttainment = source.captureAttainment || null;
+        // Minted once per submission and carried into both the immediate
+        // attempt and the queued retry, so a recording that is resumed hours
+        // later still reports the identifier the server knows it by.
+        //
+        // Through the upload module's helper rather than `crypto.randomUUID`
+        // directly: that API is missing on browsers this package supports, and
+        // reaching for it alone left the id unset on exactly those devices —
+        // where a retry over a bad link is likeliest and a stable identity
+        // matters most.
         const metadata = {
+            // Minted inside the try below, not here. `createUploadId()` throws
+            // on a runtime with no secure randomness — an insecure origin on an
+            // old Android is exactly such a runtime, and exactly the device
+            // this package exists for — and a throw out here landed outside
+            // every handler, rejecting the submit with the captured blob never
+            // queued and no error dispatched. ADR-011 keeps the material
+            // whatever else breaks, so the record the queue needs is built
+            // first and the part that can fail happens where it is caught.
+            uploadId: null,
             transcript: source.transcript?.trim() || null,
             calibration: calibration.complete
                 ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
@@ -207,7 +228,15 @@ export function initCore(store, instanceId, env) {
 
         store.dispatch({ type: "starmus/submit-start" });
 
+        // Whether the bytes reached the server. Everything after that point —
+        // naming the format, building the completion detail, notifying the
+        // host — can still fail, and none of those failures mean the recording
+        // needs sending again.
+        let transferred = false;
+
         try {
+            metadata.uploadId = createUploadId();
+
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
             }
@@ -224,6 +253,10 @@ export function initCore(store, instanceId, env) {
                         progress: uploaded / total,
                     }),
             });
+
+            if (result && result.success) {
+                transferred = true;
+            }
 
             store.dispatch({ type: "starmus/submit-complete", payload: result });
 
@@ -247,9 +280,6 @@ export function initCore(store, instanceId, env) {
                     calibrationApplied: !!completedCalibration.complete,
                 });
 
-                if (!detail) {
-                    throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
-                }
                 emitCompletionEvent(detail);
 
                 const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
@@ -291,37 +321,85 @@ export function initCore(store, instanceId, env) {
             const message = error && error.message ? error.message : String(error);
             const retryableUploadError =
                 !navigator.onLine ||
-                /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
+                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
                     message,
                 );
 
-            if (retryableUploadError) {
-                try {
-                    const submissionId = await queueSubmission(
-                        instanceId,
-                        audioBlob,
-                        fileName,
-                        formFields,
-                        metadata,
-                    );
-                    store.dispatch({ type: "starmus/submit-queued", submissionId });
-                    const pending = await getPendingCount();
-                    if (window.CommandBus) {
-                        window.CommandBus.dispatch("starmus/offline/queue_updated", {
-                            count: pending,
-                        });
-                    }
-                } catch (queueError) {
-                    console.error("[Core] Offline queue failed:", queueError);
-                    store.dispatch({
-                        type: "starmus/error",
-                        error: { message: "Upload failed completely.", retryable: false },
-                    });
-                }
-            } else {
+            if (transferred) {
+                // The upload succeeded and something after it did not — the
+                // redirect resolution or the parent-frame notification below.
+                // Queueing now would send the same recording a second time,
+                // which costs the contributor bandwidth they have already
+                // spent and leaves the platform holding two copies of one
+                // take. The asset is on the server; what failed is this
+                // client's handling afterwards, and that is reported rather
+                // than retried.
+                //
+                // The upload identifier goes with the report. Without it the
+                // only record of which asset this was died with the page: the
+                // bytes are on the server under an id nothing local still
+                // names, and nobody can reconcile the two.
+                console.error("[Core] Uploaded, but could not complete:", message, {
+                    uploadId: metadata.uploadId,
+                });
+                sparxstarIntegration.reportError("post_upload_failure", {
+                    error: message,
+                    instanceId,
+                    uploadId: metadata.uploadId,
+                    tier: stateEnv.tier,
+                });
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message, retryable: false },
+                    error: { message, retryable: false, uploadId: metadata.uploadId },
+                });
+                return;
+            }
+
+            // The recording is queued on every *transfer* failure, retryable or
+            // not. Whether an error is worth retrying soon decides what the
+            // queue does next and what the contributor is told — it does not
+            // decide whether their recording survives. It used to: a
+            // misconfigured endpoint (`NO_UPLOAD_ENDPOINT`) classified as
+            // non-retryable dropped the blob on the floor with an error
+            // message. ADR-011 keeps the material unconditionally, and ADR-038
+            // forbids re-sending an original from scratch — both need the bytes
+            // still to be here.
+            try {
+                const submissionId = await queueSubmission(
+                    instanceId,
+                    audioBlob,
+                    fileName,
+                    formFields,
+                    metadata,
+                );
+                store.dispatch({ type: "starmus/submit-queued", submissionId });
+                const pending = await getPendingCount();
+                if (window.CommandBus) {
+                    window.CommandBus.dispatch("starmus/offline/queue_updated", {
+                        count: pending,
+                    });
+                }
+                if (!retryableUploadError) {
+                    // Held, but not something the queue will clear on its own.
+                    store.dispatch({
+                        type: "starmus/error",
+                        error: { message, retryable: false },
+                    });
+                }
+            } catch (queueError) {
+                console.error("[Core] Offline queue failed:", queueError);
+                // The queue's own message is kept. `QueueFull` names how much
+                // space is taken and how many held recordings are taking it —
+                // the only information the contributor can act on — and
+                // replacing it with "Upload failed completely" threw that away
+                // at the one moment it mattered.
+                const queueMessage =
+                    queueError && queueError.message
+                        ? queueError.message
+                        : "Upload failed completely.";
+                store.dispatch({
+                    type: "starmus/error",
+                    error: { message: queueMessage, retryable: false },
                 });
             }
         }

@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 
 const VALID_BOOTSTRAP = {
     restUrl: 'http://localhost:8081/wp-json/star-starmus-audio-recorder/v1',
-    nonce: 'test-nonce-12345',
+    uploadHeaders: { 'X-Test-Auth': 'test-nonce-12345' },
     postId: 0,
     uploadEndpoint: 'upload',
     debug: false,

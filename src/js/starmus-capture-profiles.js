@@ -190,7 +190,11 @@ export function getRecorderOptions(name, mimeType) {
  * @property {CaptureProfileName} profile
  * @property {{sampleRate: number|null, channelCount: number|null}} requested
  * @property {{sampleRate?: number, channelCount?: number}} actual
- * @property {boolean} attained    True only when every constrained value was verified within its limit.
+ * @property {boolean|null} attained True only when every constrained value was
+ *   verified within its limit; `false` when one was missed; `null` when the
+ *   question does not apply, which is the `import` profile's case — nothing was
+ *   captured, so nothing was measured, and `false` would claim a constraint was
+ *   missed rather than never posed.
  * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
  * @property {string[]} unverified Constrained values the device did not report at all.
  */

@@ -427,12 +427,21 @@ test("settling does not leave a timer that can reach into the next run", async (
         },
     }));
 
+    // The two runs are deliberately separated in time. The leak being tested
+    // for is the first run's auto-disable timer surviving its settle, and that
+    // timer is measured from the *first* start. Starting the second run
+    // immediately would put both deadlines at the same instant, so the test
+    // could not tell a stale callback from the new run's own — which is what
+    // an earlier version of it could not do: it asserted `stopped >= stopped`,
+    // a comparison that is true however the code behaves.
+    const BOUND_MS = 120;
+    const GAP_MS = 70;
+
     const slot = openTranscriptSlot({
         sessionId: "s1",
         getElapsedMs: () => 0,
         tier: "A",
-        // Short enough that a leaked timer would fire during this test.
-        maxDurationMs: 15,
+        maxDurationMs: BOUND_MS,
     });
 
     slot.start();
@@ -445,17 +454,32 @@ test("settling does not leave a timer that can reach into the next run", async (
     const startsAfterSettle = captured.starts;
     const stoppedAfterSettle = captured.stopped;
 
+    await new Promise((resolve) => setTimeout(resolve, GAP_MS));
     slot.start();
-    await new Promise((resolve) => setTimeout(resolve, 40));
 
     assert.equal(
         captured.starts,
         startsAfterSettle + 1,
         "the new run started exactly once",
     );
-    assert.ok(
-        captured.stopped >= stoppedAfterSettle,
+
+    // Now past the first run's deadline (GAP + this wait > BOUND) but short of
+    // the second run's own (which is BOUND measured from the second start).
+    await new Promise((resolve) => setTimeout(resolve, BOUND_MS - GAP_MS + 20));
+
+    assert.equal(
+        captured.stopped,
+        stoppedAfterSettle,
         "a stale timer from the settled run did not stop the new one early",
+    );
+
+    // And the new run's own bound still works — the fix must not have simply
+    // stopped arming the timer.
+    await new Promise((resolve) => setTimeout(resolve, GAP_MS + 20));
+    assert.equal(
+        captured.stopped,
+        stoppedAfterSettle + 1,
+        "the new run is stopped by its own deadline, exactly once",
     );
 });
 

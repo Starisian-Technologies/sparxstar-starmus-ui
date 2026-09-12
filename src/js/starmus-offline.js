@@ -146,7 +146,6 @@ class OfflineQueue {
         /** @type {number|null} */
         this.processQueueDueAt = null;
         /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
-        this._addChain = Promise.resolve();
     }
 
     /**
@@ -222,26 +221,6 @@ class OfflineQueue {
      * @returns {Promise<string>} Submission ID
      */
     async add(instanceId, audioBlob, fileName, formFields = {}, metadata = {}) {
-        // Serialized. The budget check reads the store and the insert writes it
-        // in two separate transactions, so two concurrent adds could each see
-        // room and then both insert — two 12 MB Tier A recordings landing in a
-        // 20 MB queue. Chaining them makes check-then-insert effectively
-        // atomic without holding an IndexedDB transaction across an await.
-        const previous = this._addChain;
-        let release;
-        this._addChain = new Promise((resolve) => {
-            release = resolve;
-        });
-        try {
-            await previous;
-            return await this._add(instanceId, audioBlob, fileName, formFields, metadata);
-        } finally {
-            release();
-        }
-    }
-
-    /** @private */
-    async _add(instanceId, audioBlob, fileName, formFields = {}, metadata = {}) {
         if (!this.db) {
             throw new Error("OfflineQueue: DB not initialised");
         }
@@ -250,25 +229,6 @@ class OfflineQueue {
         if (audioBlob.size > maxAllowedSize) {
             throw new Error(
                 `Audio too large (${(audioBlob.size / 1024 / 1024).toFixed(2)} MB); limit ${(maxAllowedSize / 1024 / 1024).toFixed(2)} MB`,
-            );
-        }
-
-        // Per-blob was the only bound; the platform standard also caps the
-        // queue as a whole. Without that, repeated failures accumulate held
-        // entries until IndexedDB refuses the transaction — and a quota error
-        // at `add()` loses the recording being made right now, which is the
-        // worst possible moment to find out.
-        const usage = await this.usage();
-        if (usage.totalBytes + audioBlob.size > CONFIG.maxTotalBytes) {
-            const heldNote =
-                usage.heldCount > 0
-                    ? ` ${usage.heldCount} held recording(s) occupy ${(usage.heldBytes / 1024 / 1024).toFixed(2)} MB and need attention before more will fit.`
-                    : "";
-            throw new Error(
-                `QueueFull: the offline queue holds ${(usage.totalBytes / 1024 / 1024).toFixed(2)} MB of ` +
-                    `${(CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2)} MB and this recording needs ` +
-                    `${(audioBlob.size / 1024 / 1024).toFixed(2)} MB.${heldNote} ` +
-                    "Nothing is deleted to make room.",
             );
         }
 
@@ -289,12 +249,85 @@ class OfflineQueue {
             heldReason: null,
         };
 
+        // The whole-queue budget is counted and the record inserted inside one
+        // readwrite transaction.
+        //
+        // Per-blob was the only bound before; the platform standard also caps
+        // the queue as a whole, and without that, repeated failures accumulate
+        // held entries until IndexedDB refuses the transaction — a quota error
+        // at `add()` loses the recording being made right now, which is the
+        // worst possible moment to find out.
+        //
+        // Counting in a separate transaction and inserting in another let two
+        // adds each see room and then both insert. A promise chain fixed that
+        // only within one tab's queue instance; a second tab has its own, reads
+        // the same store, and the 20 MB cap is exceeded anyway. IndexedDB
+        // serializes overlapping readwrite transactions on a store across every
+        // tab of the origin, so doing both here is the guarantee itself rather
+        // than an approximation of it — and it is the only mechanism, so there
+        // is no question which one is load-bearing.
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
             const store = tx.objectStore(CONFIG.storeName);
-            store.add(item);
+
+            let totalBytes = 0;
+            let heldBytes = 0;
+            let heldCount = 0;
+            /** @type {Error|null} Set when the queue is full, to reject with. */
+            let refusal = null;
+            let settled = false;
+
+            /**
+             * @param {Error} error
+             * @returns {void}
+             */
+            const fail = (error) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                reject(error);
+            };
+
+            const cursorReq = store.openCursor();
+            cursorReq.onerror = (ev) => fail(ev.target.error);
+            cursorReq.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const size = cursor.value?.audioBlob?.size || 0;
+                    totalBytes += size;
+                    if (cursor.value?.held === true) {
+                        heldBytes += size;
+                        heldCount += 1;
+                    }
+                    cursor.continue();
+                    return;
+                }
+
+                // The store is counted and this transaction still holds it.
+                if (totalBytes + safeBlob.size > CONFIG.maxTotalBytes) {
+                    const heldNote =
+                        heldCount > 0
+                            ? ` ${heldCount} held recording(s) occupy ${(heldBytes / 1024 / 1024).toFixed(2)} MB and need attention before more will fit.`
+                            : "";
+                    refusal = new Error(
+                        `QueueFull: the offline queue holds ${(totalBytes / 1024 / 1024).toFixed(2)} MB of ` +
+                            `${(CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2)} MB and this recording needs ` +
+                            `${(safeBlob.size / 1024 / 1024).toFixed(2)} MB.${heldNote} ` +
+                            "Nothing is deleted to make room.",
+                    );
+                    tx.abort();
+                    return;
+                }
+
+                store.add(item);
+            };
 
             tx.oncomplete = () => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
                 debugLog("[Offline] Queued:", item.id);
                 this._notifyQueueUpdate();
                 if (navigator.onLine) {
@@ -303,7 +336,13 @@ class OfflineQueue {
                 resolve(item.id);
             };
 
-            tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) =>
+                fail(
+                    refusal ||
+                        ev.target.error ||
+                        new Error("OfflineQueue: the add transaction was aborted."),
+                );
+            tx.onerror = (ev) => fail(refusal || ev.target.error);
         });
     }
 
@@ -471,10 +510,24 @@ class OfflineQueue {
      * expendable, and nothing here decides. Someone does, and says why.
      *
      * @param {string} id
-     * @param {string} reason Recorded before the entry goes.
+     * @param {string} reason Required, and recorded before the entry goes.
      * @returns {Promise<void>}
      */
     async discardHeld(id, reason) {
+        // Required, not merely recorded. This is the one deletion here that is
+        // not a successful upload, and the reason is what makes it a decision
+        // someone took rather than something that happened. Accepting a blank
+        // one and logging "(no reason given)" left the only non-upload
+        // deletion path in the module able to run with no rationale at all —
+        // the audit trail this method exists to produce, absent from the one
+        // event that needs it.
+        const given = typeof reason === "string" ? reason.trim() : "";
+        if (given === "") {
+            throw new Error(
+                `DiscardRefused: ${id} needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one.`,
+            );
+        }
+
         const all = await this.getAll();
         const item = all.find((entry) => entry.id === id);
         if (!item) {
@@ -485,10 +538,10 @@ class OfflineQueue {
                 `DiscardRefused: ${id} is not held. Only a held submission can be discarded, and only on an explicit instruction.`,
             );
         }
-        console.warn("[Offline] Discarded on instruction:", id, reason);
+        console.warn("[Offline] Discarded on instruction:", id, given);
         sparxstarIntegration.reportError("submission_discarded", {
             submissionId: id,
-            reason: reason || "(no reason given)",
+            reason: given,
             heldReason: item.heldReason || null,
         });
         await this.remove(id);
@@ -591,8 +644,11 @@ class OfflineQueue {
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
-                const { id, audioBlob, fileName, formFields, metadata, retryCount, instanceId } =
-                    item;
+                const { id, audioBlob, fileName, formFields, retryCount, instanceId } = item;
+                // Not destructured as a `const`: the backfill below has to be
+                // able to replace it wholesale for a row that has no metadata
+                // object at all.
+                let { metadata } = item;
                 // Whether the bytes reached the server on this attempt.
                 let uploaded = false;
 
@@ -604,10 +660,16 @@ class OfflineQueue {
                 // on devices rather than only new ones.
                 if (typeof metadata?.uploadId !== "string" || metadata.uploadId === "") {
                     const backfilled = createUploadId();
-                    await this._setMetadata(id, { ...(metadata || {}), uploadId: backfilled });
-                    if (metadata) {
-                        metadata.uploadId = backfilled;
-                    }
+                    // The local variable is replaced, not just the stored row.
+                    // Guarding the assignment on `metadata` being truthy left a
+                    // row that had no metadata at all still passing `undefined`
+                    // into this first attempt: the upload minted a *different*
+                    // id, and the next drain — now reading the persisted one —
+                    // could not resume the partial that first attempt left on
+                    // the server. The backfill has to reach the attempt it was
+                    // written for, not only the one after it.
+                    metadata = { ...(metadata || {}), uploadId: backfilled };
+                    await this._setMetadata(id, metadata);
                     debugLog("[Offline] Backfilled upload id for legacy entry:", id);
                 }
 

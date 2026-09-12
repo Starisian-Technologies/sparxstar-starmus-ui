@@ -202,7 +202,15 @@ export function initCore(store, instanceId, env) {
         // where a retry over a bad link is likeliest and a stable identity
         // matters most.
         const metadata = {
-            uploadId: createUploadId(),
+            // Minted inside the try below, not here. `createUploadId()` throws
+            // on a runtime with no secure randomness — an insecure origin on an
+            // old Android is exactly such a runtime, and exactly the device
+            // this package exists for — and a throw out here landed outside
+            // every handler, rejecting the submit with the captured blob never
+            // queued and no error dispatched. ADR-011 keeps the material
+            // whatever else breaks, so the record the queue needs is built
+            // first and the part that can fail happens where it is caught.
+            uploadId: null,
             transcript: source.transcript?.trim() || null,
             calibration: calibration.complete
                 ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
@@ -227,6 +235,8 @@ export function initCore(store, instanceId, env) {
         let transferred = false;
 
         try {
+            metadata.uploadId = createUploadId();
+
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
             }
@@ -324,15 +334,23 @@ export function initCore(store, instanceId, env) {
                 // take. The asset is on the server; what failed is this
                 // client's handling afterwards, and that is reported rather
                 // than retried.
-                console.error("[Core] Uploaded, but could not complete:", message);
+                //
+                // The upload identifier goes with the report. Without it the
+                // only record of which asset this was died with the page: the
+                // bytes are on the server under an id nothing local still
+                // names, and nobody can reconcile the two.
+                console.error("[Core] Uploaded, but could not complete:", message, {
+                    uploadId: metadata.uploadId,
+                });
                 sparxstarIntegration.reportError("post_upload_failure", {
                     error: message,
                     instanceId,
+                    uploadId: metadata.uploadId,
                     tier: stateEnv.tier,
                 });
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message, retryable: false },
+                    error: { message, retryable: false, uploadId: metadata.uploadId },
                 });
                 return;
             }

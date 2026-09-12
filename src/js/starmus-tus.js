@@ -329,8 +329,15 @@ export async function uploadTus(
     // (stored, flagged, not a measurement source) from a profile it cannot
     // read, and an empty string collapses the two. ADR-011 still holds — the
     // recording goes either way; what it does not do is misdescribe itself.
-    if (metadata.captureProfile) {
-        tusMetadata.captureProfile = sanitizeMetadata(metadata.captureProfile);
+    //
+    // Sanitised and trimmed *before* the test, not after it. A value of only
+    // spaces or control separators is truthy, so testing the raw property sent
+    // a present-but-blank profile — the exact state this rule exists to
+    // prevent, passing the build check while violating the rule that check
+    // enforces.
+    const captureProfile = sanitizeMetadata(metadata.captureProfile).trim();
+    if (captureProfile) {
+        tusMetadata.captureProfile = captureProfile;
     } else {
         console.warn(
             "[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.",
@@ -467,9 +474,11 @@ export async function uploadTus(
         // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
         // of what the comment above it claimed.
         //
-        // A storage read that fails is not a reason to refuse the upload: the
-        // recording still needs to go. It starts fresh instead, which is the
-        // behaviour there was before, and the contributor is no worse off.
+        // A storage read that fails rejects rather than starting over; see the
+        // `catch` below. An earlier version of this comment said the opposite,
+        // describing behaviour the fix beneath it had already replaced — which
+        // is how a resumability guarantee gets undone by someone trusting the
+        // comment over the code.
         upload
             .findPreviousUploads()
             .then((previous) => {

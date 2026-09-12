@@ -202,3 +202,95 @@ test("a host still passing the retired nonce is told, not silently unauthorized"
         console.warn = realWarn;
     }
 });
+
+test("attaching a file clears the recorded blob, and recording clears the file", () => {
+    // `handleSubmit()` reads `source.blob || source.file`. Leaving both set
+    // meant a contributor who recorded and then attached a file uploaded the
+    // *recording* under the *file's* name, carrying the file's mime type and
+    // the `import` profile — a mislabelled contribution, which for an archive
+    // is worse than an upload that fails outright.
+    const store = createStore();
+
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    assert.ok(store.getState().source.blob, "the recording is there");
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    const afterFile = store.getState().source;
+    assert.equal(afterFile.blob, null, "the recorded blob does not survive the attachment");
+    assert.equal(afterFile.kind, "file");
+    assert.equal(afterFile.fileName, "interview.m4a");
+
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 4096 }, fileName: "take-2.webm" },
+    });
+    const afterRecord = store.getState().source;
+    assert.equal(afterRecord.file, null, "and the attached file does not survive a recording");
+    assert.equal(afterRecord.kind, "blob");
+});
+
+test("a capture profile of only whitespace is absent, not present and blank", async () => {
+    // The contract is present-with-a-value or absent. A blank value collapses
+    // "arrived with no profile" and "a profile the Node could not read" into
+    // one state, and whitespace is truthy — so testing the raw value passed the
+    // build check while breaking the rule it enforces.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    assert.match(
+        source,
+        /const captureProfile = sanitizeMetadata\(metadata\.captureProfile\)\.trim\(\);/,
+        "the value is sanitized and trimmed before it is tested",
+    );
+    assert.match(
+        source,
+        /if \(captureProfile\) \{\s*\n\s*tusMetadata\.captureProfile = captureProfile;/,
+        "and the trimmed value is what gets sent",
+    );
+});
+
+test("discarding a held recording requires a stated reason", async () => {
+    // `OfflineQueue` is not exported and `discardHeld` needs IndexedDB, so the
+    // guarantee is checked at the source level — the same reason the reserved-
+    // metadata test above does. What matters is that the refusal happens before
+    // anything is read or deleted: this is the only deletion in the module that
+    // is not a successful upload, and the reason is what makes it a decision
+    // someone took rather than something that happened.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const body = source.slice(source.indexOf("async discardHeld(id, reason)"));
+    const guard = body.indexOf("needs a reason");
+    const firstRead = body.indexOf("await this.getAll()");
+
+    assert.ok(guard > -1, "a blank reason is refused");
+    assert.ok(firstRead > -1, "and the method does go on to read the store");
+    assert.ok(
+        guard < firstRead,
+        "the refusal comes before the store is touched, so no reasonless discard can begin",
+    );
+    assert.match(
+        body.slice(0, guard),
+        /typeof reason === "string" \? reason\.trim\(\) : ""/,
+        "whitespace is not a reason either",
+    );
+});
+
+test("the upload id is minted where a failure is caught, not outside it", async () => {
+    // `createUploadId()` throws on a runtime with no secure randomness — an
+    // insecure origin on an old Android is exactly that, and exactly the device
+    // this package exists for. Minting outside the try rejected the submit with
+    // the captured blob never queued and no error dispatched.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    assert.match(source, /uploadId: null,/, "the record is built without the id");
+    assert.match(
+        source,
+        /try \{\s*\n\s*metadata\.uploadId = createUploadId\(\);/,
+        "and the id is minted as the first thing inside the handled path",
+    );
+});

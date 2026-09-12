@@ -184,13 +184,17 @@ var StarmusTranscript = (function (exports) {
         tokenGranularity: "utterance",
         start(context) {
           stopping = false;
-          recognition = new Recognition();
-          recognition.continuous = true;
-          recognition.interimResults = true;
+          // Held in a local as well: the `end` listener below must be able to
+          // tell whether the engine that ended is still the current one, so a
+          // late `end` from a previous run cannot clear a newer engine.
+          const engine = new Recognition();
+          recognition = engine;
+          engine.continuous = true;
+          engine.interimResults = true;
           if (language) {
-            recognition.lang = language;
+            engine.lang = language;
           }
-          recognition.addEventListener("result", event => {
+          engine.addEventListener("result", event => {
             for (let i = event.resultIndex; i < event.results.length; i += 1) {
               const result = event.results[i];
               const alternative = result[0];
@@ -204,7 +208,7 @@ var StarmusTranscript = (function (exports) {
               });
             }
           });
-          recognition.addEventListener("error", event => {
+          engine.addEventListener("error", event => {
             // `no-speech` and `aborted` are ordinary during a recording and
             // are not failures of the slot. The `end` that follows them is
             // handled below, so the slot is never left believing a dead
@@ -219,10 +223,13 @@ var StarmusTranscript = (function (exports) {
           // recovered from, and on some platforms simply after a while. It
           // also ends because we asked. Only the slot can tell those apart,
           // so both are reported and it decides.
-          recognition.addEventListener("end", () => {
+          engine.addEventListener("end", () => {
+            if (recognition === engine) {
+              recognition = null;
+            }
             context.ended(stopping ? "stopped" : "engine-ended");
           });
-          recognition.start();
+          engine.start();
         },
         stop() {
           if (!recognition) {
@@ -237,7 +244,39 @@ var StarmusTranscript = (function (exports) {
           } catch {
             // Already stopped by the engine; nothing to undo.
           }
+          // The reference is *kept* until the engine's own `end` arrives.
+          // Clearing it here meant that an engine which never fired `end` —
+          // the case the slot's grace timer exists for — could no longer be
+          // reached by anything, so it went on listening after the slot had
+          // given up on it. An open microphone is not an acceptable outcome
+          // of a shutdown path.
+        },
+        /**
+         * Force the engine down, discarding anything it has not delivered.
+         *
+         * The slot calls this only when `stop()` produced no terminal event
+         * within the grace period. By then the closing result `stop()` waits
+         * for is not coming, so there is nothing left to lose by aborting —
+         * and leaving the engine running would break the auto-disable bound.
+         *
+         * @returns {void}
+         */
+        abort() {
+          const engine = recognition;
+          if (!engine) {
+            return;
+          }
+          stopping = true;
           recognition = null;
+          try {
+            engine.abort();
+          } catch {
+            try {
+              engine.stop();
+            } catch {
+              // Already gone. Nothing to undo.
+            }
+          }
         }
       };
     }
@@ -413,6 +452,12 @@ var StarmusTranscript = (function (exports) {
           if (restarts < MAX_PROVIDER_RESTARTS) {
             restarts += 1;
             try {
+              // Re-based to now. `lastStartMs` still pointed at the end
+              // of the previous run's last token, so a restart after a
+              // silence stamped the next result with a start from before
+              // that silence — overlapping tokens already emitted on a
+              // timeline ADR-038 requires to be the recording's own.
+              lastStartMs = Math.max(0, Math.round(getElapsedMs()));
               provider.start(context);
               return;
             } catch (error) {
@@ -431,6 +476,25 @@ var StarmusTranscript = (function (exports) {
        *
        * @returns {void}
        */
+      /**
+       * Shut the provider down without waiting for it to finish.
+       *
+       * `abort()` is optional on a provider; one that does not implement it is
+       * asked to stop a second time, which is all that is left to try.
+       *
+       * @returns {void}
+       */
+      function forceProviderDown() {
+        try {
+          if (typeof provider.abort === "function") {
+            provider.abort();
+          } else {
+            provider.stop();
+          }
+        } catch (error) {
+          console.warn("[Transcript] Provider would not shut down:", error.message);
+        }
+      }
       function settle() {
         if (settleTimer) {
           clearTimeout(settleTimer);
@@ -506,7 +570,17 @@ var StarmusTranscript = (function (exports) {
         // `context.ended()` synchronously from `stop()`, and arming the grace
         // timer afterwards left a stale timer that would settle the *next* run.
         if (resolveSettled !== null && settleTimer === null) {
-          settleTimer = setTimeout(settle, SETTLE_GRACE_MS);
+          settleTimer = setTimeout(() => {
+            // The grace ran out, so the terminal event `stop()` was waiting
+            // for is not coming. Settling alone left the provider running:
+            // the slot marked itself finished while the engine went on
+            // listening, which turns the auto-disable bound into a
+            // statement of intent rather than a guarantee. A microphone
+            // that outlives the slot that opened it is the one outcome a
+            // shutdown path must not have.
+            forceProviderDown();
+            settle();
+          }, SETTLE_GRACE_MS);
         }
         return settled;
       }
@@ -518,6 +592,16 @@ var StarmusTranscript = (function (exports) {
          */
         start() {
           if (running) {
+            return;
+          }
+          if (stopping || pendingStop) {
+            // A previous `stop()` is still waiting for the provider's
+            // terminal event. Starting here cleared `pendingStop` and
+            // `resolveSettled` below, so that caller's promise was never
+            // resolved — and the old provider's eventual `ended()` landed
+            // on the new run, where it could restart or settle it. A stop
+            // in flight is a state to wait out, not one to overwrite.
+            console.warn("[Transcript] start() ignored: the previous stop has not settled yet. Await the promise stop() returned.");
             return;
           }
           running = true;

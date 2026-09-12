@@ -211,11 +211,23 @@ if (fs.existsSync(tusFile)) {
     // profile — indistinguishable downstream from a profile the Node could not
     // read, when it actually means none was set. So: the key must be assigned
     // conditionally, and the empty-string default must not return.
-    const profileSentConditionally = /if\s*\(\s*metadata\.captureProfile\s*\)/.test(tusContent);
+    //
+    // The test is on the *sanitised and trimmed* value, because a profile of
+    // only spaces is truthy: an earlier version of this check required the
+    // literal `if (metadata.captureProfile)` and so certified a blank profile
+    // as conforming. A check that pins a spelling instead of the guarantee is
+    // worse than no check, because it is believed.
+    const profileTrimmedBeforeTest =
+        /const\s+captureProfile\s*=\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\)\s*\.trim\(\)/.test(
+            tusContent,
+        );
+    const profileSentConditionally = /if\s*\(\s*captureProfile\s*\)\s*\{\s*\n\s*tusMetadata\.captureProfile\s*=\s*captureProfile;/.test(
+        tusContent,
+    );
     const profileDefaultsToEmpty = /captureProfile\s*:\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\|\|/.test(
         tusContent,
     );
-    if (!profileSentConditionally || profileDefaultsToEmpty) {
+    if (!profileTrimmedBeforeTest || !profileSentConditionally || profileDefaultsToEmpty) {
         console.log(
             "❌ starmus-tus.js: the capture profile must travel with the asset as a present value or be absent — never present and empty (ADR-035; AGENTS.md: 'An asset uploaded without its capture profile recorded' is a FAIL).",
         );
@@ -301,23 +313,89 @@ if (fs.existsSync(tusFile)) {
 {
     const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "ai_manifest.json"), "utf8"));
     const listed = new Set(manifest.symbols.map((entry) => entry.symbol));
+    // Both export forms, because only the first was covered before and the
+    // check therefore reported success while six exported symbols were
+    // missing: `export { subscribe, dispatch, debugLog, ... }` in
+    // starmus-hooks.js and `export { EnhancedCalibration }` in the calibration
+    // module were invisible to it. A manifest check that sees one syntax is a
+    // check that certifies drift.
+    //
+    // Both directions too. A symbol removed or renamed leaves an entry
+    // pointing at nothing, which AGENTS.md's "update it when one is removed or
+    // renamed" is exactly about, and which the missing-only test could never
+    // catch.
     const exported = new Set();
+    const sourceByPath = new Map();
     for (const file of allSourceJs()) {
         const content = fs.readFileSync(file, "utf8");
-        const pattern = /export\s+(?:async\s+)?(?:function|const|class)\s+(\w+)/g;
+        const rel = path.relative(ROOT_DIR, file).split(path.sep).join("/");
+        sourceByPath.set(rel, content);
+        const here = new Set();
+
+        // `export function foo`, `export const foo`, `export class Foo`,
+        // `export let/var foo`, with or without `async`.
+        const declared = /export\s+(?:async\s+)?(?:function|const|class|let|var)\s+(\w+)/g;
         let match;
-        while ((match = pattern.exec(content)) !== null) {
-            exported.add(match[1]);
+        while ((match = declared.exec(content)) !== null) {
+            here.add(match[1]);
+        }
+
+        // `export { a, b as c }` — the exported name is the one after `as`.
+        const lists = /export\s*\{([^}]*)\}\s*(?!\s*from)/g;
+        while ((match = lists.exec(content)) !== null) {
+            for (const part of match[1].split(",")) {
+                const name = part.trim().split(/\s+as\s+/).pop().trim();
+                if (name && /^\w+$/.test(name) && name !== "default") {
+                    here.add(name);
+                }
+            }
+        }
+
+        for (const name of here) {
+            exported.add(name);
         }
     }
+
     const missing = [...exported].filter((symbol) => !listed.has(symbol)).sort();
+    const stale = manifest.symbols
+        .filter((entry) => {
+            const content = sourceByPath.get(entry.path);
+            // An entry whose file this scan did not read is left alone rather
+            // than called stale: being unable to see a file is not evidence
+            // that its symbol is gone.
+            if (content === undefined) {
+                return false;
+            }
+            // Declared, not exported. AGENTS.md says the manifest tracks *any*
+            // symbol added, removed or renamed, and it deliberately inventories
+            // internal ones — `getSafeRedirect` and the queue's `_`-prefixed
+            // methods among them. Testing for an export here would have called
+            // four correct entries stale.
+            const name = entry.symbol.replace(/[^\w$]/g, "");
+            return !new RegExp(
+                `(?:function|const|let|var|class)\\s+${name}\\b` +
+                    `|^\\s*(?:async\\s+)?${name}\\s*\\(` +
+                    `|\\b${name}\\s*[:=]`,
+                "m",
+            ).test(content);
+        })
+        .map((entry) => `${entry.symbol} (${entry.path})`)
+        .sort();
+
     if (missing.length > 0) {
         console.log(
             `❌ ai_manifest.json is missing ${missing.length} exported symbol(s): ${missing.join(", ")}. AGENTS.md requires the manifest to track every symbol added, removed or renamed.`,
         );
         ok = false;
-    } else {
-        console.log("✅ ai_manifest.json lists every exported symbol");
+    }
+    if (stale.length > 0) {
+        console.log(
+            `❌ ai_manifest.json lists ${stale.length} symbol(s) that are no longer exported: ${stale.join(", ")}. A manifest entry pointing at nothing is the drift AGENTS.md's rename/remove rule exists to prevent.`,
+        );
+        ok = false;
+    }
+    if (missing.length === 0 && stale.length === 0) {
+        console.log("✅ ai_manifest.json matches the exported symbols, in both directions");
     }
 }
 

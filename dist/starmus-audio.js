@@ -2910,6 +2910,10 @@
             source: merge(state.source, {
               kind: "blob",
               blob: action.payload.blob,
+              // A previously attached file is cleared, so `kind` and
+              // the payload cannot disagree. See `file-attached`
+              // below for what leaving the other one set costs.
+              file: null,
               fileName: action.payload.fileName,
               metadata: {
                 duration: state.recorder.duration || 0,
@@ -2936,6 +2940,16 @@
             source: merge(state.source, {
               kind: "file",
               file: action.file,
+              // The recorded blob is cleared, not left beside the
+              // file. `handleSubmit()` reads `source.blob || source.file`,
+              // so a contributor who recorded and then attached a
+              // file uploaded the *recording* under the *file's*
+              // name, carrying the file's mime type, size and the
+              // `import` profile. That is a mislabelled contribution
+              // — the wrong audio described as something it is not —
+              // which for an archive is worse than an upload that
+              // fails outright.
+              blob: null,
               fileName: action.file.name,
               // An attached file is prerecorded material, which is
               // exactly what ADR-035 calls the `import` profile:
@@ -13666,6 +13680,7 @@
         suppliedId,
         uploadId,
         tusMetadata,
+        captureProfile,
         _i3,
         _Object$entries3,
         _Object$entries3$_i,
@@ -13737,8 +13752,15 @@
             // (stored, flagged, not a measurement source) from a profile it cannot
             // read, and an empty string collapses the two. ADR-011 still holds — the
             // recording goes either way; what it does not do is misdescribe itself.
-            if (metadata.captureProfile) {
-              tusMetadata.captureProfile = sanitizeMetadata(metadata.captureProfile);
+            //
+            // Sanitised and trimmed *before* the test, not after it. A value of only
+            // spaces or control separators is truthy, so testing the raw property sent
+            // a present-but-blank profile — the exact state this rule exists to
+            // prevent, passing the build check while violating the rule that check
+            // enforces.
+            captureProfile = sanitizeMetadata(metadata.captureProfile).trim();
+            if (captureProfile) {
+              tusMetadata.captureProfile = captureProfile;
             } else {
               console.warn("[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.");
               sparxstarIntegration.reportError("upload_without_capture_profile", {
@@ -13875,9 +13897,11 @@
               // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
               // of what the comment above it claimed.
               //
-              // A storage read that fails is not a reason to refuse the upload: the
-              // recording still needs to go. It starts fresh instead, which is the
-              // behaviour there was before, and the contributor is no worse off.
+              // A storage read that fails rejects rather than starting over; see the
+              // `catch` below. An earlier version of this comment said the opposite,
+              // describing behaviour the fix beneath it had already replaced — which
+              // is how a resumability guarantee gets undone by someone trusting the
+              // comment over the code.
               upload.findPreviousUploads().then(function (previous) {
                 if (Array.isArray(previous) && previous.length > 0) {
                   // The most recent match: an earlier attempt on this exact
@@ -14464,7 +14488,6 @@
       /** @type {number|null} */
       this.processQueueDueAt = null;
       /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
-      this._addChain = Promise.resolve();
     }
 
     /**
@@ -14557,90 +14580,32 @@
     }, {
       key: "add",
       value: (function () {
-        var _add2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(instanceId, audioBlob, fileName) {
-          var formFields,
-            metadata,
-            previous,
-            release,
-            _args2 = arguments;
-          return _regenerator().w(function (_context2) {
-            while (1) switch (_context2.p = _context2.n) {
-              case 0:
-                formFields = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
-                metadata = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : {};
-                // Serialized. The budget check reads the store and the insert writes it
-                // in two separate transactions, so two concurrent adds could each see
-                // room and then both insert — two 12 MB Tier A recordings landing in a
-                // 20 MB queue. Chaining them makes check-then-insert effectively
-                // atomic without holding an IndexedDB transaction across an await.
-                previous = this._addChain;
-                this._addChain = new Promise(function (resolve) {
-                  release = resolve;
-                });
-                _context2.p = 1;
-                _context2.n = 2;
-                return previous;
-              case 2:
-                _context2.n = 3;
-                return this._add(instanceId, audioBlob, fileName, formFields, metadata);
-              case 3:
-                return _context2.a(2, _context2.v);
-              case 4:
-                _context2.p = 4;
-                release();
-                return _context2.f(4);
-              case 5:
-                return _context2.a(2);
-            }
-          }, _callee2, this, [[1,, 4, 5]]);
-        }));
-        function add(_x, _x2, _x3) {
-          return _add2.apply(this, arguments);
-        }
-        return add;
-      }() /** @private */)
-    }, {
-      key: "_add",
-      value: (function () {
-        var _add3 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(instanceId, audioBlob, fileName) {
+        var _add = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(instanceId, audioBlob, fileName) {
           var _this2 = this;
           var formFields,
             metadata,
             maxAllowedSize,
-            usage,
-            heldNote,
             safeBlob,
             item,
-            _args3 = arguments;
-          return _regenerator().w(function (_context3) {
-            while (1) switch (_context3.n) {
+            _args2 = arguments;
+          return _regenerator().w(function (_context2) {
+            while (1) switch (_context2.n) {
               case 0:
-                formFields = _args3.length > 3 && _args3[3] !== undefined ? _args3[3] : {};
-                metadata = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : {};
+                formFields = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+                metadata = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : {};
                 if (this.db) {
-                  _context3.n = 1;
+                  _context2.n = 1;
                   break;
                 }
                 throw new Error("OfflineQueue: DB not initialised");
               case 1:
                 maxAllowedSize = getMaxBlobSize(metadata);
                 if (!(audioBlob.size > maxAllowedSize)) {
-                  _context3.n = 2;
+                  _context2.n = 2;
                   break;
                 }
                 throw new Error("Audio too large (".concat((audioBlob.size / 1024 / 1024).toFixed(2), " MB); limit ").concat((maxAllowedSize / 1024 / 1024).toFixed(2), " MB"));
               case 2:
-                _context3.n = 3;
-                return this.usage();
-              case 3:
-                usage = _context3.v;
-                if (!(usage.totalBytes + audioBlob.size > CONFIG.maxTotalBytes)) {
-                  _context3.n = 4;
-                  break;
-                }
-                heldNote = usage.heldCount > 0 ? " ".concat(usage.heldCount, " held recording(s) occupy ").concat((usage.heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
-                throw new Error("QueueFull: the offline queue holds ".concat((usage.totalBytes / 1024 / 1024).toFixed(2), " MB of ") + "".concat((CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2), " MB and this recording needs ") + "".concat((audioBlob.size / 1024 / 1024).toFixed(2), " MB.").concat(heldNote, " ") + "Nothing is deleted to make room.");
-              case 4:
                 safeBlob = new Blob([audioBlob], {
                   type: audioBlob.type
                 });
@@ -14657,12 +14622,76 @@
                   error: null,
                   held: false,
                   heldReason: null
-                };
-                return _context3.a(2, new Promise(function (resolve, reject) {
+                }; // The whole-queue budget is counted and the record inserted inside one
+                // readwrite transaction.
+                //
+                // Per-blob was the only bound before; the platform standard also caps
+                // the queue as a whole, and without that, repeated failures accumulate
+                // held entries until IndexedDB refuses the transaction — a quota error
+                // at `add()` loses the recording being made right now, which is the
+                // worst possible moment to find out.
+                //
+                // Counting in a separate transaction and inserting in another let two
+                // adds each see room and then both insert. A promise chain fixed that
+                // only within one tab's queue instance; a second tab has its own, reads
+                // the same store, and the 20 MB cap is exceeded anyway. IndexedDB
+                // serializes overlapping readwrite transactions on a store across every
+                // tab of the origin, so doing both here is the guarantee itself rather
+                // than an approximation of it — and it is the only mechanism, so there
+                // is no question which one is load-bearing.
+                return _context2.a(2, new Promise(function (resolve, reject) {
                   var tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
-                  store.add(item);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  /** @type {Error|null} Set when the queue is full, to reject with. */
+                  var refusal = null;
+                  var settled = false;
+
+                  /**
+                   * @param {Error} error
+                   * @returns {void}
+                   */
+                  var fail = function fail(error) {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
+                    reject(error);
+                  };
+                  var cursorReq = store.openCursor();
+                  cursorReq.onerror = function (ev) {
+                    return fail(ev.target.error);
+                  };
+                  cursorReq.onsuccess = function (event) {
+                    var cursor = event.target.result;
+                    if (cursor) {
+                      var _cursor$value, _cursor$value2;
+                      var size = ((_cursor$value = cursor.value) === null || _cursor$value === void 0 || (_cursor$value = _cursor$value.audioBlob) === null || _cursor$value === void 0 ? void 0 : _cursor$value.size) || 0;
+                      totalBytes += size;
+                      if (((_cursor$value2 = cursor.value) === null || _cursor$value2 === void 0 ? void 0 : _cursor$value2.held) === true) {
+                        heldBytes += size;
+                        heldCount += 1;
+                      }
+                      cursor.continue();
+                      return;
+                    }
+
+                    // The store is counted and this transaction still holds it.
+                    if (totalBytes + safeBlob.size > CONFIG.maxTotalBytes) {
+                      var heldNote = heldCount > 0 ? " ".concat(heldCount, " held recording(s) occupy ").concat((heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
+                      refusal = new Error("QueueFull: the offline queue holds ".concat((totalBytes / 1024 / 1024).toFixed(2), " MB of ") + "".concat((CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2), " MB and this recording needs ") + "".concat((safeBlob.size / 1024 / 1024).toFixed(2), " MB.").concat(heldNote, " ") + "Nothing is deleted to make room.");
+                      tx.abort();
+                      return;
+                    }
+                    store.add(item);
+                  };
                   tx.oncomplete = function () {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
                     debugLog("[Offline] Queued:", item.id);
                     _this2._notifyQueueUpdate();
                     if (navigator.onLine) {
@@ -14670,17 +14699,20 @@
                     }
                     resolve(item.id);
                   };
+                  tx.onabort = function (ev) {
+                    return fail(refusal || ev.target.error || new Error("OfflineQueue: the add transaction was aborted."));
+                  };
                   tx.onerror = function (ev) {
-                    return reject(ev.target.error);
+                    return fail(refusal || ev.target.error);
                   };
                 }));
             }
-          }, _callee3, this);
+          }, _callee2, this);
         }));
-        function _add(_x4, _x5, _x6) {
-          return _add3.apply(this, arguments);
+        function add(_x, _x2, _x3) {
+          return _add.apply(this, arguments);
         }
-        return _add;
+        return add;
       }()
       /**
        * Retrieves all pending submissions.
@@ -14691,18 +14723,18 @@
     }, {
       key: "getAll",
       value: (function () {
-        var _getAll = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4() {
+        var _getAll = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3() {
           var _this3 = this;
-          return _regenerator().w(function (_context4) {
-            while (1) switch (_context4.n) {
+          return _regenerator().w(function (_context3) {
+            while (1) switch (_context3.n) {
               case 0:
                 if (this.db) {
-                  _context4.n = 1;
+                  _context3.n = 1;
                   break;
                 }
-                return _context4.a(2, []);
+                return _context3.a(2, []);
               case 1:
-                return _context4.a(2, new Promise(function (resolve, reject) {
+                return _context3.a(2, new Promise(function (resolve, reject) {
                   var tx = _this3.db.transaction([CONFIG.storeName], "readonly");
                   var req = tx.objectStore(CONFIG.storeName).getAll();
                   req.onsuccess = function () {
@@ -14713,7 +14745,7 @@
                   };
                 }));
             }
-          }, _callee4, this);
+          }, _callee3, this);
         }));
         function getAll() {
           return _getAll.apply(this, arguments);
@@ -14730,18 +14762,18 @@
     }, {
       key: "remove",
       value: (function () {
-        var _remove = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id) {
+        var _remove = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4(id) {
           var _this4 = this;
-          return _regenerator().w(function (_context5) {
-            while (1) switch (_context5.n) {
+          return _regenerator().w(function (_context4) {
+            while (1) switch (_context4.n) {
               case 0:
                 if (this.db) {
-                  _context5.n = 1;
+                  _context4.n = 1;
                   break;
                 }
-                return _context5.a(2);
+                return _context4.a(2);
               case 1:
-                return _context5.a(2, new Promise(function (resolve, reject) {
+                return _context4.a(2, new Promise(function (resolve, reject) {
                   var tx = _this4.db.transaction([CONFIG.storeName], "readwrite");
                   tx.objectStore(CONFIG.storeName).delete(id);
                   tx.oncomplete = function () {
@@ -14753,9 +14785,9 @@
                   };
                 }));
             }
-          }, _callee5, this);
+          }, _callee4, this);
         }));
-        function remove(_x7) {
+        function remove(_x4) {
           return _remove.apply(this, arguments);
         }
         return remove;
@@ -14772,18 +14804,18 @@
     }, {
       key: "_hold",
       value: (function () {
-        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6(id, reason) {
+        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, reason) {
           var _this5 = this;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.n) {
+          return _regenerator().w(function (_context5) {
+            while (1) switch (_context5.n) {
               case 0:
                 if (this.db) {
-                  _context6.n = 1;
+                  _context5.n = 1;
                   break;
                 }
-                return _context6.a(2);
+                return _context5.a(2);
               case 1:
-                return _context6.a(2, new Promise(function (resolve, reject) {
+                return _context5.a(2, new Promise(function (resolve, reject) {
                   var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
@@ -14810,9 +14842,9 @@
                   };
                 }));
             }
-          }, _callee6, this);
+          }, _callee5, this);
         }));
-        function _hold(_x8, _x9) {
+        function _hold(_x5, _x6) {
           return _hold2.apply(this, arguments);
         }
         return _hold;
@@ -14829,15 +14861,15 @@
     }, {
       key: "usage",
       value: (function () {
-        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
           var all, totalBytes, heldBytes, heldCount, _iterator, _step, _item$audioBlob, item, size;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.n) {
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
               case 0:
-                _context7.n = 1;
+                _context6.n = 1;
                 return this.getAll();
               case 1:
-                all = _context7.v;
+                all = _context6.v;
                 totalBytes = 0;
                 heldBytes = 0;
                 heldCount = 0;
@@ -14857,7 +14889,7 @@
                 } finally {
                   _iterator.f();
                 }
-                return _context7.a(2, {
+                return _context6.a(2, {
                   totalBytes: totalBytes,
                   count: all.length,
                   heldBytes: heldBytes,
@@ -14865,7 +14897,7 @@
                   maxTotalBytes: CONFIG.maxTotalBytes
                 });
             }
-          }, _callee7, this);
+          }, _callee6, this);
         }));
         function usage() {
           return _usage.apply(this, arguments);
@@ -14891,18 +14923,18 @@
     }, {
       key: "releaseHold",
       value: (function () {
-        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id) {
+        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id) {
           var _this6 = this;
-          return _regenerator().w(function (_context8) {
-            while (1) switch (_context8.n) {
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
               case 0:
                 if (this.db) {
-                  _context8.n = 1;
+                  _context7.n = 1;
                   break;
                 }
-                return _context8.a(2);
+                return _context7.a(2);
               case 1:
-                _context8.n = 2;
+                _context7.n = 2;
                 return new Promise(function (resolve, reject) {
                   var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
@@ -14932,11 +14964,11 @@
               case 2:
                 this._scheduleProcessQueue(0);
               case 3:
-                return _context8.a(2);
+                return _context7.a(2);
             }
-          }, _callee8, this);
+          }, _callee7, this);
         }));
-        function releaseHold(_x0) {
+        function releaseHold(_x7) {
           return _releaseHold.apply(this, arguments);
         }
         return releaseHold;
@@ -14951,51 +14983,65 @@
        * expendable, and nothing here decides. Someone does, and says why.
        *
        * @param {string} id
-       * @param {string} reason Recorded before the entry goes.
+       * @param {string} reason Required, and recorded before the entry goes.
        * @returns {Promise<void>}
        */
       )
     }, {
       key: "discardHeld",
       value: (function () {
-        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id, reason) {
-          var all, item;
-          return _regenerator().w(function (_context9) {
-            while (1) switch (_context9.n) {
+        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id, reason) {
+          var given, all, item;
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
               case 0:
-                _context9.n = 1;
-                return this.getAll();
+                // Required, not merely recorded. This is the one deletion here that is
+                // not a successful upload, and the reason is what makes it a decision
+                // someone took rather than something that happened. Accepting a blank
+                // one and logging "(no reason given)" left the only non-upload
+                // deletion path in the module able to run with no rationale at all —
+                // the audit trail this method exists to produce, absent from the one
+                // event that needs it.
+                given = typeof reason === "string" ? reason.trim() : "";
+                if (!(given === "")) {
+                  _context8.n = 1;
+                  break;
+                }
+                throw new Error("DiscardRefused: ".concat(id, " needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one."));
               case 1:
-                all = _context9.v;
+                _context8.n = 2;
+                return this.getAll();
+              case 2:
+                all = _context8.v;
                 item = all.find(function (entry) {
                   return entry.id === id;
                 });
                 if (item) {
-                  _context9.n = 2;
+                  _context8.n = 3;
                   break;
                 }
-                return _context9.a(2);
-              case 2:
+                return _context8.a(2);
+              case 3:
                 if (!(item.held !== true)) {
-                  _context9.n = 3;
+                  _context8.n = 4;
                   break;
                 }
                 throw new Error("DiscardRefused: ".concat(id, " is not held. Only a held submission can be discarded, and only on an explicit instruction."));
-              case 3:
-                console.warn("[Offline] Discarded on instruction:", id, reason);
+              case 4:
+                console.warn("[Offline] Discarded on instruction:", id, given);
                 sparxstarIntegration.reportError("submission_discarded", {
                   submissionId: id,
-                  reason: reason || "(no reason given)",
+                  reason: given,
                   heldReason: item.heldReason || null
                 });
-                _context9.n = 4;
+                _context8.n = 5;
                 return this.remove(id);
-              case 4:
-                return _context9.a(2);
+              case 5:
+                return _context8.a(2);
             }
-          }, _callee9, this);
+          }, _callee8, this);
         }));
-        function discardHeld(_x1, _x10) {
+        function discardHeld(_x8, _x9) {
           return _discardHeld.apply(this, arguments);
         }
         return discardHeld;
@@ -15012,20 +15058,20 @@
     }, {
       key: "getHeld",
       value: (function () {
-        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
           var all;
-          return _regenerator().w(function (_context0) {
-            while (1) switch (_context0.n) {
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
               case 0:
-                _context0.n = 1;
+                _context9.n = 1;
                 return this.getAll();
               case 1:
-                all = _context0.v;
-                return _context0.a(2, all.filter(function (item) {
+                all = _context9.v;
+                return _context9.a(2, all.filter(function (item) {
                   return item.held === true;
                 }));
             }
-          }, _callee0, this);
+          }, _callee9, this);
         }));
         function getHeld() {
           return _getHeld.apply(this, arguments);
@@ -15044,18 +15090,18 @@
     }, {
       key: "_setMetadata",
       value: (function () {
-        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, metadata) {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, metadata) {
           var _this7 = this;
-          return _regenerator().w(function (_context1) {
-            while (1) switch (_context1.n) {
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
               case 0:
                 if (this.db) {
-                  _context1.n = 1;
+                  _context0.n = 1;
                   break;
                 }
-                return _context1.a(2);
+                return _context0.a(2);
               case 1:
-                return _context1.a(2, new Promise(function (resolve, reject) {
+                return _context0.a(2, new Promise(function (resolve, reject) {
                   var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
@@ -15077,9 +15123,9 @@
                   };
                 }));
             }
-          }, _callee1, this);
+          }, _callee0, this);
         }));
-        function _setMetadata(_x11, _x12) {
+        function _setMetadata(_x0, _x1) {
           return _setMetadata2.apply(this, arguments);
         }
         return _setMetadata;
@@ -15087,18 +15133,18 @@
     }, {
       key: "_updateRetry",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(id, retryCount, error) {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, retryCount, error) {
           var _this8 = this;
-          return _regenerator().w(function (_context10) {
-            while (1) switch (_context10.n) {
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.n) {
               case 0:
                 if (this.db) {
-                  _context10.n = 1;
+                  _context1.n = 1;
                   break;
                 }
-                return _context10.a(2);
+                return _context1.a(2);
               case 1:
-                return _context10.a(2, new Promise(function (resolve, reject) {
+                return _context1.a(2, new Promise(function (resolve, reject) {
                   var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
@@ -15119,9 +15165,9 @@
                   };
                 }));
             }
-          }, _callee10, this);
+          }, _callee1, this);
         }));
-        function _updateRetry(_x13, _x14, _x15) {
+        function _updateRetry(_x10, _x11, _x12) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -15136,96 +15182,104 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10() {
           var _sparxstarIntegration;
-          var pending, _iterator2, _step2, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, uploaded, backfilled, delay, _metadata$durationMs, _metadata$env2, result, detail, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
-          return _regenerator().w(function (_context11) {
-            while (1) switch (_context11.p = _context11.n) {
+          var pending, _iterator2, _step2, _metadata, item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, backfilled, delay, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, result, detail, _metadata6, _metadata7, _msg, msg, nonRetryable, nextRetryCount, _msg2, nextDelay, _t, _t2, _t3, _t4, _t5;
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.p = _context10.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context11.n = 1;
+                  _context10.n = 1;
                   break;
                 }
-                return _context11.a(2);
+                return _context10.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context11.n = 2;
+                _context10.n = 2;
                 return this.getAll();
               case 2:
-                pending = _context11.v;
+                pending = _context10.v;
                 if (!(pending.length === 0)) {
-                  _context11.n = 3;
+                  _context10.n = 3;
                   break;
                 }
-                return _context11.a(2);
+                return _context10.a(2);
               case 3:
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context11.n = 4;
+                  _context10.n = 4;
                   break;
                 }
-                return _context11.a(2);
+                return _context10.a(2);
               case 4:
                 this.isProcessing = true;
-                _context11.p = 5;
+                _context10.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context11.p = 6;
+                _context10.p = 6;
                 _iterator2.s();
               case 7:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context11.n = 25;
+                  _context10.n = 25;
                   break;
                 }
                 item = _step2.value;
-                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId; // Whether the bytes reached the server on this attempt.
+                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
+                // able to replace it wholesale for a row that has no metadata
+                // object at all.
+                metadata = item.metadata; // Whether the bytes reached the server on this attempt.
                 uploaded = false; // Entries queued before the submission id existed have no
                 // `metadata.uploadId`, so every retry would mint a new one and
                 // start a new TUS resource instead of resuming the partial it
                 // already has. Backfilled once and persisted, so the
                 // one-id-per-submission rule reaches recordings already sitting
                 // on devices rather than only new ones.
-                if (!(typeof (metadata === null || metadata === void 0 ? void 0 : metadata.uploadId) !== "string" || metadata.uploadId === "")) {
-                  _context11.n = 9;
+                if (!(typeof ((_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId) !== "string" || metadata.uploadId === "")) {
+                  _context10.n = 9;
                   break;
                 }
-                backfilled = createUploadId();
-                _context11.n = 8;
-                return this._setMetadata(id, _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
+                backfilled = createUploadId(); // The local variable is replaced, not just the stored row.
+                // Guarding the assignment on `metadata` being truthy left a
+                // row that had no metadata at all still passing `undefined`
+                // into this first attempt: the upload minted a *different*
+                // id, and the next drain — now reading the persisted one —
+                // could not resume the partial that first attempt left on
+                // the server. The backfill has to reach the attempt it was
+                // written for, not only the one after it.
+                metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
                   uploadId: backfilled
-                }));
+                });
+                _context10.n = 8;
+                return this._setMetadata(id, metadata);
               case 8:
-                if (metadata) {
-                  metadata.uploadId = backfilled;
-                }
               case 9:
                 if (!item.held) {
-                  _context11.n = 10;
+                  _context10.n = 10;
                   break;
                 }
-                return _context11.a(3, 24);
+                return _context10.a(3, 24);
               case 10:
                 if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context11.n = 12;
+                  _context10.n = 12;
                   break;
                 }
-                _context11.n = 11;
+                _context10.n = 11;
                 return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
               case 11:
-                return _context11.a(3, 24);
+                return _context10.a(3, 24);
               case 12:
                 if (!(item.lastAttempt !== null)) {
-                  _context11.n = 13;
+                  _context10.n = 13;
                   break;
                 }
                 delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                 if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context11.n = 13;
+                  _context10.n = 13;
                   break;
                 }
-                return _context11.a(3, 24);
+                return _context10.a(3, 24);
               case 13:
-                _context11.p = 13;
-                _context11.n = 14;
+                _context10.p = 13;
+                _context10.n = 14;
                 return uploadWithPriority({
                   blob: audioBlob,
                   fileName: fileName,
@@ -15234,7 +15288,7 @@
                   instanceId: instanceId
                 });
               case 14:
-                result = _context11.v;
+                result = _context10.v;
                 // Set here, the moment the bytes are known to have landed —
                 // not at the end of the block. Setting it last made the
                 // `if (uploaded)` guard below unreachable: everything that
@@ -15254,11 +15308,11 @@
                   metadata: metadata,
                   formFields: formFields,
                   fileName: fileName,
-                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                  durationMs: (_metadata$durationMs = metadata === null || metadata === void 0 ? void 0 : metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                  mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || audioBlob.type || "",
+                  durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
                   language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
-                  contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
-                  calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
+                  contributorId: ((_metadata4 = metadata) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.env) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.identifiers) === null || _metadata4 === void 0 ? void 0 : _metadata4.visitorId) || "",
+                  calibrationApplied: !!((_metadata5 = metadata) !== null && _metadata5 !== void 0 && _metadata5.calibration)
                 }); // Always emitted. A format this client cannot name is
                 // reported as `unknown` rather than suppressing the event:
                 // `starmus:complete` is the boundary before any server-side
@@ -15272,17 +15326,17 @@
                     submissionId: id,
                     instanceId: instanceId,
                     fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
+                    mimeType: ((_metadata6 = metadata) === null || _metadata6 === void 0 ? void 0 : _metadata6.mimeType) || audioBlob.type || "",
+                    captureProfile: ((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.captureProfile) || null
                   });
                 }
-                _context11.n = 21;
+                _context10.n = 21;
                 break;
               case 15:
-                _context11.p = 15;
-                _t = _context11.v;
+                _context10.p = 15;
+                _t = _context10.v;
                 if (!uploaded) {
-                  _context11.n = 17;
+                  _context10.n = 17;
                   break;
                 }
                 // Reaching here after a successful transfer means the
@@ -15292,86 +15346,86 @@
                 // next drain does not upload it again.
                 _msg = _t && _t.message ? _t.message : String(_t);
                 console.error("[Offline] Uploaded, but completion failed:", id, _msg);
-                _context11.n = 16;
+                _context10.n = 16;
                 return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg));
               case 16:
-                return _context11.a(3, 24);
+                return _context10.a(3, 24);
               case 17:
                 msg = _t && _t.message ? _t.message : String(_t);
                 nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                 if (!nonRetryable) {
-                  _context11.n = 19;
+                  _context10.n = 19;
                   break;
                 }
-                _context11.n = 18;
+                _context10.n = 18;
                 return this._hold(id, "Upload rejected and not retryable: ".concat(msg));
               case 18:
-                _context11.n = 20;
+                _context10.n = 20;
                 break;
               case 19:
                 nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context11.n = 20;
+                _context10.n = 20;
                 return this._updateRetry(id, nextRetryCount, msg);
               case 20:
-                return _context11.a(3, 24);
+                return _context10.a(3, 24);
               case 21:
-                _context11.p = 21;
-                _context11.n = 22;
+                _context10.p = 21;
+                _context10.n = 22;
                 return this.remove(id);
               case 22:
-                _context11.n = 24;
+                _context10.n = 24;
                 break;
               case 23:
-                _context11.p = 23;
-                _t2 = _context11.v;
+                _context10.p = 23;
+                _t2 = _context10.v;
                 _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
                 console.error("[Offline] Uploaded but could not clear the entry:", id, _msg2);
-                _context11.n = 24;
+                _context10.n = 24;
                 return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg2));
               case 24:
-                _context11.n = 7;
+                _context10.n = 7;
                 break;
               case 25:
-                _context11.n = 27;
+                _context10.n = 27;
                 break;
               case 26:
-                _context11.p = 26;
-                _t3 = _context11.v;
+                _context10.p = 26;
+                _t3 = _context10.v;
                 _iterator2.e(_t3);
               case 27:
-                _context11.p = 27;
+                _context10.p = 27;
                 _iterator2.f();
-                return _context11.f(27);
+                return _context10.f(27);
               case 28:
-                _context11.n = 30;
+                _context10.n = 30;
                 break;
               case 29:
-                _context11.p = 29;
-                _t4 = _context11.v;
+                _context10.p = 29;
+                _t4 = _context10.v;
                 console.error("[Offline] Queue fatal:", _t4);
               case 30:
-                _context11.p = 30;
+                _context10.p = 30;
                 this.isProcessing = false;
-                _context11.p = 31;
-                _context11.n = 32;
+                _context10.p = 31;
+                _context10.n = 32;
                 return this._getNextProcessDelay();
               case 32:
-                nextDelay = _context11.v;
+                nextDelay = _context10.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context11.n = 34;
+                _context10.n = 34;
                 break;
               case 33:
-                _context11.p = 33;
-                _t5 = _context11.v;
+                _context10.p = 33;
+                _t5 = _context10.v;
                 console.error("[Offline] Failed to schedule next queue processing:", _t5);
               case 34:
-                return _context11.f(30);
+                return _context10.f(30);
               case 35:
-                return _context11.a(2);
+                return _context10.a(2);
             }
-          }, _callee11, this, [[31, 33], [21, 23], [13, 15], [6, 26, 27, 28], [5, 29, 30, 35]]);
+          }, _callee10, this, [[31, 33], [21, 23], [13, 15], [6, 26, 27, 28], [5, 29, 30, 35]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -15457,39 +15511,39 @@
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11() {
           var pending, nextDelay, now, _iterator3, _step3, item, retryDelay, remainingDelay, _t6;
-          return _regenerator().w(function (_context12) {
-            while (1) switch (_context12.p = _context12.n) {
+          return _regenerator().w(function (_context11) {
+            while (1) switch (_context11.p = _context11.n) {
               case 0:
-                _context12.n = 1;
+                _context11.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context12.v.filter(function (item) {
+                pending = _context11.v.filter(function (item) {
                   return item.held !== true;
                 });
                 if (!(pending.length === 0)) {
-                  _context12.n = 2;
+                  _context11.n = 2;
                   break;
                 }
-                return _context12.a(2, null);
+                return _context11.a(2, null);
               case 2:
                 nextDelay = null;
                 now = Date.now();
                 _iterator3 = _createForOfIteratorHelper$1(pending);
-                _context12.p = 3;
+                _context11.p = 3;
                 _iterator3.s();
               case 4:
                 if ((_step3 = _iterator3.n()).done) {
-                  _context12.n = 7;
+                  _context11.n = 7;
                   break;
                 }
                 item = _step3.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context12.n = 5;
+                  _context11.n = 5;
                   break;
                 }
-                return _context12.a(2, 0);
+                return _context11.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -15497,23 +15551,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context12.n = 4;
+                _context11.n = 4;
                 break;
               case 7:
-                _context12.n = 9;
+                _context11.n = 9;
                 break;
               case 8:
-                _context12.p = 8;
-                _t6 = _context12.v;
+                _context11.p = 8;
+                _t6 = _context11.v;
                 _iterator3.e(_t6);
               case 9:
-                _context12.p = 9;
+                _context11.p = 9;
                 _iterator3.f();
-                return _context12.f(9);
+                return _context11.f(9);
               case 10:
-                return _context12.a(2, nextDelay);
+                return _context11.a(2, nextDelay);
             }
-          }, _callee12, this, [[3, 8, 9, 10]]);
+          }, _callee11, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -15611,26 +15665,26 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
-      return _regenerator().w(function (_context13) {
-        while (1) switch (_context13.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
+      return _regenerator().w(function (_context12) {
+        while (1) switch (_context12.n) {
           case 0:
             if (offlineQueue.db) {
-              _context13.n = 2;
+              _context12.n = 2;
               break;
             }
-            _context13.n = 1;
+            _context12.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context13.a(2, offlineQueue);
+            return _context12.a(2, offlineQueue);
         }
-      }, _callee13);
+      }, _callee12);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x16, _x17, _x18, _x19, _x20) {
+  function queueSubmission(_x13, _x14, _x15, _x16, _x17) {
     return _queueSubmission.apply(this, arguments);
   }
 
@@ -15643,18 +15697,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context14) {
-        while (1) switch (_context14.n) {
+      return _regenerator().w(function (_context13) {
+        while (1) switch (_context13.n) {
           case 0:
-            _context14.n = 1;
+            _context13.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context14.v;
-            return _context14.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context13.v;
+            return _context13.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee14);
+      }, _callee13);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -15670,22 +15724,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
       var q, list;
-      return _regenerator().w(function (_context15) {
-        while (1) switch (_context15.n) {
+      return _regenerator().w(function (_context14) {
+        while (1) switch (_context14.n) {
           case 0:
-            _context15.n = 1;
+            _context14.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context15.v;
-            _context15.n = 2;
+            q = _context14.v;
+            _context14.n = 2;
             return q.getAll();
           case 2:
-            list = _context15.v;
-            return _context15.a(2, list.length);
+            list = _context14.v;
+            return _context14.a(2, list.length);
         }
-      }, _callee15);
+      }, _callee14);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -15702,18 +15756,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
       var q;
-      return _regenerator().w(function (_context16) {
-        while (1) switch (_context16.n) {
+      return _regenerator().w(function (_context15) {
+        while (1) switch (_context15.n) {
           case 0:
-            _context16.n = 1;
+            _context15.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context16.v;
-            return _context16.a(2, q.getHeld());
+            q = _context15.v;
+            return _context15.a(2, q.getHeld());
         }
-      }, _callee16);
+      }, _callee15);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -15728,22 +15782,22 @@
    * @returns {Promise<void>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
       var q;
-      return _regenerator().w(function (_context17) {
-        while (1) switch (_context17.n) {
+      return _regenerator().w(function (_context16) {
+        while (1) switch (_context16.n) {
           case 0:
-            _context17.n = 1;
+            _context16.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context17.v;
-            return _context17.a(2, q.usage());
+            q = _context16.v;
+            return _context16.a(2, q.usage());
         }
-      }, _callee17);
+      }, _callee16);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
-  function releaseHeldSubmission(_x21) {
+  function releaseHeldSubmission(_x18) {
     return _releaseHeldSubmission.apply(this, arguments);
   }
 
@@ -15758,22 +15812,22 @@
    * @returns {Promise<void>}
    */
   function _releaseHeldSubmission() {
-    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18(id) {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17(id) {
       var q;
-      return _regenerator().w(function (_context18) {
-        while (1) switch (_context18.n) {
+      return _regenerator().w(function (_context17) {
+        while (1) switch (_context17.n) {
           case 0:
-            _context18.n = 1;
+            _context17.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context18.v;
-            return _context18.a(2, q.releaseHold(id));
+            q = _context17.v;
+            return _context17.a(2, q.releaseHold(id));
         }
-      }, _callee18);
+      }, _callee17);
     }));
     return _releaseHeldSubmission.apply(this, arguments);
   }
-  function discardHeldSubmission(_x22, _x23) {
+  function discardHeldSubmission(_x19, _x20) {
     return _discardHeldSubmission.apply(this, arguments);
   }
 
@@ -15783,18 +15837,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _discardHeldSubmission() {
-    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19(id, reason) {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18(id, reason) {
       var q;
-      return _regenerator().w(function (_context19) {
-        while (1) switch (_context19.n) {
+      return _regenerator().w(function (_context18) {
+        while (1) switch (_context18.n) {
           case 0:
-            _context19.n = 1;
+            _context18.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context19.v;
-            return _context19.a(2, q.discardHeld(id, reason));
+            q = _context18.v;
+            return _context18.a(2, q.discardHeld(id, reason));
         }
-      }, _callee19);
+      }, _callee18);
     }));
     return _discardHeldSubmission.apply(this, arguments);
   }
@@ -16004,7 +16058,15 @@
               // where a retry over a bad link is likeliest and a stable identity
               // matters most.
               metadata = {
-                uploadId: createUploadId(),
+                // Minted inside the try below, not here. `createUploadId()` throws
+                // on a runtime with no secure randomness — an insecure origin on an
+                // old Android is exactly such a runtime, and exactly the device
+                // this package exists for — and a throw out here landed outside
+                // every handler, rejecting the submit with the captured blob never
+                // queued and no error dispatched. ADR-011 keeps the material
+                // whatever else breaks, so the record the queue needs is built
+                // first and the part that can fail happens where it is caught.
+                uploadId: null,
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 calibration: calibration.complete ? {
                   gain: calibration.gain,
@@ -16030,6 +16092,7 @@
               // needs sending again.
               transferred = false;
               _context.p = 2;
+              metadata.uploadId = createUploadId();
               if (navigator.onLine) {
                 _context.n = 3;
                 break;
@@ -16129,17 +16192,26 @@
               // take. The asset is on the server; what failed is this
               // client's handling afterwards, and that is reported rather
               // than retried.
-              console.error("[Core] Uploaded, but could not complete:", message);
+              //
+              // The upload identifier goes with the report. Without it the
+              // only record of which asset this was died with the page: the
+              // bytes are on the server under an id nothing local still
+              // names, and nobody can reconcile the two.
+              console.error("[Core] Uploaded, but could not complete:", message, {
+                uploadId: metadata.uploadId
+              });
               sparxstarIntegration.reportError("post_upload_failure", {
                 error: message,
                 instanceId: instanceId,
+                uploadId: metadata.uploadId,
                 tier: stateEnv.tier
               });
               store.dispatch({
                 type: "starmus/error",
                 error: {
                   message: message,
-                  retryable: false
+                  retryable: false,
+                  uploadId: metadata.uploadId
                 }
               });
               return _context.a(2);
@@ -17006,7 +17078,11 @@
    * @property {CaptureProfileName} profile
    * @property {{sampleRate: number|null, channelCount: number|null}} requested
    * @property {{sampleRate?: number, channelCount?: number}} actual
-   * @property {boolean} attained    True only when every constrained value was verified within its limit.
+   * @property {boolean|null} attained True only when every constrained value was
+   *   verified within its limit; `false` when one was missed; `null` when the
+   *   question does not apply, which is the `import` profile's case — nothing was
+   *   captured, so nothing was measured, and `false` would claim a constraint was
+   *   missed rather than never posed.
    * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
    * @property {string[]} unverified Constrained values the device did not report at all.
    */

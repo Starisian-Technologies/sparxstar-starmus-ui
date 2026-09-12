@@ -20,8 +20,25 @@ const requiredFiles = [
     "src/js/starmus-ui.js",
     "src/js/starmus-core.js",
     "src/js/starmus-main.js",
+    "src/js/starmus-capture-profiles.js",
+    "src/js/starmus-completion-event.js",
+    "src/js/starmus-transcript-provider.js",
     "src/js/appmode/starmus-audio.js",
 ];
+
+// Source files scanned by the cross-cutting checks below.
+function allSourceJs(dir = "src/js") {
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) {
+            out.push(...allSourceJs(full));
+        } else if (entry.name.endsWith(".js")) {
+            out.push(full);
+        }
+    }
+    return out;
+}
 
 let ok = true;
 
@@ -140,17 +157,118 @@ if (fs.existsSync(tusFile)) {
         console.log('✅ TUS checksumAlgorithm is "sha256"');
     }
 
-    // Verify uploadDirect is NOT exported (full-file uploads violate chunked-only constraint).
-    // The function may remain as a module-private internal fallback, but it must never
-    // be part of the public API surface that external callers can invoke directly.
-    const exportDirectPattern = /export\s+(?:async\s+)?function\s+uploadDirect\b/;
-    if (exportDirectPattern.test(tusContent)) {
+    // Verify no full-file upload path exists at all — not merely that it is
+    // unexported. The capture-to-ingestion contract forbids a full-file
+    // endpoint on both sides, and ADR-038 forbids "any re-upload-from-scratch
+    // of a partially transferred original". A module-private fallback still
+    // re-sends the whole recording over the link that just failed, so hiding
+    // it from the public API is not compliance.
+    const anyDirectPattern = /\bfunction\s+uploadDirect\b|\buploadDirect\s*=/;
+    if (anyDirectPattern.test(tusContent) || /directUpload/.test(tusContent)) {
         console.log(
-            "❌ starmus-tus.js: uploadDirect must not be exported. Full-file upload violates the chunked-only constraint (AGENTS.md: 'Full-file upload endpoint present' is a FAIL).",
+            "❌ starmus-tus.js: no full-file upload path may exist (uploadDirect / directUpload endpoint). Chunked, resumable transfer is the only path — capture-to-ingestion contract and ADR-038.",
         );
         ok = false;
     } else {
-        console.log("✅ No exported full-file upload endpoint (chunked-only constraint satisfied)");
+        console.log("✅ No full-file upload path (chunked-only constraint satisfied)");
+    }
+
+    // ADR-035 and the capture-to-ingestion contract: the capture profile
+    // travels with the asset. It was being assembled in starmus-core.js and
+    // then dropped before transmission, so it reached ingestion on no path.
+    if (!/captureProfile\s*:/.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: the capture profile must travel with the asset in upload metadata (ADR-035; AGENTS.md: 'An asset uploaded without its capture profile recorded' is a FAIL).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ Capture profile travels with the asset");
+    }
+
+    // A total-duration abort on a resumable upload ends every real upload on a
+    // 2G link before it finishes. Only a no-progress watchdog is admissible.
+    if (!/stallTimeoutMs/.test(tusContent)) {
+        console.log(
+            "❌ starmus-tus.js: the upload watchdog must be a no-progress (stall) bound, not a total-duration deadline.",
+        );
+        ok = false;
+    } else {
+        console.log("✅ Upload watchdog is a no-progress bound, not a deadline");
+    }
+}
+
+// ---- CHECK NO CMS REACH (ADR-034) ----
+// The capture package makes no CMS REST call, sends no CMS nonce, and reads no
+// CMS page global. The host injects the endpoint and any auth headers.
+{
+    const cmsPatterns = [
+        [/X-WP-Nonce/i, "CMS nonce header"],
+        [/wp-json/i, "CMS REST route"],
+        [/wpApiSettings|ajaxurl|wp\.apiFetch/i, "CMS page global"],
+    ];
+    let cmsClean = true;
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        for (const [pattern, label] of cmsPatterns) {
+            if (pattern.test(content)) {
+                console.log(`❌ ${file}: ${label} present. ADR-034 forbids CMS reach in this package.`);
+                cmsClean = false;
+                ok = false;
+            }
+        }
+    }
+    if (cmsClean) {
+        console.log("✅ No CMS reach (no CMS route, nonce, or page global)");
+    }
+}
+
+// ---- CHECK ONE HOME FOR CAPTURE CONSTRAINTS (ADR-035) ----
+// src/js/starmus-capture-profiles.js is the only module that may hold an audio
+// limit. A literal anywhere else is a second home for the same fact, which is
+// how the platform-wide ceiling ADR-035 removed got there in the first place.
+{
+    const limitPattern = /\b(sampleRate|channelCount|audioBitsPerSecond|bitsPerSecond)\s*:\s*\d/;
+    let oneHome = true;
+    for (const file of allSourceJs()) {
+        if (file.endsWith("starmus-capture-profiles.js")) {
+            continue;
+        }
+        if (limitPattern.test(fs.readFileSync(file, "utf8"))) {
+            console.log(
+                `❌ ${file}: audio limit literal outside src/js/starmus-capture-profiles.js. ADR-035: constraints belong to a named profile, and the profiles module is their one home.`,
+            );
+            oneHome = false;
+            ok = false;
+        }
+    }
+    if (oneHome) {
+        console.log("✅ Capture constraints have one home (starmus-capture-profiles.js)");
+    }
+}
+
+// ---- CHECK NO POST-SUBMISSION AUDIO MUTATION (ADR-039) ----
+// The preservation path never edits audio. Retake and discard are
+// pre-submission and belong to the recorder; trimming, splicing and any
+// "effective audio"/EDL mechanism exist nowhere in this package.
+{
+    const editPatterns = [
+        [/\bEditDecisionList\b|\bedit_decision_list\b|\bEDL\b/, "edit decision list"],
+        [/\bOfflineAudioContext\b/, "offline render of captured audio"],
+        [/\btrimAudio\b|\bspliceAudio\b|\bcutAudio\b/, "audio edit helper"],
+    ];
+    let noEdit = true;
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        for (const [pattern, label] of editPatterns) {
+            if (pattern.test(content)) {
+                console.log(`❌ ${file}: ${label} present. ADR-039: no edit capability in the capture path.`);
+                noEdit = false;
+                ok = false;
+            }
+        }
+    }
+    if (noEdit) {
+        console.log("✅ No audio-edit capability (ADR-039)");
     }
 }
 

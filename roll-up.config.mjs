@@ -48,4 +48,22 @@ export default [
 
         plugins: sharedPlugins,
     },
+
+    // Live-transcript slot (ADR-038) — a separate bundle on purpose. It is a
+    // Tier A/B capability, and often supplied by the host's own engine, so a
+    // Tier C device must not download it with the recorder.
+    {
+        input: "src/js/starmus-transcript-provider.js",
+
+        output: {
+            file: "dist/starmus-transcript.js",
+            format: "iife",
+            name: "StarmusTranscript",
+            sourcemap: false,
+        },
+
+        external: [],
+
+        plugins: sharedPlugins,
+    },
 ];

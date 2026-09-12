@@ -3636,68 +3636,6 @@
 
   requireEs_array_concat();
 
-  var es_array_find = {};
-
-  var addToUnscopables;
-  var hasRequiredAddToUnscopables;
-
-  function requireAddToUnscopables () {
-  	if (hasRequiredAddToUnscopables) return addToUnscopables;
-  	hasRequiredAddToUnscopables = 1;
-  	var wellKnownSymbol = requireWellKnownSymbol();
-  	var create = requireObjectCreate();
-  	var defineProperty = requireObjectDefineProperty().f;
-
-  	var UNSCOPABLES = wellKnownSymbol('unscopables');
-  	var ArrayPrototype = Array.prototype;
-
-  	// Array.prototype[@@unscopables]
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
-  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
-  	    configurable: true,
-  	    value: create(null)
-  	  });
-  	}
-
-  	// add a key to Array.prototype[@@unscopables]
-  	addToUnscopables = function (key) {
-  	  ArrayPrototype[UNSCOPABLES][key] = true;
-  	};
-  	return addToUnscopables;
-  }
-
-  var hasRequiredEs_array_find;
-
-  function requireEs_array_find () {
-  	if (hasRequiredEs_array_find) return es_array_find;
-  	hasRequiredEs_array_find = 1;
-  	var $ = require_export();
-  	var $find = requireArrayIteration().find;
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	var FIND = 'find';
-  	var SKIPS_HOLES = true;
-
-  	// Shouldn't skip holes
-  	// eslint-disable-next-line es/no-array-prototype-find -- testing
-  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
-
-  	// `Array.prototype.find` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.find
-  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
-  	  find: function find(callbackfn /* , that = undefined */) {
-  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables(FIND);
-  	return es_array_find;
-  }
-
-  requireEs_array_find();
-
   var es_array_from = {};
 
   var iteratorClose;
@@ -3959,6 +3897,35 @@
   }
 
   requireEs_array_from();
+
+  var addToUnscopables;
+  var hasRequiredAddToUnscopables;
+
+  function requireAddToUnscopables () {
+  	if (hasRequiredAddToUnscopables) return addToUnscopables;
+  	hasRequiredAddToUnscopables = 1;
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var create = requireObjectCreate();
+  	var defineProperty = requireObjectDefineProperty().f;
+
+  	var UNSCOPABLES = wellKnownSymbol('unscopables');
+  	var ArrayPrototype = Array.prototype;
+
+  	// Array.prototype[@@unscopables]
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	if (ArrayPrototype[UNSCOPABLES] === undefined) {
+  	  defineProperty(ArrayPrototype, UNSCOPABLES, {
+  	    configurable: true,
+  	    value: create(null)
+  	  });
+  	}
+
+  	// add a key to Array.prototype[@@unscopables]
+  	addToUnscopables = function (key) {
+  	  ArrayPrototype[UNSCOPABLES][key] = true;
+  	};
+  	return addToUnscopables;
+  }
 
   var correctPrototypeGetter;
   var hasRequiredCorrectPrototypeGetter;
@@ -5200,32 +5167,6 @@
   }
 
   requireEs_object_entries();
-
-  var es_object_keys = {};
-
-  var hasRequiredEs_object_keys;
-
-  function requireEs_object_keys () {
-  	if (hasRequiredEs_object_keys) return es_object_keys;
-  	hasRequiredEs_object_keys = 1;
-  	var $ = require_export();
-  	var toObject = requireToObject();
-  	var nativeKeys = requireObjectKeys();
-  	var fails = requireFails();
-
-  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
-
-  	// `Object.keys` method
-  	// https://tc39.es/ecma262/#sec-object.keys
-  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
-  	  keys: function keys(it) {
-  	    return nativeKeys(toObject(it));
-  	  }
-  	});
-  	return es_object_keys;
-  }
-
-  requireEs_object_keys();
 
   var es_promise = {};
 
@@ -11689,12 +11630,20 @@
       retryDelays: [0, 2000, 4000],
       removeFingerprintOnSuccess: true,
       maxChunkRetries: 3,
-      requestTimeoutMs: 5000,
+      // A stall watchdog, not a deadline. The old code aborted the whole
+      // upload after 5 s, which on a 2G link ends every upload of a real
+      // recording before it finishes and then discards the transferred
+      // bytes — the opposite of what a resumable client is for. What is
+      // actually a fault is *no progress at all* for this long; a slow but
+      // moving transfer is the normal case here and is left alone.
+      stallTimeoutMs: 120000,
       endpoint: bootstrap.restUrl ? "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus") : "",
-      nonce: bootstrap.nonce || "",
+      // Host-injected. ADR-034: this package sends no CMS nonce and knows no
+      // CMS header name. Whatever the host's ingestion needs to authorize the
+      // transfer, the host supplies here.
+      headers: bootstrap.uploadHeaders && _typeof$9(bootstrap.uploadHeaders) === "object" ? bootstrap.uploadHeaders : {},
       endpoints: bootstrap.restUrl ? {
-        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus"),
-        directUpload: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/upload-fallback")
+        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus")
       } : {}
     };
     var globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
@@ -11743,24 +11692,8 @@
     throw new Error("Secure UUID generation is not available in this runtime");
   }
 
-  /* ---- Direct Upload (fallback) ---- */
-
-  /**
-   * Uploads a recording blob directly to the WordPress REST API using FormData.
-   * Used when TUS is unavailable or the endpoint is not configured.
-   *
-   * @param {Blob} blob - Audio blob
-   * @param {string} fileName - File name for the upload
-   * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
-   * @param {Object} [metadata={}] - Additional metadata
-   * @param {string} [instanceId=''] - Recorder instance ID
-   * @param {function} [onProgress] - Progress callback (loaded, total)
-   * @returns {Promise<Object>} Server response
-   */
-  function uploadDirect(_x2, _x3) {
-    return _uploadDirect.apply(this, arguments);
-  }
   /* ---- TUS Upload ---- */
+
   /**
    * Uploads a recording blob using the TUS resumable-upload protocol.
    *
@@ -11772,149 +11705,25 @@
    * @param {function} [onProgress] - Progress callback (bytesUploaded, bytesTotal)
    * @returns {Promise<Object>} Server response
    */
-  function _uploadDirect() {
-    _uploadDirect = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
-      var _cfg$endpoints;
-      var formFields,
-        metadata,
-        instanceId,
-        onProgress,
-        cfg,
-        nonce,
-        requestTimeoutMs,
-        endpoint,
-        fields,
-        fd,
-        uploadId,
-        _i,
-        _Object$entries,
-        _Object$entries$_i,
-        key,
-        val,
-        _args2 = arguments;
-      return _regenerator().w(function (_context2) {
-        while (1) switch (_context2.n) {
-          case 0:
-            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
-            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
-            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
-            onProgress = _args2.length > 5 ? _args2[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || "";
-            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000; // ADR-034: this package holds no CMS path. The host injects the endpoint
-            // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
-            // package silently CMS-coupled and contradicted its own architecture doc.
-            // Failing loudly is correct — a default that posts a speaker's recording
-            // to a guessed URL is worse than not uploading it.
-            endpoint = (_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload;
-            if (endpoint) {
-              _context2.n = 1;
-              break;
-            }
-            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
-          case 1:
-            fields = normalizeFormFields(formFields);
-            if (blob instanceof Blob) {
-              _context2.n = 2;
-              break;
-            }
-            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
-          case 2:
-            fd = new FormData();
-            uploadId = createUploadId();
-            fd.append("audio_file", blob, fileName);
-            fd.append("upload_uuid", uploadId);
-            for (_i = 0, _Object$entries = Object.entries(fields); _i < _Object$entries.length; _i++) {
-              _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2), key = _Object$entries$_i[0], val = _Object$entries$_i[1];
-              fd.append(key, String(val));
-            }
-            if (metadata.transcript) {
-              fd.append("transcription", metadata.transcript);
-            }
-            if (metadata.calibration) {
-              fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-            }
-            if (metadata.env) {
-              fd.append("_starmus_env", JSON.stringify(metadata.env));
-            }
-            if (metadata.tier) {
-              fd.append("tier", metadata.tier);
-            }
-            if (instanceId) {
-              fd.append("instanceId", instanceId);
-            }
-            return _context2.a(2, new Promise(function (resolve, reject) {
-              var xhr = new XMLHttpRequest();
-              var timeout = setTimeout(function () {
-                xhr.abort();
-                reject(new Error("Direct upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
-              xhr.upload.addEventListener("progress", function (e) {
-                if (onProgress && e.lengthComputable) {
-                  onProgress(e.loaded, e.total);
-                }
-              });
-              xhr.addEventListener("load", function () {
-                clearTimeout(timeout);
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    var _parsed$data, _parsed$data2;
-                    var parsed = JSON.parse(xhr.responseText);
-                    // Default successful HTTP responses to success: true, while
-                    // still allowing an explicit server-provided success value
-                    // (including false) to override the default.
-                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
-                    // The server's identifier wins over the client-generated
-                    // one, in whichever spelling it arrives. Checking only
-                    // `uploadId` and writing the local id into that field made
-                    // the local id outrank a server `upload_id` downstream,
-                    // because completion reads `uploadId` first.
-                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
-                      return typeof value === "string" && value.trim() !== "";
-                    }) || uploadId;
-                    resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
-                      success: success,
-                      uploadId: parsedUploadId
-                    }));
-                  } catch (_unused) {
-                    resolve({
-                      success: true,
-                      uploadId: uploadId,
-                      raw: xhr.responseText
-                    });
-                  }
-                } else {
-                  reject(new Error("Direct upload failed: HTTP ".concat(xhr.status, " \u2014 ").concat(xhr.responseText)));
-                }
-              });
-              xhr.addEventListener("error", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload network error"));
-              });
-              xhr.addEventListener("abort", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload aborted"));
-              });
-              xhr.open("POST", endpoint);
-              if (nonce) {
-                xhr.setRequestHeader("X-WP-Nonce", nonce);
-              }
-              xhr.send(fd);
-            }));
-        }
-      }, _callee2);
-    }));
-    return _uploadDirect.apply(this, arguments);
-  }
-  function uploadTus(_x4, _x5) {
+  function uploadTus(_x2, _x3) {
     return _uploadTus.apply(this, arguments);
   }
 
-  /* ---- Priority Upload (TUS → Direct fallback) ---- */
+  /* ---- Upload entry point ---- */
 
   /**
-   * Attempts TUS upload first; falls back to direct upload on failure.
-   * Wrapped in circuit breaker to prevent repeated hammering.
+   * Uploads a recording over the resumable chunked path, wrapped in the circuit
+   * breaker so a broken endpoint is not hammered.
+   *
+   * There is no second path. When this rejects, the caller keeps the recording:
+   * `starmus-core.js` and the offline queue both hold the blob and retry later,
+   * which is what ADR-011's unconditional capture requires and what resumption
+   * is for. The previous full-file fallback did the opposite — it discarded
+   * every transferred byte and re-sent the whole recording over the link that
+   * had just failed.
+   *
+   * The name is kept because it is this module's public surface; the priority
+   * it once expressed no longer has anything to rank.
    *
    * @param {Object} options - Upload options
    * @param {Blob} options.blob - Audio blob
@@ -11926,41 +11735,46 @@
    * @returns {Promise<Object>} Upload result
    */
   function _uploadTus() {
-    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(blob, fileName) {
-      var _cfg$endpoints2;
+    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
+      var _cfg$endpoints;
       var formFields,
         metadata,
         instanceId,
         _onProgress,
         cfg,
-        nonce,
         tusEndpoint,
         fields,
         uploadId,
         tusMetadata,
-        _i2,
-        _Object$entries2,
-        _Object$entries2$_i,
+        _i,
+        _Object$entries,
+        _Object$entries$_i,
         key,
         val,
         headers,
-        _args3 = arguments;
-      return _regenerator().w(function (_context3) {
-        while (1) switch (_context3.n) {
+        stallTimeoutMs,
+        _args2 = arguments;
+      return _regenerator().w(function (_context2) {
+        while (1) switch (_context2.n) {
           case 0:
-            formFields = _args3.length > 2 && _args3[2] !== undefined ? _args3[2] : {};
-            metadata = _args3.length > 3 && _args3[3] !== undefined ? _args3[3] : {};
-            instanceId = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : "";
-            _onProgress = _args3.length > 5 ? _args3[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || ""; // ADR-034: host-injected, never a CMS path held by this package.
-            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus);
+            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
+            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
+            _onProgress = _args2.length > 5 ? _args2[5] : undefined;
+            cfg = getConfig(); // ADR-034: host-injected, never a CMS path held by this package.
+            tusEndpoint = cfg.endpoint || ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.tus);
             if (tusEndpoint) {
-              _context3.n = 1;
+              _context2.n = 1;
               break;
             }
             throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
           case 1:
+            if (blob instanceof Blob) {
+              _context2.n = 2;
+              break;
+            }
+            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+          case 2:
             fields = normalizeFormFields(formFields);
             uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
@@ -11971,19 +11785,61 @@
               tier: sanitizeMetadata(metadata.tier || "C"),
               transcript: sanitizeMetadata(metadata.transcript || ""),
               calibration: sanitizeMetadata(metadata.calibration || ""),
-              env: sanitizeMetadata(metadata.env || "")
+              env: sanitizeMetadata(metadata.env || ""),
+              // ADR-035 and the capture-to-ingestion contract: the capture profile
+              // travels with the asset, so a later reader can tell whether a
+              // measurement taken from it is admissible. It was being built in
+              // starmus-core.js and then dropped here, which meant it reached
+              // ingestion on no path at all.
+              //
+              // The key *name* is owed jointly by both sides of that contract and is
+              // not this package's to settle, so this reuses the name already fixed
+              // by `starmus:complete` rather than inventing a second one. When the
+              // seam names the key, this changes with it.
+              captureProfile: sanitizeMetadata(metadata.captureProfile || ""),
+              captureAttainment: sanitizeMetadata(metadata.captureAttainment || "")
             }; // Merge form fields into TUS metadata
-            for (_i2 = 0, _Object$entries2 = Object.entries(fields); _i2 < _Object$entries2.length; _i2++) {
-              _Object$entries2$_i = _slicedToArray$1(_Object$entries2[_i2], 2), key = _Object$entries2$_i[0], val = _Object$entries2$_i[1];
+            for (_i = 0, _Object$entries = Object.entries(fields); _i < _Object$entries.length; _i++) {
+              _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2), key = _Object$entries$_i[0], val = _Object$entries$_i[1];
               tusMetadata[key] = sanitizeMetadata(val);
             }
-            headers = {};
-            if (nonce) {
-              headers["X-WP-Nonce"] = nonce;
-            }
-            return _context3.a(2, new Promise(function (resolve, reject) {
+
+            // Host-injected only (ADR-034). A CMS nonce header used to be set here.
+            headers = Object.assign({}, cfg.headers);
+            stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : 120000;
+            return _context2.a(2, new Promise(function (resolve, reject) {
               var settled = false;
-              var timeoutId = null;
+              var stallTimer = null;
+              function clearStallWatchdog() {
+                if (stallTimer) {
+                  clearTimeout(stallTimer);
+                  stallTimer = null;
+                }
+              }
+
+              /**
+               * Restart the no-progress window. Called once before `start()` and
+               * again on every progress event, so the deadline only ever fires when
+               * the transfer has genuinely stopped moving — not because the whole
+               * upload is taking a long time, which on these networks is normal.
+               *
+               * The abort deliberately leaves the TUS fingerprint in place
+               * (`removeFingerprintOnSuccess` only clears it on success), so the
+               * offline queue's next attempt resumes from the last acknowledged
+               * offset instead of re-sending the original from byte zero — which
+               * ADR-038 forbids.
+               */
+              function armStallWatchdog() {
+                clearStallWatchdog();
+                stallTimer = setTimeout(function () {
+                  if (settled) {
+                    return;
+                  }
+                  settled = true;
+                  upload.abort();
+                  reject(new Error("TUS_UPLOAD_STALLED: no progress for ".concat(stallTimeoutMs, "ms; resumable from the last acknowledged offset")));
+                }, stallTimeoutMs);
+              }
               var upload = new Upload(blob, {
                 endpoint: tusEndpoint,
                 chunkSize: cfg.chunkSize,
@@ -11993,25 +11849,27 @@
                 metadata: tusMetadata,
                 headers: headers,
                 onProgress: function onProgress(bytesUploaded, bytesTotal) {
+                  armStallWatchdog();
                   if (_onProgress) {
                     _onProgress(bytesUploaded, bytesTotal);
                   }
                 },
                 onSuccess: function onSuccess() {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
+                  // No storage URL is returned. `upload.url` is the TUS
+                  // resource handle; tus-js-client keeps it for resumption and
+                  // nothing here needs to hand it onward. ADR-038 keeps durable
+                  // storage URLs out of events, records and evidence fields —
+                  // assets are referenced by id — and the cheapest way to honor
+                  // that is not to emit a URL at all.
                   resolve({
                     success: true,
-                    url: upload.url,
                     uploadId: uploadId
                   });
                 },
                 onError: function onError(err) {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
                   console.error("[TUS] Upload error:", err);
                   sparxstarIntegration.reportError("tus_upload_error", {
@@ -12022,67 +11880,65 @@
                   reject(err);
                 }
               });
-              var requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
-              timeoutId = setTimeout(function () {
-                if (settled) {
-                  return;
-                }
-                settled = true;
-                upload.abort();
-                reject(new Error("TUS upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
+              armStallWatchdog();
               upload.start();
+            }));
+        }
+      }, _callee2);
+    }));
+    return _uploadTus.apply(this, arguments);
+  }
+  function uploadWithPriority(_x4) {
+    return _uploadWithPriority.apply(this, arguments);
+  }
+  function _uploadWithPriority() {
+    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(_ref) {
+      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress;
+      return _regenerator().w(function (_context3) {
+        while (1) switch (_context3.n) {
+          case 0:
+            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
+            return _context3.a(2, uploadCircuitBreaker.execute(function () {
+              return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
             }));
         }
       }, _callee3);
     }));
-    return _uploadTus.apply(this, arguments);
-  }
-  function uploadWithPriority(_x6) {
     return _uploadWithPriority.apply(this, arguments);
   }
-  function _uploadWithPriority() {
-    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(_ref) {
-      var _cfg$endpoints3;
-      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress, cfg, hasTusEndpoint;
-      return _regenerator().w(function (_context5) {
-        while (1) switch (_context5.n) {
-          case 0:
-            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
-            cfg = getConfig();
-            hasTusEndpoint = !!(cfg.endpoint || (_cfg$endpoints3 = cfg.endpoints) !== null && _cfg$endpoints3 !== void 0 && _cfg$endpoints3.tus);
-            return _context5.a(2, uploadCircuitBreaker.execute(/*#__PURE__*/_asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4() {
-              var _t2;
-              return _regenerator().w(function (_context4) {
-                while (1) switch (_context4.p = _context4.n) {
-                  case 0:
-                    if (!hasTusEndpoint) {
-                      _context4.n = 4;
-                      break;
-                    }
-                    _context4.p = 1;
-                    _context4.n = 2;
-                    return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
-                  case 2:
-                    return _context4.a(2, _context4.v);
-                  case 3:
-                    _context4.p = 3;
-                    _t2 = _context4.v;
-                    console.warn("[TUS] Falling back to direct upload:", _t2.message);
-                    sparxstarIntegration.reportError("tus_fallback_to_direct", {
-                      error: _t2.message,
-                      instanceId: instanceId
-                    });
-                  case 4:
-                    return _context4.a(2, uploadDirect(blob, fileName, formFields, metadata, instanceId, onProgress));
-                }
-              }, _callee4, null, [[1, 3]]);
-            }))));
-        }
-      }, _callee5);
-    }));
-    return _uploadWithPriority.apply(this, arguments);
+
+  var es_array_find = {};
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
   }
+
+  requireEs_array_find();
 
   var es_array_includes = {};
 
@@ -12122,6 +11978,32 @@
   }
 
   requireEs_array_includes();
+
+  var es_object_keys = {};
+
+  var hasRequiredEs_object_keys;
+
+  function requireEs_object_keys () {
+  	if (hasRequiredEs_object_keys) return es_object_keys;
+  	hasRequiredEs_object_keys = 1;
+  	var $ = require_export();
+  	var toObject = requireToObject();
+  	var nativeKeys = requireObjectKeys();
+  	var fails = requireFails();
+
+  	var FAILS_ON_PRIMITIVES = fails(function () { nativeKeys(1); });
+
+  	// `Object.keys` method
+  	// https://tc39.es/ecma262/#sec-object.keys
+  	$({ target: 'Object', stat: true, forced: FAILS_ON_PRIMITIVES }, {
+  	  keys: function keys(it) {
+  	    return nativeKeys(toObject(it));
+  	  }
+  	});
+  	return es_object_keys;
+  }
+
+  requireEs_object_keys();
 
   var es_string_includes = {};
 
@@ -12285,12 +12167,12 @@
    * arrived, or an empty string when the result carries none.
    *
    * This cannot tell a server-issued identifier from a client-generated one:
-   * `uploadDirect` already writes the client's UUID into `uploadId` when the
-   * server returns no identifier of its own, so by the time a result reaches
-   * here the two are indistinguishable. That fallback is deliberate — the same
-   * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
-   * handle rather than a guess — but this function does not verify the origin,
-   * and callers must not assume it did.
+   * the upload path resolves `uploadId` to the client's UUID when the server
+   * returns no identifier of its own, so by the time a result reaches here the
+   * two are indistinguishable. That fallback is deliberate — the same UUID
+   * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+   * rather than a guess — but this function does not verify the origin, and
+   * callers must not assume it did.
    *
    * @param {Object} result
    * @returns {string}
@@ -13386,7 +13268,7 @@
                 }
               }
             case 6:
-              _context.n = 14;
+              _context.n = 12;
               break;
             case 7:
               _context.p = 7;
@@ -13400,11 +13282,15 @@
                 fileSize: audioBlob.size
               });
               message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
-              if (!retryableUploadError) {
-                _context.n = 13;
-                break;
-              }
+              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message); // The recording is queued on every failure, retryable or not.
+              // Whether an error is worth retrying soon decides what the queue
+              // does next and what the contributor is told — it does not decide
+              // whether their recording survives. It used to: a misconfigured
+              // endpoint (`NO_UPLOAD_ENDPOINT`) classified as non-retryable
+              // dropped the blob on the floor with an error message. ADR-011
+              // keeps the material unconditionally, and ADR-038 forbids
+              // re-sending an original from scratch — both need the bytes still
+              // to be here.
               _context.p = 8;
               _context.n = 9;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
@@ -13423,6 +13309,16 @@
                   count: pending
                 });
               }
+              if (!retryableUploadError) {
+                // Held, but not something the queue will clear on its own.
+                store.dispatch({
+                  type: "starmus/error",
+                  error: {
+                    message: message,
+                    retryable: false
+                  }
+                });
+              }
               _context.n = 12;
               break;
             case 11:
@@ -13437,17 +13333,6 @@
                 }
               });
             case 12:
-              _context.n = 14;
-              break;
-            case 13:
-              store.dispatch({
-                type: "starmus/error",
-                error: {
-                  message: message,
-                  retryable: false
-                }
-              });
-            case 14:
               return _context.a(2);
           }
         }, _callee, null, [[8, 11], [2, 7]]);

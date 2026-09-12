@@ -14,10 +14,23 @@
 
 /**
  * @file starmus-tus.js
- * @version 6.7.0
- * @description TUS resumable-upload client with direct-upload fallback.
- * Integrates with the SPARXSTAR/WordPress REST API.
- * Upload chunk size is tier-optimised via sparxstarIntegration.
+ * @version 7.0.0
+ * @description Resumable chunked upload client. TUS only — there is no
+ * full-file path.
+ *
+ * The capture-to-ingestion contract fixes three things this module implements:
+ * resumable chunked transfer, a 512 KB chunk cap, and per-chunk SHA-256. It
+ * also forbids a full-file upload endpoint on both sides, because a full-file
+ * retry throws away everything already transferred on the networks this
+ * platform is built for — and ADR-038 forbids "any re-upload-from-scratch of a
+ * partially transferred original" outright. A failed upload is therefore
+ * queued and resumed, never restarted whole.
+ *
+ * The endpoint and any auth headers are injected by the host (ADR-034). This
+ * module holds no CMS path, no CMS nonce, and no CMS header name.
+ *
+ * Upload chunk size is tier-optimised via sparxstarIntegration. Adaptation is
+ * chunk size and scheduling only, never captured source quality (ADR-035).
  */
 
 "use strict";
@@ -90,15 +103,25 @@ function getConfig() {
         retryDelays: [0, 2000, 4000],
         removeFingerprintOnSuccess: true,
         maxChunkRetries: 3,
-        requestTimeoutMs: 5000,
+        // A stall watchdog, not a deadline. The old code aborted the whole
+        // upload after 5 s, which on a 2G link ends every upload of a real
+        // recording before it finishes and then discards the transferred
+        // bytes — the opposite of what a resumable client is for. What is
+        // actually a fault is *no progress at all* for this long; a slow but
+        // moving transfer is the normal case here and is left alone.
+        stallTimeoutMs: 120000,
         endpoint: bootstrap.restUrl
             ? `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`
             : "",
-        nonce: bootstrap.nonce || "",
+        // Host-injected. ADR-034: this package sends no CMS nonce and knows no
+        // CMS header name. Whatever the host's ingestion needs to authorize the
+        // transfer, the host supplies here.
+        headers: bootstrap.uploadHeaders && typeof bootstrap.uploadHeaders === "object"
+            ? bootstrap.uploadHeaders
+            : {},
         endpoints: bootstrap.restUrl
             ? {
                   tus: `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`,
-                  directUpload: `${bootstrap.restUrl.replace(/\/$/, "")}/upload-fallback`,
               }
             : {},
     };
@@ -153,138 +176,6 @@ function createUploadId() {
     throw new Error("Secure UUID generation is not available in this runtime");
 }
 
-/* ---- Direct Upload (fallback) ---- */
-
-/**
- * Uploads a recording blob directly to the WordPress REST API using FormData.
- * Used when TUS is unavailable or the endpoint is not configured.
- *
- * @param {Blob} blob - Audio blob
- * @param {string} fileName - File name for the upload
- * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
- * @param {Object} [metadata={}] - Additional metadata
- * @param {string} [instanceId=''] - Recorder instance ID
- * @param {function} [onProgress] - Progress callback (loaded, total)
- * @returns {Promise<Object>} Server response
- */
-async function uploadDirect(
-    blob,
-    fileName,
-    formFields = {},
-    metadata = {},
-    instanceId = "",
-    onProgress,
-) {
-    const cfg = getConfig();
-    const nonce = cfg.nonce || "";
-    const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
-        ? cfg.requestTimeoutMs
-        : 5000;
-    // ADR-034: this package holds no CMS path. The host injects the endpoint
-    // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
-    // package silently CMS-coupled and contradicted its own architecture doc.
-    // Failing loudly is correct — a default that posts a speaker's recording
-    // to a guessed URL is worse than not uploading it.
-    const endpoint = cfg.endpoints?.directUpload;
-    if (!endpoint) {
-        throw new Error(
-            "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
-        );
-    }
-    const fields = normalizeFormFields(formFields);
-
-    if (!(blob instanceof Blob)) {
-        throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
-    }
-
-    const fd = new FormData();
-    const uploadId = createUploadId();
-    fd.append("audio_file", blob, fileName);
-    fd.append("upload_uuid", uploadId);
-
-    for (const [key, val] of Object.entries(fields)) {
-        fd.append(key, String(val));
-    }
-
-    if (metadata.transcript) {
-        fd.append("transcription", metadata.transcript);
-    }
-    if (metadata.calibration) {
-        fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-    }
-    if (metadata.env) {
-        fd.append("_starmus_env", JSON.stringify(metadata.env));
-    }
-    if (metadata.tier) {
-        fd.append("tier", metadata.tier);
-    }
-    if (instanceId) {
-        fd.append("instanceId", instanceId);
-    }
-
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        const timeout = setTimeout(() => {
-            xhr.abort();
-            reject(new Error(`Direct upload timed out after ${requestTimeoutMs}ms`));
-        }, requestTimeoutMs);
-
-        xhr.upload.addEventListener("progress", (e) => {
-            if (onProgress && e.lengthComputable) {
-                onProgress(e.loaded, e.total);
-            }
-        });
-
-        xhr.addEventListener("load", () => {
-            clearTimeout(timeout);
-            if (xhr.status >= 200 && xhr.status < 300) {
-                try {
-                    const parsed = JSON.parse(xhr.responseText);
-                    // Default successful HTTP responses to success: true, while
-                    // still allowing an explicit server-provided success value
-                    // (including false) to override the default.
-                    const success = Object.prototype.hasOwnProperty.call(parsed, "success")
-                        ? parsed.success
-                        : true;
-                    // The server's identifier wins over the client-generated
-                    // one, in whichever spelling it arrives. Checking only
-                    // `uploadId` and writing the local id into that field made
-                    // the local id outrank a server `upload_id` downstream,
-                    // because completion reads `uploadId` first.
-                    const parsedUploadId =
-                        [
-                            parsed.uploadId,
-                            parsed.upload_id,
-                            parsed.data?.uploadId,
-                            parsed.data?.upload_id,
-                        ].find((value) => typeof value === "string" && value.trim() !== "") ||
-                        uploadId;
-                    resolve({ ...parsed, success, uploadId: parsedUploadId });
-                } catch {
-                    resolve({ success: true, uploadId, raw: xhr.responseText });
-                }
-            } else {
-                reject(new Error(`Direct upload failed: HTTP ${xhr.status} — ${xhr.responseText}`));
-            }
-        });
-
-        xhr.addEventListener("error", () => {
-            clearTimeout(timeout);
-            reject(new Error("Direct upload network error"));
-        });
-        xhr.addEventListener("abort", () => {
-            clearTimeout(timeout);
-            reject(new Error("Direct upload aborted"));
-        });
-
-        xhr.open("POST", endpoint);
-        if (nonce) {
-            xhr.setRequestHeader("X-WP-Nonce", nonce);
-        }
-        xhr.send(fd);
-    });
-}
-
 /* ---- TUS Upload ---- */
 
 /**
@@ -307,13 +198,15 @@ export async function uploadTus(
     onProgress,
 ) {
     const cfg = getConfig();
-    const nonce = cfg.nonce || "";
     // ADR-034: host-injected, never a CMS path held by this package.
     const tusEndpoint = cfg.endpoint || cfg.endpoints?.tus;
     if (!tusEndpoint) {
         throw new Error(
             "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default."
         );
+    }
+    if (!(blob instanceof Blob)) {
+        throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
     }
     const fields = normalizeFormFields(formFields);
     const uploadId = createUploadId();
@@ -328,6 +221,18 @@ export async function uploadTus(
         transcript: sanitizeMetadata(metadata.transcript || ""),
         calibration: sanitizeMetadata(metadata.calibration || ""),
         env: sanitizeMetadata(metadata.env || ""),
+        // ADR-035 and the capture-to-ingestion contract: the capture profile
+        // travels with the asset, so a later reader can tell whether a
+        // measurement taken from it is admissible. It was being built in
+        // starmus-core.js and then dropped here, which meant it reached
+        // ingestion on no path at all.
+        //
+        // The key *name* is owed jointly by both sides of that contract and is
+        // not this package's to settle, so this reuses the name already fixed
+        // by `starmus:complete` rather than inventing a second one. When the
+        // seam names the key, this changes with it.
+        captureProfile: sanitizeMetadata(metadata.captureProfile || ""),
+        captureAttainment: sanitizeMetadata(metadata.captureAttainment || ""),
     };
 
     // Merge form fields into TUS metadata
@@ -335,14 +240,50 @@ export async function uploadTus(
         tusMetadata[key] = sanitizeMetadata(val);
     }
 
-    const headers = {};
-    if (nonce) {
-        headers["X-WP-Nonce"] = nonce;
-    }
+    // Host-injected only (ADR-034). A CMS nonce header used to be set here.
+    const headers = Object.assign({}, cfg.headers);
+
+    const stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : 120000;
 
     return new Promise((resolve, reject) => {
         let settled = false;
-        let timeoutId = null;
+        let stallTimer = null;
+
+        function clearStallWatchdog() {
+            if (stallTimer) {
+                clearTimeout(stallTimer);
+                stallTimer = null;
+            }
+        }
+
+        /**
+         * Restart the no-progress window. Called once before `start()` and
+         * again on every progress event, so the deadline only ever fires when
+         * the transfer has genuinely stopped moving — not because the whole
+         * upload is taking a long time, which on these networks is normal.
+         *
+         * The abort deliberately leaves the TUS fingerprint in place
+         * (`removeFingerprintOnSuccess` only clears it on success), so the
+         * offline queue's next attempt resumes from the last acknowledged
+         * offset instead of re-sending the original from byte zero — which
+         * ADR-038 forbids.
+         */
+        function armStallWatchdog() {
+            clearStallWatchdog();
+            stallTimer = setTimeout(() => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                upload.abort();
+                reject(
+                    new Error(
+                        `TUS_UPLOAD_STALLED: no progress for ${stallTimeoutMs}ms; resumable from the last acknowledged offset`,
+                    ),
+                );
+            }, stallTimeoutMs);
+        }
+
         const upload = new tus.Upload(blob, {
             endpoint: tusEndpoint,
             chunkSize: cfg.chunkSize,
@@ -353,23 +294,26 @@ export async function uploadTus(
             headers,
 
             onProgress(bytesUploaded, bytesTotal) {
+                armStallWatchdog();
                 if (onProgress) {
                     onProgress(bytesUploaded, bytesTotal);
                 }
             },
 
             onSuccess() {
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                }
+                clearStallWatchdog();
                 settled = true;
-                resolve({ success: true, url: upload.url, uploadId });
+                // No storage URL is returned. `upload.url` is the TUS
+                // resource handle; tus-js-client keeps it for resumption and
+                // nothing here needs to hand it onward. ADR-038 keeps durable
+                // storage URLs out of events, records and evidence fields —
+                // assets are referenced by id — and the cheapest way to honor
+                // that is not to emit a URL at all.
+                resolve({ success: true, uploadId });
             },
 
             onError(err) {
-                if (timeoutId) {
-                    clearTimeout(timeoutId);
-                }
+                clearStallWatchdog();
                 settled = true;
                 console.error("[TUS] Upload error:", err);
                 sparxstarIntegration.reportError("tus_upload_error", {
@@ -381,26 +325,26 @@ export async function uploadTus(
             },
         });
 
-        const requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs)
-            ? cfg.requestTimeoutMs
-            : 5000;
-        timeoutId = setTimeout(() => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            upload.abort();
-            reject(new Error(`TUS upload timed out after ${requestTimeoutMs}ms`));
-        }, requestTimeoutMs);
+        armStallWatchdog();
         upload.start();
     });
 }
 
-/* ---- Priority Upload (TUS → Direct fallback) ---- */
+/* ---- Upload entry point ---- */
 
 /**
- * Attempts TUS upload first; falls back to direct upload on failure.
- * Wrapped in circuit breaker to prevent repeated hammering.
+ * Uploads a recording over the resumable chunked path, wrapped in the circuit
+ * breaker so a broken endpoint is not hammered.
+ *
+ * There is no second path. When this rejects, the caller keeps the recording:
+ * `starmus-core.js` and the offline queue both hold the blob and retry later,
+ * which is what ADR-011's unconditional capture requires and what resumption
+ * is for. The previous full-file fallback did the opposite — it discarded
+ * every transferred byte and re-sent the whole recording over the link that
+ * had just failed.
+ *
+ * The name is kept because it is this module's public surface; the priority
+ * it once expressed no longer has anything to rank.
  *
  * @param {Object} options - Upload options
  * @param {Blob} options.blob - Audio blob
@@ -419,22 +363,7 @@ export async function uploadWithPriority({
     instanceId = "",
     onProgress,
 }) {
-    const cfg = getConfig();
-    const hasTusEndpoint = !!(cfg.endpoint || cfg.endpoints?.tus);
-
-    return uploadCircuitBreaker.execute(async () => {
-        if (hasTusEndpoint) {
-            try {
-                return await uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
-            } catch (tusErr) {
-                console.warn("[TUS] Falling back to direct upload:", tusErr.message);
-                sparxstarIntegration.reportError("tus_fallback_to_direct", {
-                    error: tusErr.message,
-                    instanceId,
-                });
-            }
-        }
-
-        return uploadDirect(blob, fileName, formFields, metadata, instanceId, onProgress);
-    });
+    return uploadCircuitBreaker.execute(() =>
+        uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress),
+    );
 }

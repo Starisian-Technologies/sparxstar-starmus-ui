@@ -19,8 +19,17 @@
  * Bootstraps the recorder: state store, UEC integration, core submission logic,
  * UI bindings, recorder engine, offline queue, and metadata sync.
  *
- * The prosody engine, transcript controller, and Peaks.js waveform are NOT
- * bundled here — they are loaded separately by the consuming plugin.
+ * The paced reader and its transcript-sync controller are not here: they moved
+ * to the elicitation pacing package under ADR-036, and the reviewed transcript
+ * is ESU's record. Peaks.js and any waveform view of a stored recording are
+ * server-side products consumed elsewhere — this package computes a waveform
+ * only from a local, not-yet-uploaded capture blob, if at all (ADR-038).
+ *
+ * The live-transcript *slot* (ADR-038) is built as its own bundle,
+ * `dist/starmus-transcript.js`, and is not pulled in here. It is a Tier A/B
+ * capability and an optional one — a Tier C device, which has no microphone
+ * surface at all, must not pay to download it. A host that wants a live draft
+ * loads that bundle and reads `window.StarmusTranscript`.
  */
 
 "use strict";

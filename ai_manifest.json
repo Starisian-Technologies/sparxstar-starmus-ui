@@ -12,7 +12,6 @@
         { "symbol": "initOffline",           "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "queueSubmission",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "getOfflineQueue",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
-        { "symbol": "uploadDirect",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "uploadTus",             "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "uploadWithPriority",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "initAutoMetadata",      "type": "function", "owner": "Starisian", "path": "src/js/starmus-metadata-auto.js" },
@@ -20,6 +19,18 @@
         { "symbol": "EnhancedCalibration",   "type": "class",    "owner": "Starisian", "path": "src/js/starmus-enhanced-calibration.js" },
         { "symbol": "sparxstarIntegration",  "type": "object",   "owner": "Starisian", "path": "src/js/starmus-sparxstar-integration.js" },
         { "symbol": "exposePeaksBridge",     "type": "function", "owner": "Starisian", "path": "src/js/starmus-integrator.js" },
-        { "symbol": "SmartAudioPlayer",      "type": "class",    "owner": "Starisian", "path": "src/js/appmode/starmus-audio.js" }
+        { "symbol": "SmartAudioPlayer",      "type": "class",    "owner": "Starisian", "path": "src/js/appmode/starmus-audio.js" },
+        { "symbol": "CAPTURE_PROFILES",      "type": "constant", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "resolveCaptureProfile", "type": "function", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },
+        { "symbol": "buildCompletionDetail", "type": "function", "owner": "Starisian", "path": "src/js/starmus-completion-event.js" },
+        { "symbol": "emitCompletionEvent",   "type": "function", "owner": "Starisian", "path": "src/js/starmus-completion-event.js" },
+        { "symbol": "resolveUploadFormat",   "type": "function", "owner": "Starisian", "path": "src/js/starmus-completion-event.js" },
+        { "symbol": "resolveUploadId",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-completion-event.js" },
+        { "symbol": "openTranscriptSlot",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "registerTranscriptProvider", "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "clearTranscriptProviders",   "type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "createBrowserSpeechProvider","type": "function", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "TRANSCRIPT_AUTHORITY",  "type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" },
+        { "symbol": "DEFAULT_MAX_PROVIDER_MS","type": "constant", "owner": "Starisian", "path": "src/js/starmus-transcript-provider.js" }
     ]
 }

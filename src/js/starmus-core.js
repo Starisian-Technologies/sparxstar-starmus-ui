@@ -271,37 +271,46 @@ export function initCore(store, instanceId, env) {
             const message = error && error.message ? error.message : String(error);
             const retryableUploadError =
                 !navigator.onLine ||
-                /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
+                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
                     message,
                 );
 
-            if (retryableUploadError) {
-                try {
-                    const submissionId = await queueSubmission(
-                        instanceId,
-                        audioBlob,
-                        fileName,
-                        formFields,
-                        metadata,
-                    );
-                    store.dispatch({ type: "starmus/submit-queued", submissionId });
-                    const pending = await getPendingCount();
-                    if (window.CommandBus) {
-                        window.CommandBus.dispatch("starmus/offline/queue_updated", {
-                            count: pending,
-                        });
-                    }
-                } catch (queueError) {
-                    console.error("[Core] Offline queue failed:", queueError);
-                    store.dispatch({
-                        type: "starmus/error",
-                        error: { message: "Upload failed completely.", retryable: false },
+            // The recording is queued on every failure, retryable or not.
+            // Whether an error is worth retrying soon decides what the queue
+            // does next and what the contributor is told — it does not decide
+            // whether their recording survives. It used to: a misconfigured
+            // endpoint (`NO_UPLOAD_ENDPOINT`) classified as non-retryable
+            // dropped the blob on the floor with an error message. ADR-011
+            // keeps the material unconditionally, and ADR-038 forbids
+            // re-sending an original from scratch — both need the bytes still
+            // to be here.
+            try {
+                const submissionId = await queueSubmission(
+                    instanceId,
+                    audioBlob,
+                    fileName,
+                    formFields,
+                    metadata,
+                );
+                store.dispatch({ type: "starmus/submit-queued", submissionId });
+                const pending = await getPendingCount();
+                if (window.CommandBus) {
+                    window.CommandBus.dispatch("starmus/offline/queue_updated", {
+                        count: pending,
                     });
                 }
-            } else {
+                if (!retryableUploadError) {
+                    // Held, but not something the queue will clear on its own.
+                    store.dispatch({
+                        type: "starmus/error",
+                        error: { message, retryable: false },
+                    });
+                }
+            } catch (queueError) {
+                console.error("[Core] Offline queue failed:", queueError);
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message, retryable: false },
+                    error: { message: "Upload failed completely.", retryable: false },
                 });
             }
         }

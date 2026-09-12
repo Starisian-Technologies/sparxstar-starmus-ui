@@ -92,12 +92,12 @@ function readContributorConsent() {
  * arrived, or an empty string when the result carries none.
  *
  * This cannot tell a server-issued identifier from a client-generated one:
- * `uploadDirect` already writes the client's UUID into `uploadId` when the
- * server returns no identifier of its own, so by the time a result reaches
- * here the two are indistinguishable. That fallback is deliberate — the same
- * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
- * handle rather than a guess — but this function does not verify the origin,
- * and callers must not assume it did.
+ * the upload path resolves `uploadId` to the client's UUID when the server
+ * returns no identifier of its own, so by the time a result reaches here the
+ * two are indistinguishable. That fallback is deliberate — the same UUID
+ * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+ * rather than a guess — but this function does not verify the origin, and
+ * callers must not assume it did.
  *
  * @param {Object} result
  * @returns {string}

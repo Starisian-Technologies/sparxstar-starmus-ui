@@ -59,7 +59,20 @@ export function isNonRetryableUploadFailure(message) {
         return false;
     }
 
-    return /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(msg);
+    const status = /(?:response code|status|HTTP)\D{0,3}(4\d\d)/i.exec(msg);
+    if (status) {
+        // Not every 4xx is the server's final word. 408 Request Timeout and 425
+        // Too Early describe a request that did not complete in time, and 429
+        // Too Many Requests is a server explicitly asking for the retry this
+        // would refuse to make — on a shared or rate-limited connection it is
+        // an ordinary occurrence, and holding a recording on the first one
+        // strands it waiting for a person over a wait the queue could have sat
+        // out on its own.
+        const transient = new Set([408, 425, 429]);
+        return !transient.has(Number(status[1]));
+    }
+
+    return /Invalid JSON|QuotaExceeded/i.test(msg);
 }
 
 const CONFIG = {
@@ -1341,9 +1354,13 @@ class OfflineQueue {
                 // alone here and then silently re-identified on every attempt —
                 // a different fingerprint each time, never able to resume the
                 // partial the previous attempt left on the server.
-                // Set when a metadata write did not land because this drain no
-                // longer holds the row.
-                let lostClaim = false;
+                // Set when the upload id could not be written back, because
+                // this drain no longer holds the row. Named for what it means
+                // rather than for the lease, so it cannot be confused with
+                // `claimLost` below, which tracks ownership during the transfer
+                // itself — two similarly named booleans in one function is how
+                // the next edit goes wrong.
+                let uploadIdUnrecorded = false;
 
                 try {
                     // Canonicalised, not merely accepted. `isUploadId()` allows
@@ -1356,7 +1373,7 @@ class OfflineQueue {
                     if (isUploadId(storedId) && storedId !== storedId.trim()) {
                         metadata = { ...metadata, uploadId: storedId.trim() };
                         if (!(await this._setMetadata(id, metadata, claimToken))) {
-                            lostClaim = true;
+                            uploadIdUnrecorded = true;
                         }
                     }
 
@@ -1371,7 +1388,7 @@ class OfflineQueue {
                         // first attempt had left on the server.
                         metadata = { ...(metadata || {}), uploadId: backfilled };
                         if (!(await this._setMetadata(id, metadata, claimToken))) {
-                            lostClaim = true;
+                            uploadIdUnrecorded = true;
                         }
                         debugLog("[Offline] Backfilled upload id for legacy entry:", id);
                     }
@@ -1398,7 +1415,7 @@ class OfflineQueue {
                 // server-side resources rather than the same one, and the
                 // platform would receive the same take twice — paid for twice
                 // out of the contributor's data. The row is left to its owner.
-                if (lostClaim) {
+                if (uploadIdUnrecorded) {
                     debugLog("[Offline] Lease lapsed before the upload id was stored:", id);
                     continue;
                 }

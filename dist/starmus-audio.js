@@ -2820,7 +2820,7 @@
       return out;
     }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment2;
+      var _action$attainment$pr, _action$attainment, _action$attainment2, _state$submission3;
       if (!action || !action.type) {
         return state;
       }
@@ -2869,8 +2869,19 @@
             // carries `uploadId`, and returning that to a submittable state
             // would invite a second upload of an asset the server has.
             var submissionFailed = state.status === "submitting" && errObj.retryable === false && !errObj.uploadId;
+
+            // The transfer succeeded and the handling after it did not.
+            //
+            // Left as `submitting`, this was the same trap by another door:
+            // "Uploading…" forever over an upload that finished minutes
+            // ago, with no request running and no control enabled. The
+            // asset is on the server, so the honest terminal state is the
+            // delivered one — and it is the one that does not invite a
+            // second upload. The error travels with it, carrying the upload
+            // id the two sides are reconciled by.
+            var deliveredThenFailed = state.status === "submitting" && Boolean(errObj.uploadId);
             return merge(state, {
-              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : state.status,
+              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : state.status,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -2960,7 +2971,12 @@
           });
         case "starmus/recording-available":
           return merge(state, {
-            status: "ready_to_submit",
+            // An upload in flight keeps the UI it owns, exactly as in
+            // `file-attached`. Flipping to `ready_to_submit` here
+            // re-enabled submit during a running transfer and allowed a
+            // second one alongside it; the superseded handling returns
+            // this take to submittable once the first upload settles.
+            status: state.status === "submitting" ? state.status : "ready_to_submit",
             // As in `file-attached`: a recording that arrives while an
             // upload is still running replaces the source under it, so
             // that upload's result no longer describes what is here.
@@ -3096,9 +3112,20 @@
             // Which submission is in flight. The file input stays usable
             // during an upload, so without this a completion could land
             // on a source it never uploaded.
-            submission: merge(state.submission, {
-              activeId: action.submissionId || null
-            })
+            //
+            // Replaced outright rather than merged. A `superseded` flag
+            // left over from a previous submission made the *next* one
+            // settle down the superseded path: a contributor whose first
+            // upload could not be queued, who then attached another file
+            // and submitted it successfully, was told it was still
+            // waiting to be sent. The progress and queued markers belong
+            // to the finished attempt for the same reason.
+            submission: {
+              progress: 0,
+              isQueued: false,
+              activeId: action.submissionId || null,
+              superseded: false
+            }
           });
         case "starmus/submit-progress":
           return merge(state, {
@@ -3154,6 +3181,22 @@
             });
           }
         case "starmus/submit-queued":
+          // The recording that was queued is the one that was in flight,
+          // which is not what is on screen when the source has been
+          // replaced. Reporting "Queued" over the new attachment claimed
+          // the platform was holding a file it had never been given, and
+          // disabled the control that would have sent it. The queue entry
+          // for the earlier recording stands either way.
+          if (((_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.superseded) === true) {
+            return merge(state, {
+              status: "ready_to_submit",
+              submission: {
+                progress: 0,
+                isQueued: false,
+                activeId: null
+              }
+            });
+          }
           return merge(state, {
             status: "complete",
             submission: {
@@ -14393,7 +14436,11 @@
     // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
     // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
     // was written to exclude.
-    if (type.includes("audio/aac") || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
+    // The media type is matched as a whole token too. `includes("audio/aac")`
+    // is also true of `audio/aacp` — HE-AAC, the profile this branch exists to
+    // exclude — so the substring test reported the very codec the token-boundary
+    // fix above was written to keep out, by the other half of the condition.
+    if (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
       return "aac-lc";
     }
 
@@ -14625,6 +14672,146 @@
 
   requireEs_array_map();
 
+  var es_number_constructor = {};
+
+  var thisNumberValue;
+  var hasRequiredThisNumberValue;
+
+  function requireThisNumberValue () {
+  	if (hasRequiredThisNumberValue) return thisNumberValue;
+  	hasRequiredThisNumberValue = 1;
+  	var uncurryThis = requireFunctionUncurryThis();
+
+  	// `thisNumberValue` abstract operation
+  	// https://tc39.es/ecma262/#sec-thisnumbervalue
+  	thisNumberValue = uncurryThis(1.1.valueOf);
+  	return thisNumberValue;
+  }
+
+  var hasRequiredEs_number_constructor;
+
+  function requireEs_number_constructor () {
+  	if (hasRequiredEs_number_constructor) return es_number_constructor;
+  	hasRequiredEs_number_constructor = 1;
+  	var $ = require_export();
+  	var IS_PURE = requireIsPure();
+  	var DESCRIPTORS = requireDescriptors();
+  	var globalThis = requireGlobalThis();
+  	var path = requirePath();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var isForced = requireIsForced();
+  	var hasOwn = requireHasOwnProperty();
+  	var inheritIfRequired = requireInheritIfRequired();
+  	var isPrototypeOf = requireObjectIsPrototypeOf();
+  	var isSymbol = requireIsSymbol();
+  	var toPrimitive = requireToPrimitive();
+  	var fails = requireFails();
+  	var getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+  	var getOwnPropertyDescriptor = requireObjectGetOwnPropertyDescriptor().f;
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var thisNumberValue = requireThisNumberValue();
+  	var trim = requireStringTrim().trim;
+
+  	var NUMBER = 'Number';
+  	var NativeNumber = globalThis[NUMBER];
+  	var PureNumberNamespace = path[NUMBER];
+  	var NumberPrototype = NativeNumber.prototype;
+  	var TypeError = globalThis.TypeError;
+  	var stringSlice = uncurryThis(''.slice);
+  	var charCodeAt = uncurryThis(''.charCodeAt);
+
+  	// `ToNumeric` abstract operation
+  	// https://tc39.es/ecma262/#sec-tonumeric
+  	var toNumeric = function (value) {
+  	  var primValue = toPrimitive(value, 'number');
+  	  return typeof primValue == 'bigint' ? primValue : toNumber(primValue);
+  	};
+
+  	// `ToNumber` abstract operation
+  	// https://tc39.es/ecma262/#sec-tonumber
+  	var toNumber = function (argument) {
+  	  var it = toPrimitive(argument, 'number');
+  	  var first, third, radix, maxCode, digits, length, index, code;
+  	  if (isSymbol(it)) throw new TypeError('Cannot convert a Symbol value to a number');
+  	  if (typeof it == 'string' && it.length > 2) {
+  	    it = trim(it);
+  	    first = charCodeAt(it, 0);
+  	    if (first === 43 || first === 45) {
+  	      third = charCodeAt(it, 2);
+  	      if (third === 88 || third === 120) return NaN; // Number('+0x1') should be NaN, old V8 fix
+  	    } else if (first === 48) {
+  	      switch (charCodeAt(it, 1)) {
+  	        // fast equal of /^0b[01]+$/i
+  	        case 66:
+  	        case 98:
+  	          radix = 2;
+  	          maxCode = 49;
+  	          break;
+  	        // fast equal of /^0o[0-7]+$/i
+  	        case 79:
+  	        case 111:
+  	          radix = 8;
+  	          maxCode = 55;
+  	          break;
+  	        default:
+  	          return +it;
+  	      }
+  	      digits = stringSlice(it, 2);
+  	      length = digits.length;
+  	      for (index = 0; index < length; index++) {
+  	        code = charCodeAt(digits, index);
+  	        // parseInt parses a string to a first unavailable symbol
+  	        // but ToNumber should return NaN if a string contains unavailable symbols
+  	        if (code < 48 || code > maxCode) return NaN;
+  	      } return parseInt(digits, radix);
+  	    }
+  	  } return +it;
+  	};
+
+  	var FORCED = isForced(NUMBER, !NativeNumber(' 0o1') || !NativeNumber('0b1') || NativeNumber('+0x1'));
+
+  	var calledWithNew = function (dummy) {
+  	  // includes check on 1..constructor(foo) case
+  	  return isPrototypeOf(NumberPrototype, dummy) && fails(function () { thisNumberValue(dummy); });
+  	};
+
+  	// `Number` constructor
+  	// https://tc39.es/ecma262/#sec-number-constructor
+  	var NumberWrapper = function Number(value) {
+  	  var n = arguments.length < 1 ? 0 : NativeNumber(toNumeric(value));
+  	  return calledWithNew(this) ? inheritIfRequired(Object(n), this, NumberWrapper) : n;
+  	};
+
+  	NumberWrapper.prototype = NumberPrototype;
+  	if (FORCED && !IS_PURE) NumberPrototype.constructor = NumberWrapper;
+
+  	$({ global: true, constructor: true, wrap: true, forced: FORCED }, {
+  	  Number: NumberWrapper
+  	});
+
+  	// Use `internal/copy-constructor-properties` helper in `core-js@4`
+  	var copyConstructorProperties = function (target, source) {
+  	  for (var keys = DESCRIPTORS ? getOwnPropertyNames(source) : (
+  	    // ES3:
+  	    'MAX_VALUE,MIN_VALUE,NaN,NEGATIVE_INFINITY,POSITIVE_INFINITY,' +
+  	    // ES2015 (in case, if modules with ES2015 Number statics required before):
+  	    'EPSILON,MAX_SAFE_INTEGER,MIN_SAFE_INTEGER,isFinite,isInteger,isNaN,isSafeInteger,parseFloat,parseInt,' +
+  	    // ESNext
+  	    'fromString,range'
+  	  ).split(','), j = 0, key; keys.length > j; j++) {
+  	    if (hasOwn(source, key = keys[j]) && !hasOwn(target, key)) {
+  	      defineProperty(target, key, getOwnPropertyDescriptor(source, key));
+  	    }
+  	  }
+  	};
+
+  	if (IS_PURE && PureNumberNamespace) copyConstructorProperties(path[NUMBER], PureNumberNamespace);
+  	if (FORCED || IS_PURE) copyConstructorProperties(path[NUMBER], NativeNumber);
+  	return es_number_constructor;
+  }
+
+  requireEs_number_constructor();
+
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
    *
@@ -14671,7 +14858,19 @@
     if (stalled) {
       return false;
     }
-    return /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(msg);
+    var status = /(?:response code|status|HTTP)\D{0,3}(4\d\d)/i.exec(msg);
+    if (status) {
+      // Not every 4xx is the server's final word. 408 Request Timeout and 425
+      // Too Early describe a request that did not complete in time, and 429
+      // Too Many Requests is a server explicitly asking for the retry this
+      // would refuse to make — on a shared or rate-limited connection it is
+      // an ordinary occurrence, and holding a recording on the first one
+      // strands it waiting for a person over a wait the queue could have sat
+      // out on its own.
+      var transient = new Set([408, 425, 429]);
+      return !transient.has(Number(status[1]));
+    }
+    return /Invalid JSON|QuotaExceeded/i.test(msg);
   }
   var CONFIG = {
     dbName: "StarmusSubmissions",
@@ -16113,7 +16312,7 @@
                 _context16.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, lostClaim, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
+                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
@@ -16284,9 +16483,13 @@
                         // alone here and then silently re-identified on every attempt —
                         // a different fingerprint each time, never able to resume the
                         // partial the previous attempt left on the server.
-                        // Set when a metadata write did not land because this drain no
-                        // longer holds the row.
-                        lostClaim = false;
+                        // Set when the upload id could not be written back, because
+                        // this drain no longer holds the row. Named for what it means
+                        // rather than for the lease, so it cannot be confused with
+                        // `claimLost` below, which tracks ownership during the transfer
+                        // itself — two similarly named booleans in one function is how
+                        // the next edit goes wrong.
+                        uploadIdUnrecorded = false;
                         _context15.p = 21;
                         // Canonicalised, not merely accepted. `isUploadId()` allows
                         // surrounding whitespace and `uploadTus()` trims before
@@ -16309,7 +16512,7 @@
                           _context15.n = 23;
                           break;
                         }
-                        lostClaim = true;
+                        uploadIdUnrecorded = true;
                       case 23:
                         if (isUploadId((_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.uploadId)) {
                           _context15.n = 26;
@@ -16332,7 +16535,7 @@
                           _context15.n = 25;
                           break;
                         }
-                        lostClaim = true;
+                        uploadIdUnrecorded = true;
                       case 25:
                       case 26:
                         _context15.n = 29;
@@ -16354,7 +16557,7 @@
                       case 28:
                         return _context15.a(2, 0);
                       case 29:
-                        if (!lostClaim) {
+                        if (!uploadIdUnrecorded) {
                           _context15.n = 30;
                           break;
                         }

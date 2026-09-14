@@ -325,3 +325,25 @@ test("a metadata write to a recording that is gone reports that too", async () =
 
     assert.equal(await tab.queue._setMetadata(id, { ...META }, claim.token), false);
 });
+
+test("a server asking for a retry gets one", async () => {
+    // Not every 4xx is final. 429 is a server explicitly requesting the retry
+    // that holding the recording refuses to make, and on a shared or
+    // rate-limited connection it is ordinary — holding on the first one strands
+    // a recording waiting for a person over a wait the queue could sit out.
+    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
+
+    for (const msg of [
+        "tus: unexpected response while creating upload (response code: 429)",
+        "HTTP 429 Too Many Requests",
+        "response code 408",
+        "status: 425",
+    ]) {
+        assert.equal(isNonRetryableUploadFailure(msg), false, `retryable: ${msg}`);
+    }
+
+    // The genuinely final ones still are.
+    for (const msg of ["response code 413", "HTTP 401 Unauthorized", "status: 422"]) {
+        assert.equal(isNonRetryableUploadFailure(msg), true, `not retryable: ${msg}`);
+    }
+});

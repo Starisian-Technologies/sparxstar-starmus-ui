@@ -41,7 +41,11 @@ export function resolveUploadFormat(mimeType, fileName) {
     // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
     // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
     // was written to exclude.
-    if (type.includes("audio/aac") || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
+    // The media type is matched as a whole token too. `includes("audio/aac")`
+    // is also true of `audio/aacp` — HE-AAC, the profile this branch exists to
+    // exclude — so the substring test reported the very codec the token-boundary
+    // fix above was written to keep out, by the other half of the condition.
+    if (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
         return "aac-lc";
     }
 

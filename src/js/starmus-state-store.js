@@ -162,12 +162,26 @@
                     state.status === "submitting" &&
                     errObj.retryable === false &&
                     !errObj.uploadId;
+
+                // The transfer succeeded and the handling after it did not.
+                //
+                // Left as `submitting`, this was the same trap by another door:
+                // "Uploading…" forever over an upload that finished minutes
+                // ago, with no request running and no control enabled. The
+                // asset is on the server, so the honest terminal state is the
+                // delivered one — and it is the one that does not invite a
+                // second upload. The error travels with it, carrying the upload
+                // id the two sides are reconciled by.
+                const deliveredThenFailed =
+                    state.status === "submitting" && Boolean(errObj.uploadId);
                 return merge(state, {
                     status: shouldResetStatus
                         ? "ready"
                         : submissionFailed
                           ? "ready_to_submit"
-                          : state.status,
+                          : deliveredThenFailed
+                            ? "complete"
+                            : state.status,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });
@@ -251,7 +265,12 @@
 
             case "starmus/recording-available":
                 return merge(state, {
-                    status: "ready_to_submit",
+                    // An upload in flight keeps the UI it owns, exactly as in
+                    // `file-attached`. Flipping to `ready_to_submit` here
+                    // re-enabled submit during a running transfer and allowed a
+                    // second one alongside it; the superseded handling returns
+                    // this take to submittable once the first upload settles.
+                    status: state.status === "submitting" ? state.status : "ready_to_submit",
                     // As in `file-attached`: a recording that arrives while an
                     // upload is still running replaces the source under it, so
                     // that upload's result no longer describes what is here.
@@ -387,9 +406,20 @@
                     // Which submission is in flight. The file input stays usable
                     // during an upload, so without this a completion could land
                     // on a source it never uploaded.
-                    submission: merge(state.submission, {
+                    //
+                    // Replaced outright rather than merged. A `superseded` flag
+                    // left over from a previous submission made the *next* one
+                    // settle down the superseded path: a contributor whose first
+                    // upload could not be queued, who then attached another file
+                    // and submitted it successfully, was told it was still
+                    // waiting to be sent. The progress and queued markers belong
+                    // to the finished attempt for the same reason.
+                    submission: {
+                        progress: 0,
+                        isQueued: false,
                         activeId: action.submissionId || null,
-                    }),
+                        superseded: false,
+                    },
                 });
 
             case "starmus/submit-progress":
@@ -436,6 +466,18 @@
             }
 
             case "starmus/submit-queued":
+                // The recording that was queued is the one that was in flight,
+                // which is not what is on screen when the source has been
+                // replaced. Reporting "Queued" over the new attachment claimed
+                // the platform was holding a file it had never been given, and
+                // disabled the control that would have sent it. The queue entry
+                // for the earlier recording stands either way.
+                if (state.submission?.superseded === true) {
+                    return merge(state, {
+                        status: "ready_to_submit",
+                        submission: { progress: 0, isQueued: false, activeId: null },
+                    });
+                }
                 return merge(state, {
                     status: "complete",
                     submission: { progress: 0, isQueued: true },

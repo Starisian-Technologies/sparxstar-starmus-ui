@@ -852,7 +852,76 @@ test("a failure after the bytes landed does not offer the upload again", () => {
         error: { message: "redirect resolution failed", retryable: false, uploadId: "upload-2" },
     });
 
-    assert.equal(store.getState().status, "submitting", "the accepted upload is not re-offered");
+    const state = store.getState();
+    assert.equal(state.status, "complete", "the asset is delivered, and said to be");
+    assert.notEqual(state.status, "submitting", "not left uploading over a finished transfer");
+    assert.equal(state.error.uploadId, "upload-2", "with the id the two sides reconcile by");
+});
+
+test("a new submission does not inherit the last one's superseded flag", () => {
+    // The first upload could not be queued, so the contributor attached another
+    // file and sent it. That upload settled down the superseded path and was
+    // reported as still waiting — because nothing had cleared the flag the
+    // replacement set.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    assert.equal(store.getState().submission.superseded, true, "the first upload is superseded");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull", retryable: false },
+    });
+    assert.equal(store.getState().status, "ready_to_submit");
+
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-2" });
+    assert.equal(store.getState().submission.superseded, false, "the new submission starts clean");
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-2" });
+    assert.equal(store.getState().status, "complete", "and it completes normally");
+});
+
+test("queueing a superseded upload does not mark the new source queued", () => {
+    // The recording that went to the queue is the one that was in flight, not
+    // the file on screen. Reporting "Queued" over the attachment claimed the
+    // platform held a file it had never been given, and disabled the control
+    // that would have sent it.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+
+    store.dispatch({ type: "starmus/submit-queued", submissionId: "queued-1" });
+
+    const state = store.getState();
+    assert.equal(state.status, "ready_to_submit", "the attachment can still be sent");
+    assert.equal(state.submission.isQueued, false, "and is not claimed to be queued");
+    assert.equal(state.source.kind, "file");
+});
+
+test("a recording made during an upload does not re-arm submit", () => {
+    // Same rule as `file-attached`: the transfer in flight keeps the UI it
+    // owns. Re-arming submit permitted a second transfer alongside the first.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "first.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 4096 }, fileName: "second.webm" },
+    });
+
+    assert.equal(store.getState().status, "submitting", "the upload in flight keeps the UI");
+    assert.equal(store.getState().submission.superseded, true, "and is marked superseded");
 });
 
 test("a retryable failure while submitting leaves the queue to it", () => {
@@ -927,4 +996,21 @@ test("the attainment record documents every value it reports", async () => {
     for (const key of Object.keys(attainment.requested)) {
         assert.match(typedef, new RegExp(key), `${key} is documented`);
     }
+});
+
+test("HE-AAC is not reported as AAC-LC", async () => {
+    // `audio/aacp` is HE-AAC — the profile the codec-token fix was written to
+    // keep out. The media type was still matched by substring, so `audio/aac`
+    // matched `audio/aacp` and readmitted it through the other half of the
+    // same condition.
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+
+    assert.notEqual(resolveUploadFormat("audio/aacp", "take.m4a"), "aac-lc");
+    assert.notEqual(resolveUploadFormat("audio/aacp", ""), "aac-lc");
+    assert.notEqual(resolveUploadFormat('audio/mp4; codecs="mp4a.40.29"', ""), "aac-lc");
+
+    // A stated AAC-LC is still named, including with parameters attached.
+    assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
+    assert.equal(resolveUploadFormat("audio/aac; profile=lc", ""), "aac-lc");
+    assert.equal(resolveUploadFormat('audio/mp4; codecs="mp4a.40.2"', ""), "aac-lc");
 });

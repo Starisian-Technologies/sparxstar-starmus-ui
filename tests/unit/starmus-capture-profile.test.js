@@ -1361,3 +1361,19 @@ test("Opus is named only when Opus is named", async () => {
     assert.equal(resolveUploadFormat('audio/ogg; codecs="opus"', ""), "opus");
     assert.equal(resolveUploadFormat("audio/opus", ""), "opus");
 });
+
+test("the transport's attempt budget is the one AGENTS.md states", async () => {
+    // tus-js-client counts each `retryDelays` entry as a retry after the
+    // initial request, so three entries permit four attempts while AGENTS.md
+    // names three as the maximum and calls exceeding it a FAIL.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+    const agents = readFileSync("AGENTS.md", "utf8");
+
+    const match = /retryDelays: \[([^\]]*)\]/.exec(source);
+    assert.ok(match, "a retry schedule is configured");
+    const entries = match[1].split(",").filter((part) => part.trim() !== "");
+    assert.equal(entries.length + 1, 3, "initial request plus retries is three attempts");
+
+    assert.match(agents, /[Mm]ax 3 attempts/, "and three is what the rule says");
+});

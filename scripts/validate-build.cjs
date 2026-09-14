@@ -202,13 +202,27 @@ if (fs.existsSync(tusFile)) {
     const tusCode = tusContent
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/^\s*\/\/.*$/gm, "");
-    if (!/findPreviousUploads\s*\(/.test(tusCode) || !/resumeFromPreviousUpload\s*\(/.test(tusCode)) {
+    // Positions, not mere presence. Testing that the names occur somewhere let
+    // a regression that called `start()` first — or that left the resume calls
+    // stranded after it — keep the build green while every retry restarted from
+    // byte zero, which is the exact failure this check exists to catch. The
+    // comment below used to say a guard its own documentation satisfies is not
+    // a guard; a guard that cannot see the ordering it names is the same thing.
+    const lookupAt = tusCode.search(/findPreviousUploads\s*\(/);
+    const resumeAt = tusCode.search(/resumeFromPreviousUpload\s*\(/);
+    const startAt = tusCode.search(/\bupload\.start\s*\(/);
+    if (lookupAt === -1 || resumeAt === -1 || startAt === -1) {
         console.log(
             "❌ starmus-tus.js: a retry must look up and resume the previous upload (findPreviousUploads + resumeFromPreviousUpload) before start(). ADR-038 forbids re-sending a partially transferred original.",
         );
         ok = false;
+    } else if (!(lookupAt < resumeAt && resumeAt < startAt)) {
+        console.log(
+            `❌ starmus-tus.js: the resume must happen before start(), and does not — findPreviousUploads at ${lookupAt}, resumeFromPreviousUpload at ${resumeAt}, upload.start() at ${startAt}. A retry that starts first re-sends a partially transferred original, which ADR-038 forbids.`,
+        );
+        ok = false;
     } else {
-        console.log("✅ A retry resumes the previous upload rather than restarting it");
+        console.log("✅ A retry resumes the previous upload before starting it");
     }
 
     // ADR-035 and the capture-to-ingestion contract: the capture profile

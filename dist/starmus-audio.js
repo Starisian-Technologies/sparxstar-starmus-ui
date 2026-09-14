@@ -13793,7 +13793,18 @@
     var defaults = {
       chunkSize: settings.uploadChunkSize || 512 * 1024,
       // max 512 KB per AGENTS.md
-      retryDelays: [0, 2000, 4000],
+      // Two delays, not three. tus-js-client counts each entry as a retry
+      // *after* the initial request, so three entries permit four attempts and
+      // AGENTS.md states a maximum of three as a FAIL condition. Two entries
+      // give the initial request plus two retries.
+      //
+      // One caveat worth stating rather than engineering away: the client
+      // resets this counter when a transfer makes progress, so a long upload
+      // on a bad link can spend the budget again after each advance. That is
+      // the behaviour this package wants — a transfer that is moving should
+      // keep going, and the stall watchdog is what bounds one that is not —
+      // but it means the budget is per stalled stretch, not per upload.
+      retryDelays: [0, 2000],
       // The resume fingerprint outlives the transfer, deliberately.
       //
       // Clearing it on success raced the durable record of that success. The

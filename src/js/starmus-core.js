@@ -338,15 +338,34 @@ export function initCore(store, instanceId, env) {
                 submissionId: metadata.uploadId,
             });
 
-                const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
+                // Only if the completion was actually applied.
+                //
+                // The reducer refuses a completion whose source has since been
+                // replaced — that is the whole point of the superseded state —
+                // but these two ran regardless, so a slow upload navigated the
+                // contributor away from a recording they had just attached, and
+                // told the host page a submission had completed that this state
+                // does not consider complete. The side effects follow the
+                // reducer's decision rather than the transfer's.
+                const settled = store.getState().status === "complete";
+
+                const redirect = settled
+                    ? getSafeRedirect(result.data?.redirect_url || result.redirect_url)
+                    : null;
                 if (redirect) {
                     setTimeout(() => {
-                        window.location.href = redirect;
+                        // Re-checked on the way out. The source can be replaced
+                        // during this delay too, and navigating away from a
+                        // recording the contributor is still working on loses
+                        // it.
+                        if (store.getState().status === "complete") {
+                            window.location.href = redirect;
+                        }
                     }, 1500);
                 }
 
                 // Notify parent frame (modal context) safely
-                if (result.data?.post_id) {
+                if (settled && result.data?.post_id) {
                     try {
                         if (window.parent && window.parent !== window) {
                             void window.parent.location.href; // Throws if cross-origin

@@ -22,7 +22,7 @@
 
 "use strict";
 
-import { CommandBus } from "./starmus-hooks.js";
+import { CommandBus, debugLog } from "./starmus-hooks.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 import { EnhancedCalibration } from "./starmus-enhanced-calibration.js";
 import {
@@ -241,10 +241,22 @@ export function initRecorder(store, instanceId) {
         // measurement taken from it is admissible.
         const attainment = describeAttainment(captureProfile, stream.getAudioTracks()[0]);
         store.dispatch({ type: "starmus/capture-profile", attainment });
-        if (!attainment.attained) {
+        // Strictly `false`, because `attained` is a tri-state and `null` is not
+        // a failure. `null` means the question does not apply — the profile
+        // constrains nothing, or nothing it constrains could be read back. The
+        // `conversation` profile declares a bitrate that a MediaStreamTrack
+        // never reports, so it is always unverified and every ordinary capture
+        // came through here logging that the device had not met the profile.
+        // A warning that fires on the normal case teaches people to ignore it.
+        if (attainment.attained === false) {
             console.warn(
                 `[Recorder] Capture profile "${attainment.profile}" not attained by this device.`,
                 attainment
+            );
+        } else if (attainment.attained === null && attainment.unverified.length > 0) {
+            debugLog(
+                `[Recorder] Capture profile "${attainment.profile}" could not be fully verified:`,
+                attainment.unverified
             );
         }
 

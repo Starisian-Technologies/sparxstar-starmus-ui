@@ -1135,3 +1135,70 @@ test("both submission paths agree about a server error", async () => {
         assert.equal(isNonRetryableUploadFailure(msg), false, `the queue retries: ${msg}`);
     }
 });
+
+test("a superseded upload that fails after transfer does not complete the new source", () => {
+    // The post-transfer error carries the *old* upload id, so the
+    // delivered-then-failed branch read it as a valid delivery and marked the
+    // replacement `complete` — disabling submission for bytes never uploaded.
+    // The same defect the superseded state exists to prevent, arriving through
+    // the error path rather than the completion path.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-old" });
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect failed", retryable: false, uploadId: "upload-old" },
+    });
+
+    const state = store.getState();
+    assert.equal(state.status, "ready_to_submit", "the attachment can still be sent");
+    assert.equal(state.source.kind, "file");
+});
+
+test("an unsuperseded post-transfer failure still settles as delivered", () => {
+    // The branch above must not swallow the ordinary case: the bytes are on the
+    // server, and re-offering the upload would spend the contributor's data
+    // twice.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect failed", retryable: false, uploadId: "upload-1" },
+    });
+
+    assert.equal(store.getState().status, "complete");
+});
+
+test("an unverifiable constraint is not reported as a failed capture", async () => {
+    // `attained` is a tri-state and `null` is not a failure. The recorder tested
+    // it for truthiness, so every ordinary `conversation` capture logged that
+    // the device had not met the profile — the bitrate is a MediaRecorder
+    // option a track never reports, so it is always unverified. A warning that
+    // fires on the normal case teaches people to ignore it.
+    const { readFileSync } = await import("node:fs");
+    const { describeAttainment } = await import("../../src/js/starmus-capture-profiles.js");
+    const source = readFileSync("src/js/starmus-recorder.js", "utf8");
+
+    const ordinary = describeAttainment("conversation", {
+        getSettings: () => ({ sampleRate: 16000, channelCount: 1 }),
+    });
+    assert.equal(ordinary.attained, null, "an ordinary capture is not a failure");
+    assert.ok(ordinary.unverified.includes("audioBitsPerSecond"));
+
+    assert.match(
+        source,
+        /if \(attainment\.attained === false\) \{/,
+        "the warning is gated on an actual failure, not on falsiness",
+    );
+    assert.doesNotMatch(source, /if \(!attainment\.attained\) \{/, "not on truthiness");
+});

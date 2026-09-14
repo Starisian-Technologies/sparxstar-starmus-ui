@@ -2820,7 +2820,7 @@
       return out;
     }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment2, _state$submission3;
+      var _action$attainment$pr, _action$attainment, _action$attainment2, _state$submission5;
       if (!action || !action.type) {
         return state;
       }
@@ -2847,6 +2847,7 @@
           }
         case "starmus/error":
           {
+            var _state$submission, _state$submission2;
             var errObj = action.error || action.payload;
             var currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
             currentErrors.push({
@@ -2879,9 +2880,21 @@
             // delivered one — and it is the one that does not invite a
             // second upload. The error travels with it, carrying the upload
             // id the two sides are reconciled by.
-            var deliveredThenFailed = state.status === "submitting" && Boolean(errObj.uploadId);
+            //
+            // Not when the source has been replaced. A post-transfer
+            // failure still carries the *old* upload id, so this branch
+            // read it as a valid delivery and marked the replacement
+            // `complete` — disabling submission for bytes that were never
+            // uploaded, which is the same defect the superseded state was
+            // added to prevent, arriving through the error path instead of
+            // the completion path.
+            var deliveredThenFailed = state.status === "submitting" && Boolean(errObj.uploadId) && ((_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.superseded) !== true;
+
+            // The replaced source goes back to submittable, exactly as it
+            // does when a superseded upload completes normally.
+            var supersededThenFailed = state.status === "submitting" && Boolean(errObj.uploadId) && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) === true;
             return merge(state, {
-              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : state.status,
+              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : supersededThenFailed ? "ready_to_submit" : state.status,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -3149,7 +3162,7 @@
           });
         case "starmus/submit-complete":
           {
-            var _state$submission$act, _state$submission, _action$submissionId, _state$submission2;
+            var _state$submission$act, _state$submission3, _action$submissionId, _state$submission4;
             // Ignored when it does not belong to the submission in flight.
             //
             // A contributor who attaches a file while an upload is running
@@ -3162,7 +3175,7 @@
             // either: it is indistinguishable from the stale one this
             // guard exists to reject. A completion is only unconditional
             // when nothing named itself as being in flight.
-            var active = (_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
+            var active = (_state$submission$act = (_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
             var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
             if (active !== null && active !== finished) {
               return state;
@@ -3175,7 +3188,7 @@
             // had ever uploaded — the contributor was shown a delivery
             // that never happened and given no way to send the real one.
             // The UI goes back to submittable so the attachment can go.
-            if (((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) === true) {
+            if (((_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
                 submission: {
@@ -3201,7 +3214,7 @@
           // the platform was holding a file it had never been given, and
           // disabled the control that would have sent it. The queue entry
           // for the earlier recording stands either way.
-          if (((_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.superseded) === true) {
+          if (((_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.superseded) === true) {
             return merge(state, {
               status: "ready_to_submit",
               submission: {
@@ -17751,7 +17764,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _result$data, _result$data2, detail, redirect, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _result$data, _result$data2, detail, settled, redirect, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -17923,15 +17936,32 @@
                   payload: result,
                   submissionId: metadata.uploadId
                 });
-                redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
+
+                // Only if the completion was actually applied.
+                //
+                // The reducer refuses a completion whose source has since been
+                // replaced — that is the whole point of the superseded state —
+                // but these two ran regardless, so a slow upload navigated the
+                // contributor away from a recording they had just attached, and
+                // told the host page a submission had completed that this state
+                // does not consider complete. The side effects follow the
+                // reducer's decision rather than the transfer's.
+                settled = store.getState().status === "complete";
+                redirect = settled ? getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url) : null;
                 if (redirect) {
                   setTimeout(function () {
-                    window.location.href = redirect;
+                    // Re-checked on the way out. The source can be replaced
+                    // during this delay too, and navigating away from a
+                    // recording the contributor is still working on loses
+                    // it.
+                    if (store.getState().status === "complete") {
+                      window.location.href = redirect;
+                    }
                   }, 1500);
                 }
 
                 // Notify parent frame (modal context) safely
-                if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
+                if (settled && (_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
                   try {
                     if (window.parent && window.parent !== window) {
                       void window.parent.location.href; // Throws if cross-origin
@@ -19758,8 +19788,17 @@
                 type: "starmus/capture-profile",
                 attainment: attainment
               });
-              if (!attainment.attained) {
+              // Strictly `false`, because `attained` is a tri-state and `null` is not
+              // a failure. `null` means the question does not apply — the profile
+              // constrains nothing, or nothing it constrains could be read back. The
+              // `conversation` profile declares a bitrate that a MediaStreamTrack
+              // never reports, so it is always unverified and every ordinary capture
+              // came through here logging that the device had not met the profile.
+              // A warning that fires on the normal case teaches people to ignore it.
+              if (attainment.attained === false) {
                 console.warn("[Recorder] Capture profile \"".concat(attainment.profile, "\" not attained by this device."), attainment);
+              } else if (attainment.attained === null && attainment.unverified.length > 0) {
+                debugLog("[Recorder] Capture profile \"".concat(attainment.profile, "\" could not be fully verified:"), attainment.unverified);
               }
               store.dispatch({
                 type: "starmus/mic-start"

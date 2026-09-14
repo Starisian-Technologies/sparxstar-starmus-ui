@@ -172,8 +172,25 @@
                 // delivered one — and it is the one that does not invite a
                 // second upload. The error travels with it, carrying the upload
                 // id the two sides are reconciled by.
+                //
+                // Not when the source has been replaced. A post-transfer
+                // failure still carries the *old* upload id, so this branch
+                // read it as a valid delivery and marked the replacement
+                // `complete` — disabling submission for bytes that were never
+                // uploaded, which is the same defect the superseded state was
+                // added to prevent, arriving through the error path instead of
+                // the completion path.
                 const deliveredThenFailed =
-                    state.status === "submitting" && Boolean(errObj.uploadId);
+                    state.status === "submitting" &&
+                    Boolean(errObj.uploadId) &&
+                    state.submission?.superseded !== true;
+
+                // The replaced source goes back to submittable, exactly as it
+                // does when a superseded upload completes normally.
+                const supersededThenFailed =
+                    state.status === "submitting" &&
+                    Boolean(errObj.uploadId) &&
+                    state.submission?.superseded === true;
                 return merge(state, {
                     status: shouldResetStatus
                         ? "ready"
@@ -181,7 +198,9 @@
                           ? "ready_to_submit"
                           : deliveredThenFailed
                             ? "complete"
-                            : state.status,
+                            : supersededThenFailed
+                              ? "ready_to_submit"
+                              : state.status,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });

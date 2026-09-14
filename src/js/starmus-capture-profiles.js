@@ -269,10 +269,18 @@ export function describeAttainment(name, track) {
         // finding no violations said "attained" when it should have said "not
         // applicable". `true` means every constraint that *can* be checked from
         // a track was, and none was exceeded; `unverified` names the rest.
+        // `true` requires every constraint to have been checked, which is what
+        // the contract above says and what an earlier version of this did not
+        // do: it returned `true` when *some* constraint verified, so
+        // `conversation` — whose bitrate can never be read back — reported
+        // attainment while one of its constraints was unexamined. That is the
+        // overclaim ADR-035 exists to prevent. Any unverified constraint now
+        // yields `null`: not a failure, a question this device cannot answer,
+        // with `unverified` naming which part.
         attained:
             exceeded.length > 0
                 ? false
-                : constrained === 0 || unverified.length === constrained
+                : constrained === 0 || unverified.length > 0
                   ? null
                   : true,
         exceeded,

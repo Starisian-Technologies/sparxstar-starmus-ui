@@ -922,9 +922,17 @@ class OfflineQueue {
      * can put a row on hold in that gap, and claiming it anyway would upload a
      * submission a person had explicitly stopped.
      *
+     * Returns the row as it stands *inside* the claiming transaction, not as
+     * the caller's snapshot had it. `processQueue()` reads its rows with
+     * `getAll()` and claims them one at a time, so by the time a row is claimed
+     * another tab may have recorded a failed attempt against it and released
+     * it. Working from the snapshot then used a stale `retryCount` and
+     * `lastAttempt` — bypassing the backoff and overwriting the newer state —
+     * and a stale `metadata`, which is where the upload identity lives.
+     *
      * @private
      * @param {string} id
-     * @returns {Promise<string|null>} An owner token, or null if not claimable.
+     * @returns {Promise<{token: string, row: Object}|null>} Null if not claimable.
      */
     async _claim(id) {
         if (!this.db) {
@@ -935,7 +943,8 @@ class OfflineQueue {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
             const store = tx.objectStore(CONFIG.storeName);
             const req = store.get(id);
-            let claimed = false;
+            /** @type {Object|null} */
+            let claimed = null;
 
             req.onsuccess = () => {
                 const item = req.result;
@@ -953,11 +962,11 @@ class OfflineQueue {
                 item.leaseOwner = token;
                 item.leaseUntil = now + CONFIG.leaseMs;
                 store.put(item);
-                claimed = true;
+                claimed = item;
             };
 
             req.onerror = (ev) => reject(ev.target.error);
-            tx.oncomplete = () => resolve(claimed ? token : null);
+            tx.oncomplete = () => resolve(claimed ? { token, row: claimed } : null);
             tx.onerror = (ev) => reject(ev.target.error);
         });
     }
@@ -1108,7 +1117,10 @@ class OfflineQueue {
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
-                const { id, audioBlob, fileName, formFields, retryCount, instanceId } = item;
+                const { id, audioBlob, fileName, formFields, instanceId } = item;
+                // Reassigned from the claimed row below, which is the
+                // authoritative copy for this attempt.
+                let { retryCount } = item;
                 // Not destructured as a `const`: the backfill below has to be
                 // able to replace it wholesale for a row that has no metadata
                 // object at all.
@@ -1131,10 +1143,20 @@ class OfflineQueue {
                     // Claimed like any other row. Two tabs both seeing
                     // `transferred` and racing to finish it would emit the
                     // boundary event twice for one upload.
-                    const reconcileToken = await this._claim(id);
-                    if (!reconcileToken) {
+                    const reconcileClaim = await this._claim(id);
+                    if (!reconcileClaim) {
                         continue;
                     }
+                    const reconcileToken = reconcileClaim.token;
+                    // The row as the claim transaction saw it, not the snapshot.
+                    const row = reconcileClaim.row;
+                    if (row.transferred !== true) {
+                        // It was reconciled or reset between the snapshot and
+                        // the claim. Let the normal path handle it next drain.
+                        await this._releaseClaim(id, reconcileToken);
+                        continue;
+                    }
+                    metadata = row.metadata;
                     // The server already has these bytes; what failed was
                     // afterwards. Uploading again would hand the platform a
                     // second copy of a recording it accepted — and it could not
@@ -1164,7 +1186,7 @@ class OfflineQueue {
                     // the entry marked as announced: re-emitting `starmus:complete`
                     // for an asset the server already has would start downstream
                     // processing a second time.
-                    if (item.completionEmitted !== true) {
+                    if (row.completionEmitted !== true) {
                         // Emit, then mark — see the success path for why
                         // at-least-once is the right side to err on.
                         emitCompletionEvent(detail);
@@ -1200,11 +1222,22 @@ class OfflineQueue {
                 // mint a different UUID, one persisting over the other, leaving
                 // the tab that uploaded with a fingerprint the stored row no
                 // longer matches — unable to resume its own partial.
-                const claimToken = await this._claim(id);
-                if (!claimToken) {
+                const claim = await this._claim(id);
+                if (!claim) {
                     debugLog("[Offline] Another drain holds this entry; skipping:", id);
                     continue;
                 }
+                const claimToken = claim.token;
+
+                // From here on the row is the one the claim transaction read,
+                // not the `getAll()` snapshot this loop is iterating. Another
+                // tab can record a failed attempt and release a row between the
+                // two, and continuing from the snapshot then reused a stale
+                // `retryCount` and `lastAttempt` — skipping the backoff — and a
+                // stale `metadata`, which carries the upload identity.
+                const current = claim.row;
+                retryCount = current.retryCount ?? 0;
+                metadata = current.metadata;
 
                 if (retryCount >= CONFIG.maxRetries) {
                     // Held, not removed. Exhausting the retries says the queue
@@ -1219,10 +1252,10 @@ class OfflineQueue {
                     continue;
                 }
 
-                if (item.lastAttempt !== null) {
+                if (current.lastAttempt !== null && current.lastAttempt !== undefined) {
                     const delay =
                         CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
-                    if (Date.now() - item.lastAttempt < delay) {
+                    if (Date.now() - current.lastAttempt < delay) {
                         // Still inside its backoff. The claim goes back rather
                         // than being held for the lease: the backoff is seconds
                         // and the lease is minutes, so keeping it would block
@@ -1403,7 +1436,21 @@ class OfflineQueue {
                     // outcome, below — never before it. A separate release
                     // first made the row claimable while it still carried the
                     // previous attempt's backoff state.
-                    const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
+                    // A structured status, not a bare number. `/400/` matched
+                    // any message containing those digits — including
+                    // "TUS_UPLOAD_STALLED: no progress for 4000ms", so a stall
+                    // was classified as a server rejection and held on the
+                    // first occurrence instead of being retried. Stalls are the
+                    // normal case on the links this platform exists for, which
+                    // makes that the worst possible thing to misread.
+                    const stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(
+                        msg,
+                    );
+                    const nonRetryable =
+                        !stalled &&
+                        /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(
+                            msg,
+                        );
                     if (nonRetryable) {
                         // Retrying will not help, so stop retrying — and keep
                         // the recording. Deleting it here was the queue
@@ -1531,18 +1578,37 @@ class OfflineQueue {
         // On a phone with a failing upload and a low battery that is the worst
         // possible loop to leave running.
         const now = Date.now();
-        const pending = (await this.getAll()).filter(
-            (item) =>
-                item.held !== true &&
-                // Leased elsewhere. Including these meant a tab that had just
-                // failed to claim a row still read its untouched retryCount and
-                // lastAttempt, computed a zero delay, and rescheduled
-                // immediately — a tight drain loop for as long as the other tab
-                // held the lease. Held entries caused the same spin before.
-                !(typeof item.leaseUntil === "number" && item.leaseUntil > now),
-        );
+        const live = (await this.getAll()).filter((item) => item.held !== true);
+
+        // Leased rows are excluded from the immediate work, but their expiry
+        // still has to wake somebody.
+        //
+        // Including them meant a tab that had just failed to claim read the
+        // untouched retryCount, computed zero, and rescheduled at once — a
+        // tight drain loop for as long as the other tab held the lease.
+        // Excluding them entirely was the opposite failure: when every
+        // remaining row was leased this returned null, no wake-up was
+        // scheduled, and if the owning tab then crashed its lease expired with
+        // nothing left to notice. The recording sat there until a reload.
+        /** @type {number|null} */
+        let earliestLease = null;
+        /** @type {Array<Object>} */
+        const pending = [];
+        for (const item of live) {
+            if (typeof item.leaseUntil === "number" && item.leaseUntil > now) {
+                const untilExpiry = item.leaseUntil - now;
+                if (earliestLease === null || untilExpiry < earliestLease) {
+                    earliestLease = untilExpiry;
+                }
+                continue;
+            }
+            pending.push(item);
+        }
+
         if (pending.length === 0) {
-            return null;
+            // Nothing claimable now. Wake when the first lease lapses, so a row
+            // orphaned by a closed tab is picked up rather than stranded.
+            return earliestLease;
         }
 
         let nextDelay = null;

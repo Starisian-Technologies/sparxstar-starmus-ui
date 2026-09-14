@@ -32,7 +32,12 @@ export function resolveUploadFormat(mimeType, fileName) {
     // something else. Reporting `aac-lc` for those was a codec claim this
     // client cannot establish — the same misdescription the `webm` case was
     // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
-    if (type.includes("audio/aac") || type.includes("mp4a") || ext === "aac") {
+    // `mp4a` alone is not AAC-LC. The object-type indicates the profile:
+    // `mp4a.40.2` is AAC-LC, `mp4a.40.5` is HE-AAC, `mp4a.40.29` HE-AACv2.
+    // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
+    // cannot establish — the same overclaim as calling a container its codec,
+    // one level down.
+    if (type.includes("audio/aac") || type.includes("mp4a.40.2") || ext === "aac") {
         return "aac-lc";
     }
 

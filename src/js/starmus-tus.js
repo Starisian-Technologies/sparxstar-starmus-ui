@@ -530,9 +530,18 @@ export async function uploadTus(
         // describing behaviour the fix beneath it had already replaced — which
         // is how a resumability guarantee gets undone by someone trusting the
         // comment over the code.
+        // Which half of the chain failed is tracked, because the two need
+        // different handling. A *lookup* failure means we cannot establish
+        // whether a partial exists, so the attempt is deferred and retried. A
+        // *setup or start* failure — a malformed endpoint, a browser refusing
+        // the request — is not going to fix itself on the next drain, and
+        // labelling it as a lookup failure had the queue retrying it while the
+        // telemetry blamed storage.
+        let stage = "lookup";
         upload
             .findPreviousUploads()
             .then((previous) => {
+                stage = "start";
                 if (Array.isArray(previous) && previous.length > 0) {
                     // The most recent match: an earlier attempt on this exact
                     // submission, since the fingerprint is the submission id.
@@ -571,7 +580,9 @@ export async function uploadTus(
                 }
                 reject(
                     new Error(
-                        `TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (${err.message}). Not starting over.`,
+                        stage === "lookup"
+                            ? `TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (${err.message}). Not starting over.`
+                            : `TUS_UPLOAD_START_FAILED: the upload could not be started (${err.message}).`,
                     ),
                 );
             });

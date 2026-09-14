@@ -484,7 +484,7 @@ test("a drain claims a row before uploading it", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-offline.js", "utf8");
 
-    const claim = source.indexOf("const claimToken = await this._claim(id);");
+    const claim = source.indexOf("const claim = await this._claim(id);");
     const upload = source.indexOf("await uploadWithPriority({");
     const backfill = source.indexOf("const backfilled = createUploadId();");
 
@@ -499,6 +499,17 @@ test("a drain claims a row before uploading it", async () => {
     // lease cannot be sized correctly here: a capture may run to
     // MAX_DURATION_SECONDS and a progressing upload is deliberately unbounded.
     assert.match(source, /_renewClaim\(id, claimToken\)/, "the claim is renewed on progress");
+
+    // The attempt proceeds from the row the claim transaction read, not from
+    // the `getAll()` snapshot: another tab can record a failed attempt and
+    // release a row between the two, and continuing from the snapshot reused a
+    // stale retryCount (skipping the backoff) and a stale metadata (which
+    // carries the upload identity).
+    assert.match(
+        source,
+        /const current = claim\.row;\s*\n\s*retryCount = current\.retryCount/,
+        "the claimed row replaces the snapshot for the rest of the attempt",
+    );
     assert.match(
         source,
         /item\.leaseOwner !== token/,
@@ -643,4 +654,48 @@ test("a container is never reported as the codec it might contain", async () => 
     assert.equal(resolveUploadFormat("audio/opus", "take.opus"), "opus");
     assert.equal(resolveUploadFormat('audio/ogg; codecs="opus"', "take.ogg"), "opus");
     assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
+});
+
+test("a stalled upload is retried, not mistaken for a server rejection", async () => {
+    // The classifier matched a bare `400`, so "TUS_UPLOAD_STALLED: no progress
+    // for 4000ms" read as an HTTP 400 and the recording was held on its first
+    // stall instead of retried. Stalls are the normal case on the links this
+    // platform exists for, which makes that the worst thing to misread.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const stalledRe = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i;
+    const fourRe = /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i;
+    const nonRetryable = (msg) => !stalledRe.test(msg) && fourRe.test(msg);
+
+    assert.equal(nonRetryable("TUS_UPLOAD_STALLED: no progress for 4000ms"), false);
+    assert.equal(nonRetryable("network error"), false);
+    assert.equal(nonRetryable("HTTP 503 Service Unavailable"), false);
+    assert.equal(nonRetryable("HTTP 400 Bad Request"), true);
+    assert.equal(nonRetryable("tus: unexpected response, response code: 400"), true);
+    assert.equal(nonRetryable("QuotaExceededError"), true);
+
+    // And the shipped classifier is the one just exercised.
+    assert.ok(source.includes(String(stalledRe).slice(1, -2)), "the stall guard is in the source");
+    assert.doesNotMatch(
+        source,
+        /const nonRetryable = \/400\|/,
+        "the bare numeric substring is gone",
+    );
+});
+
+test("a queue whose rows are all leased still schedules a wake-up", async () => {
+    // Excluding leased rows stopped the zero-delay spin, but returning null when
+    // every row was leased meant that if the owning tab crashed, its lease
+    // expired with nothing left to notice — the recording sat until a reload.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const body = source.slice(source.indexOf("async _getNextProcessDelay()"));
+
+    assert.match(body.slice(0, 2200), /earliestLease/, "the earliest expiry is tracked");
+    assert.match(
+        body.slice(0, 2200),
+        /return earliestLease;/,
+        "and it is what the drain waits for when nothing is claimable",
+    );
 });

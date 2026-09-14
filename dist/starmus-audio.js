@@ -14014,7 +14014,16 @@
               // describing behaviour the fix beneath it had already replaced — which
               // is how a resumability guarantee gets undone by someone trusting the
               // comment over the code.
+              // Which half of the chain failed is tracked, because the two need
+              // different handling. A *lookup* failure means we cannot establish
+              // whether a partial exists, so the attempt is deferred and retried. A
+              // *setup or start* failure — a malformed endpoint, a browser refusing
+              // the request — is not going to fix itself on the next drain, and
+              // labelling it as a lookup failure had the queue retrying it while the
+              // telemetry blamed storage.
+              var stage = "lookup";
               upload.findPreviousUploads().then(function (previous) {
+                stage = "start";
                 if (Array.isArray(previous) && previous.length > 0) {
                   // The most recent match: an earlier attempt on this exact
                   // submission, since the fingerprint is the submission id.
@@ -14050,7 +14059,7 @@
                 } catch (_unused) {
                   // Never started, or already aborted. Nothing to undo.
                 }
-                reject(new Error("TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (".concat(err.message, "). Not starting over.")));
+                reject(new Error(stage === "lookup" ? "TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (".concat(err.message, "). Not starting over.") : "TUS_UPLOAD_START_FAILED: the upload could not be started (".concat(err.message, ").")));
               });
             }));
         }
@@ -14278,7 +14287,12 @@
     // something else. Reporting `aac-lc` for those was a codec claim this
     // client cannot establish — the same misdescription the `webm` case was
     // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
-    if (type.includes("audio/aac") || type.includes("mp4a") || ext === "aac") {
+    // `mp4a` alone is not AAC-LC. The object-type indicates the profile:
+    // `mp4a.40.2` is AAC-LC, `mp4a.40.5` is HE-AAC, `mp4a.40.29` HE-AACv2.
+    // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
+    // cannot establish — the same overclaim as calling a container its codec,
+    // one level down.
+    if (type.includes("audio/aac") || type.includes("mp4a.40.2") || ext === "aac") {
       return "aac-lc";
     }
 
@@ -15626,9 +15640,17 @@
        * can put a row on hold in that gap, and claiming it anyway would upload a
        * submission a person had explicitly stopped.
        *
+       * Returns the row as it stands *inside* the claiming transaction, not as
+       * the caller's snapshot had it. `processQueue()` reads its rows with
+       * `getAll()` and claims them one at a time, so by the time a row is claimed
+       * another tab may have recorded a failed attempt against it and released
+       * it. Working from the snapshot then used a stale `retryCount` and
+       * `lastAttempt` — bypassing the backoff and overwriting the newer state —
+       * and a stale `metadata`, which is where the upload identity lives.
+       *
        * @private
        * @param {string} id
-       * @returns {Promise<string|null>} An owner token, or null if not claimable.
+       * @returns {Promise<{token: string, row: Object}|null>} Null if not claimable.
        */
       )
     }, {
@@ -15651,7 +15673,8 @@
                   var tx = _this11.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
-                  var claimed = false;
+                  /** @type {Object|null} */
+                  var claimed = null;
                   req.onsuccess = function () {
                     var item = req.result;
                     if (!item) {
@@ -15668,13 +15691,16 @@
                     item.leaseOwner = token;
                     item.leaseUntil = now + CONFIG.leaseMs;
                     store.put(item);
-                    claimed = true;
+                    claimed = item;
                   };
                   req.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
                   tx.oncomplete = function () {
-                    return resolve(claimed ? token : null);
+                    return resolve(claimed ? {
+                      token: token,
+                      row: claimed
+                    } : null);
                   };
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
@@ -15916,12 +15942,15 @@
                 _iterator = _createForOfIteratorHelper$1(pending);
                 _context16.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
-                  var item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileToken, detail, msg, claimToken, delay, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, claimLost, result, _detail, _metadata11, _metadata12, _msg2, _msg3, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
+                  var _current$retryCount;
+                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, claimLost, result, _detail, _metadata11, _metadata12, _msg2, _msg3, stalled, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
                         item = _step.value;
-                        id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
+                        id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, instanceId = item.instanceId; // Reassigned from the claimed row below, which is the
+                        // authoritative copy for this attempt.
+                        retryCount = item.retryCount; // Not destructured as a `const`: the backfill below has to be
                         // able to replace it wholesale for a row that has no metadata
                         // object at all.
                         metadata = item.metadata; // Whether the bytes reached the server on this attempt.
@@ -15933,19 +15962,31 @@
                         return _context15.a(2, 0);
                       case 1:
                         if (!(item.transferred === true)) {
-                          _context15.n = 10;
+                          _context15.n = 12;
                           break;
                         }
                         _context15.n = 2;
                         return _this15._claim(id);
                       case 2:
-                        reconcileToken = _context15.v;
-                        if (reconcileToken) {
+                        reconcileClaim = _context15.v;
+                        if (reconcileClaim) {
                           _context15.n = 3;
                           break;
                         }
                         return _context15.a(2, 0);
                       case 3:
+                        reconcileToken = reconcileClaim.token; // The row as the claim transaction saw it, not the snapshot.
+                        row = reconcileClaim.row;
+                        if (!(row.transferred !== true)) {
+                          _context15.n = 5;
+                          break;
+                        }
+                        _context15.n = 4;
+                        return _this15._releaseClaim(id, reconcileToken);
+                      case 4:
+                        return _context15.a(2, 0);
+                      case 5:
+                        metadata = row.metadata;
                         // The server already has these bytes; what failed was
                         // afterwards. Uploading again would hand the platform a
                         // second copy of a recording it accepted — and it could not
@@ -15977,71 +16018,80 @@
                         // the entry marked as announced: re-emitting `starmus:complete`
                         // for an asset the server already has would start downstream
                         // processing a second time.
-                        if (!(item.completionEmitted !== true)) {
-                          _context15.n = 5;
+                        if (!(row.completionEmitted !== true)) {
+                          _context15.n = 7;
                           break;
                         }
                         // Emit, then mark — see the success path for why
                         // at-least-once is the right side to err on.
                         emitCompletionEvent(detail);
-                        _context15.n = 4;
-                        return _this15._markCompletionEmitted(id, reconcileToken);
-                      case 4:
                         _context15.n = 6;
-                        break;
-                      case 5:
+                        return _this15._markCompletionEmitted(id, reconcileToken);
                       case 6:
-                        _context15.p = 6;
-                        _context15.n = 7;
-                        return _this15.remove(id, reconcileToken);
-                      case 7:
-                        _context15.n = 9;
+                        _context15.n = 8;
                         break;
+                      case 7:
                       case 8:
                         _context15.p = 8;
+                        _context15.n = 9;
+                        return _this15.remove(id, reconcileToken);
+                      case 9:
+                        _context15.n = 11;
+                        break;
+                      case 10:
+                        _context15.p = 10;
                         _t = _context15.v;
                         msg = _t && _t.message ? _t.message : String(_t);
-                        _context15.n = 9;
-                        return _this15._hold(id, "Reconciled; local cleanup failed: ".concat(msg), true, reconcileToken);
-                      case 9:
-                        return _context15.a(2, 0);
-                      case 10:
                         _context15.n = 11;
-                        return _this15._claim(id);
+                        return _this15._hold(id, "Reconciled; local cleanup failed: ".concat(msg), true, reconcileToken);
                       case 11:
-                        claimToken = _context15.v;
-                        if (claimToken) {
-                          _context15.n = 12;
-                          break;
-                        }
                         return _context15.a(2, 0);
                       case 12:
-                        if (!(retryCount >= CONFIG.maxRetries)) {
+                        _context15.n = 13;
+                        return _this15._claim(id);
+                      case 13:
+                        claim = _context15.v;
+                        if (claim) {
                           _context15.n = 14;
                           break;
                         }
-                        _context15.n = 13;
-                        return _this15._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
-                      case 13:
                         return _context15.a(2, 0);
                       case 14:
-                        if (!(item.lastAttempt !== null)) {
-                          _context15.n = 16;
-                          break;
-                        }
-                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
-                        if (!(Date.now() - item.lastAttempt < delay)) {
+                        claimToken = claim.token; // From here on the row is the one the claim transaction read,
+                        // not the `getAll()` snapshot this loop is iterating. Another
+                        // tab can record a failed attempt and release a row between the
+                        // two, and continuing from the snapshot then reused a stale
+                        // `retryCount` and `lastAttempt` — skipping the backoff — and a
+                        // stale `metadata`, which carries the upload identity.
+                        current = claim.row;
+                        retryCount = (_current$retryCount = current.retryCount) !== null && _current$retryCount !== void 0 ? _current$retryCount : 0;
+                        metadata = current.metadata;
+                        if (!(retryCount >= CONFIG.maxRetries)) {
                           _context15.n = 16;
                           break;
                         }
                         _context15.n = 15;
-                        return _this15._releaseClaim(id, claimToken);
+                        return _this15._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
                       case 15:
                         return _context15.a(2, 0);
                       case 16:
-                        _context15.p = 16;
-                        if (isUploadId((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId)) {
+                        if (!(current.lastAttempt !== null && current.lastAttempt !== undefined)) {
                           _context15.n = 18;
+                          break;
+                        }
+                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
+                        if (!(Date.now() - current.lastAttempt < delay)) {
+                          _context15.n = 18;
+                          break;
+                        }
+                        _context15.n = 17;
+                        return _this15._releaseClaim(id, claimToken);
+                      case 17:
+                        return _context15.a(2, 0);
+                      case 18:
+                        _context15.p = 18;
+                        if (isUploadId((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId)) {
+                          _context15.n = 20;
                           break;
                         }
                         backfilled = createUploadId(); // The local variable is replaced, not just the stored
@@ -16054,14 +16104,14 @@
                         metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
                           uploadId: backfilled
                         });
-                        _context15.n = 17;
+                        _context15.n = 19;
                         return _this15._setMetadata(id, metadata, claimToken);
-                      case 17:
-                      case 18:
-                        _context15.n = 21;
-                        break;
                       case 19:
-                        _context15.p = 19;
+                      case 20:
+                        _context15.n = 23;
+                        break;
+                      case 21:
+                        _context15.p = 21;
                         _t2 = _context15.v;
                         // `createUploadId()` throws where there is no secure
                         // randomness. Unguarded, that threw out of the whole loop:
@@ -16072,12 +16122,12 @@
                         // lived. One unusable row must cost one row.
                         _msg = _t2 && _t2.message ? _t2.message : String(_t2);
                         console.error("[Offline] Could not assign an upload id:", id, _msg);
-                        _context15.n = 20;
+                        _context15.n = 22;
                         return _this15._hold(id, "No upload identifier could be assigned: ".concat(_msg), false, claimToken);
-                      case 20:
+                      case 22:
                         return _context15.a(2, 0);
-                      case 21:
-                        _context15.p = 21;
+                      case 23:
+                        _context15.p = 23;
                         // The claim is renewed as bytes move, not sized to outlast
                         // the upload. A capture may run to MAX_DURATION_SECONDS and
                         // a progressing transfer is deliberately unbounded, so no
@@ -16090,7 +16140,7 @@
                         // own, which is what made every stale-owner race below
                         // reachable in the first place.
                         claimLost = false;
-                        _context15.n = 22;
+                        _context15.n = 24;
                         return uploadWithPriority({
                           blob: audioBlob,
                           fileName: fileName,
@@ -16110,7 +16160,7 @@
                             });
                           }
                         });
-                      case 22:
+                      case 24:
                         result = _context15.v;
                         // Set here, the moment the bytes are known to have landed —
                         // not at the end of the block. Setting it last made the
@@ -16120,7 +16170,7 @@
                         // nothing at all.
                         uploaded = true;
                         if (!claimLost) {
-                          _context15.n = 23;
+                          _context15.n = 25;
                           break;
                         }
                         // Another tab owns this row now. Everything after a
@@ -16132,10 +16182,10 @@
                         // resource rather than starting a second one.
                         console.warn("[Offline] Lost the claim during transfer; leaving completion to the current owner:", id);
                         return _context15.a(2, 0);
-                      case 23:
-                        _context15.n = 24;
+                      case 25:
+                        _context15.n = 26;
                         return _this15._markTransferred(id, claimToken);
-                      case 24:
+                      case 26:
                         // `starmus:complete` is the boundary before any
                         // server-side processing (ADR-034). A queued upload that
                         // drains is as complete as an immediate one, so it fires
@@ -16171,9 +16221,9 @@
                         // missing one is not. Losing the event is the worse failure,
                         // so the ordering favours repeating it.
                         emitCompletionEvent(_detail);
-                        _context15.n = 25;
+                        _context15.n = 27;
                         return _this15._markCompletionEmitted(id, claimToken);
-                      case 25:
+                      case 27:
                         if (_detail.format === "unknown") {
                           sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
@@ -16183,13 +16233,13 @@
                             captureProfile: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.captureProfile) || null
                           });
                         }
-                        _context15.n = 32;
+                        _context15.n = 34;
                         break;
-                      case 26:
-                        _context15.p = 26;
+                      case 28:
+                        _context15.p = 28;
                         _t3 = _context15.v;
                         if (!uploaded) {
-                          _context15.n = 28;
+                          _context15.n = 30;
                           break;
                         }
                         // Reaching here after a successful transfer means the
@@ -16199,49 +16249,57 @@
                         // next drain does not upload it again.
                         _msg2 = _t3 && _t3.message ? _t3.message : String(_t3);
                         console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
-                        _context15.n = 27;
+                        _context15.n = 29;
                         return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
-                      case 27:
+                      case 29:
                         return _context15.a(2, 0);
-                      case 28:
+                      case 30:
                         _msg3 = _t3 && _t3.message ? _t3.message : String(_t3); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
-                        nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(_msg3);
+                        // A structured status, not a bare number. `/400/` matched
+                        // any message containing those digits — including
+                        // "TUS_UPLOAD_STALLED: no progress for 4000ms", so a stall
+                        // was classified as a server rejection and held on the
+                        // first occurrence instead of being retried. Stalls are the
+                        // normal case on the links this platform exists for, which
+                        // makes that the worst possible thing to misread.
+                        stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(_msg3);
+                        nonRetryable = !stalled && /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(_msg3);
                         if (!nonRetryable) {
-                          _context15.n = 30;
+                          _context15.n = 32;
                           break;
                         }
-                        _context15.n = 29;
+                        _context15.n = 31;
                         return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
-                      case 29:
-                        _context15.n = 31;
-                        break;
-                      case 30:
-                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        _context15.n = 31;
-                        return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
                       case 31:
-                        return _context15.a(2, 0);
-                      case 32:
-                        _context15.p = 32;
                         _context15.n = 33;
-                        return _this15.remove(id, claimToken);
-                      case 33:
-                        _context15.n = 35;
                         break;
+                      case 32:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context15.n = 33;
+                        return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
+                      case 33:
+                        return _context15.a(2, 0);
                       case 34:
                         _context15.p = 34;
+                        _context15.n = 35;
+                        return _this15.remove(id, claimToken);
+                      case 35:
+                        _context15.n = 37;
+                        break;
+                      case 36:
+                        _context15.p = 36;
                         _t4 = _context15.v;
                         _msg4 = _t4 && _t4.message ? _t4.message : String(_t4);
                         console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
-                        _context15.n = 35;
+                        _context15.n = 37;
                         return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
-                      case 35:
+                      case 37:
                         return _context15.a(2);
                     }
-                  }, _loop, null, [[32, 34], [21, 26], [16, 19], [6, 8]]);
+                  }, _loop, null, [[34, 36], [23, 28], [18, 21], [8, 10]]);
                 });
                 _iterator.s();
               case 7:
@@ -16387,7 +16445,7 @@
       key: "_getNextProcessDelay",
       value: (function () {
         var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
-          var now, pending, nextDelay, _iterator2, _step2, item, retryDelay, remainingDelay, _t8;
+          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t8;
           return _regenerator().w(function (_context17) {
             while (1) switch (_context17.p = _context17.n) {
               case 0:
@@ -16401,60 +16459,91 @@
                 _context17.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context17.v.filter(function (item) {
-                  return item.held !== true &&
-                  // Leased elsewhere. Including these meant a tab that had just
-                  // failed to claim a row still read its untouched retryCount and
-                  // lastAttempt, computed a zero delay, and rescheduled
-                  // immediately — a tight drain loop for as long as the other tab
-                  // held the lease. Held entries caused the same spin before.
-                  !(typeof item.leaseUntil === "number" && item.leaseUntil > now);
+                live = _context17.v.filter(function (item) {
+                  return item.held !== true;
                 });
-                if (!(pending.length === 0)) {
-                  _context17.n = 2;
-                  break;
-                }
-                return _context17.a(2, null);
-              case 2:
-                nextDelay = null;
-                _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context17.p = 3;
+                // Leased rows are excluded from the immediate work, but their expiry
+                // still has to wake somebody.
+                //
+                // Including them meant a tab that had just failed to claim read the
+                // untouched retryCount, computed zero, and rescheduled at once — a
+                // tight drain loop for as long as the other tab held the lease.
+                // Excluding them entirely was the opposite failure: when every
+                // remaining row was leased this returned null, no wake-up was
+                // scheduled, and if the owning tab then crashed its lease expired with
+                // nothing left to notice. The recording sat there until a reload.
+                /** @type {number|null} */
+                earliestLease = null;
+                /** @type {Array<Object>} */
+                pending = [];
+                _iterator2 = _createForOfIteratorHelper$1(live);
+                _context17.p = 2;
                 _iterator2.s();
-              case 4:
+              case 3:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context17.n = 7;
+                  _context17.n = 6;
                   break;
                 }
-                item = _step2.value;
+                _item = _step2.value;
+                if (!(typeof _item.leaseUntil === "number" && _item.leaseUntil > now)) {
+                  _context17.n = 4;
+                  break;
+                }
+                untilExpiry = _item.leaseUntil - now;
+                if (earliestLease === null || untilExpiry < earliestLease) {
+                  earliestLease = untilExpiry;
+                }
+                return _context17.a(3, 5);
+              case 4:
+                pending.push(_item);
+              case 5:
+                _context17.n = 3;
+                break;
+              case 6:
+                _context17.n = 8;
+                break;
+              case 7:
+                _context17.p = 7;
+                _t8 = _context17.v;
+                _iterator2.e(_t8);
+              case 8:
+                _context17.p = 8;
+                _iterator2.f();
+                return _context17.f(8);
+              case 9:
+                if (!(pending.length === 0)) {
+                  _context17.n = 10;
+                  break;
+                }
+                return _context17.a(2, earliestLease);
+              case 10:
+                nextDelay = null;
+                _i = 0, _pending = pending;
+              case 11:
+                if (!(_i < _pending.length)) {
+                  _context17.n = 14;
+                  break;
+                }
+                item = _pending[_i];
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context17.n = 5;
+                  _context17.n = 12;
                   break;
                 }
                 return _context17.a(2, 0);
-              case 5:
+              case 12:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
                 if (nextDelay === null || remainingDelay < nextDelay) {
                   nextDelay = remainingDelay;
                 }
-              case 6:
-                _context17.n = 4;
+              case 13:
+                _i++;
+                _context17.n = 11;
                 break;
-              case 7:
-                _context17.n = 9;
-                break;
-              case 8:
-                _context17.p = 8;
-                _t8 = _context17.v;
-                _iterator2.e(_t8);
-              case 9:
-                _context17.p = 9;
-                _iterator2.f();
-                return _context17.f(9);
-              case 10:
+              case 14:
                 return _context17.a(2, nextDelay);
             }
-          }, _callee16, this, [[3, 8, 9, 10]]);
+          }, _callee16, this, [[2, 7, 8, 9]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -18082,7 +18171,15 @@
       // finding no violations said "attained" when it should have said "not
       // applicable". `true` means every constraint that *can* be checked from
       // a track was, and none was exceeded; `unverified` names the rest.
-      attained: exceeded.length > 0 ? false : constrained === 0 || unverified.length === constrained ? null : true,
+      // `true` requires every constraint to have been checked, which is what
+      // the contract above says and what an earlier version of this did not
+      // do: it returned `true` when *some* constraint verified, so
+      // `conversation` — whose bitrate can never be read back — reported
+      // attainment while one of its constraints was unexamined. That is the
+      // overclaim ADR-035 exists to prevent. Any unverified constraint now
+      // yields `null`: not a failure, a question this device cannot answer,
+      // with `unverified` naming which part.
+      attained: exceeded.length > 0 ? false : constrained === 0 || unverified.length > 0 ? null : true,
       exceeded: exceeded,
       unverified: unverified
     };

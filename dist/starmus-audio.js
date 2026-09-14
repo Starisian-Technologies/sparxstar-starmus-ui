@@ -3088,9 +3088,17 @@
               // itself and records what it actually is.
               captureAttainment: {
                 profile: "import",
+                // The same shape `describeAttainment()` produces.
+                // Omitting the bitrate here gave imported assets a
+                // different `CaptureAttainment` from recorded ones,
+                // so a consumer could not read one contract across
+                // both — and an import could not say that the
+                // bitrate was explicitly unconstrained rather than
+                // simply missing from the record.
                 requested: {
                   sampleRate: null,
-                  channelCount: null
+                  channelCount: null,
+                  audioBitsPerSecond: null
                 },
                 actual: {},
                 attained: null,
@@ -14588,7 +14596,13 @@
       durationMs: (_input$durationMs = input.durationMs) !== null && _input$durationMs !== void 0 ? _input$durationMs : 0,
       sampleRate: (_attainment$actual$sa = attainment === null || attainment === void 0 || (_attainment$actual = attainment.actual) === null || _attainment$actual === void 0 ? void 0 : _attainment$actual.sampleRate) !== null && _attainment$actual$sa !== void 0 ? _attainment$actual$sa : null,
       channels: (_attainment$actual$ch = attainment === null || attainment === void 0 || (_attainment$actual2 = attainment.actual) === null || _attainment$actual2 === void 0 ? void 0 : _attainment$actual2.channelCount) !== null && _attainment$actual$ch !== void 0 ? _attainment$actual$ch : null,
-      captureProfile: ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) || null,
+      // Normalised at the boundary, to the same rule `uploadTus()` applies
+      // before putting it on the wire: a non-empty string after trimming, or
+      // absent. A legacy queue row carrying `"  "` — or a number — is truthy
+      // here and omitted there, so the completion event described a capture
+      // profile that the metadata accompanying the asset did not carry. Two
+      // records of one upload disagreeing is worse than neither having it.
+      captureProfile: typeof ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) === "string" && input.metadata.captureProfile.trim() !== "" ? input.metadata.captureProfile.trim() : null,
       captureProfileAttained: (_attainment$attained = attainment === null || attainment === void 0 ? void 0 : attainment.attained) !== null && _attainment$attained !== void 0 ? _attainment$attained : null,
       format: format,
       language: input.language || ((_input$formFields = input.formFields) === null || _input$formFields === void 0 ? void 0 : _input$formFields.language) || "",

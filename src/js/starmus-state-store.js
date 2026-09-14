@@ -384,7 +384,18 @@
                         // itself and records what it actually is.
                         captureAttainment: {
                             profile: "import",
-                            requested: { sampleRate: null, channelCount: null },
+                            // The same shape `describeAttainment()` produces.
+                            // Omitting the bitrate here gave imported assets a
+                            // different `CaptureAttainment` from recorded ones,
+                            // so a consumer could not read one contract across
+                            // both — and an import could not say that the
+                            // bitrate was explicitly unconstrained rather than
+                            // simply missing from the record.
+                            requested: {
+                                sampleRate: null,
+                                channelCount: null,
+                                audioBitsPerSecond: null,
+                            },
                             actual: {},
                             attained: null,
                             exceeded: [],

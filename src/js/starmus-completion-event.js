@@ -209,7 +209,17 @@ export function buildCompletionDetail(input) {
         durationMs: input.durationMs ?? 0,
         sampleRate: attainment?.actual?.sampleRate ?? null,
         channels: attainment?.actual?.channelCount ?? null,
-        captureProfile: input.metadata?.captureProfile || null,
+        // Normalised at the boundary, to the same rule `uploadTus()` applies
+        // before putting it on the wire: a non-empty string after trimming, or
+        // absent. A legacy queue row carrying `"  "` — or a number — is truthy
+        // here and omitted there, so the completion event described a capture
+        // profile that the metadata accompanying the asset did not carry. Two
+        // records of one upload disagreeing is worse than neither having it.
+        captureProfile:
+            typeof input.metadata?.captureProfile === "string" &&
+            input.metadata.captureProfile.trim() !== ""
+                ? input.metadata.captureProfile.trim()
+                : null,
         captureProfileAttained: attainment?.attained ?? null,
         format,
         language: input.language || input.formFields?.language || "",

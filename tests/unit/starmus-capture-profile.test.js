@@ -48,7 +48,15 @@ test("an attached file reports that nothing was measured, rather than claiming a
         "null is 'not applicable'; false would claim a constraint was missed",
     );
     assert.deepEqual(attainment.exceeded, []);
-    assert.deepEqual(attainment.requested, { sampleRate: null, channelCount: null });
+    assert.deepEqual(attainment.requested, {
+        sampleRate: null,
+        channelCount: null,
+        // Present and null: the bitrate was explicitly unconstrained, which is
+        // a different statement from the field being absent. Both producers of
+        // a `CaptureAttainment` emit the same shape, so a consumer reads one
+        // contract whether the asset was recorded or attached.
+        audioBitsPerSecond: null,
+    });
     assert.ok(
         attainment.unverified.includes("sampleRate"),
         "nothing was measured, and the record says so",
@@ -1013,4 +1021,56 @@ test("HE-AAC is not reported as AAC-LC", async () => {
     assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
     assert.equal(resolveUploadFormat("audio/aac; profile=lc", ""), "aac-lc");
     assert.equal(resolveUploadFormat('audio/mp4; codecs="mp4a.40.2"', ""), "aac-lc");
+});
+
+test("both producers of an attainment record emit the same shape", async () => {
+    // One is `describeAttainment()`, the other the file-attachment reducer's
+    // literal. They had drifted: an imported asset carried no
+    // `audioBitsPerSecond` key at all, so a consumer could not read one
+    // contract across both, and an import could not distinguish "explicitly
+    // unconstrained" from "this record does not mention it".
+    const { describeAttainment } = await import("../../src/js/starmus-capture-profiles.js");
+
+    const recorded = describeAttainment("conversation", {
+        getSettings: () => ({ sampleRate: 16000, channelCount: 1 }),
+    });
+
+    const store = createStore();
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    const imported = store.getState().source.captureAttainment;
+
+    assert.deepEqual(
+        Object.keys(imported.requested).sort(),
+        Object.keys(recorded.requested).sort(),
+        "the requested record has the same fields either way",
+    );
+    assert.equal(imported.requested.audioBitsPerSecond, null, "unconstrained, and said so");
+});
+
+test("a capture profile the wire omits is not announced by the event", async () => {
+    // `uploadTus()` trims and drops an empty profile, so a legacy queue row
+    // carrying whitespace — or a number — travelled with no profile while the
+    // completion event reported one. Two records of a single upload disagreeing
+    // is worse than neither carrying it.
+    const { buildCompletionDetail } = await import("../../src/js/starmus-completion-event.js");
+
+    const base = {
+        instanceId: "i-1",
+        result: {},
+        formFields: {},
+        fileName: "take.webm",
+        mimeType: "audio/webm",
+        durationMs: 1000,
+    };
+
+    for (const profile of ["   ", "", null, undefined, 42, {}]) {
+        const detail = buildCompletionDetail({ ...base, metadata: { captureProfile: profile } });
+        assert.equal(detail.captureProfile, null, `no profile announced for ${typeof profile}`);
+    }
+
+    const real = buildCompletionDetail({
+        ...base,
+        metadata: { captureProfile: "  conversation  " },
+    });
+    assert.equal(real.captureProfile, "conversation", "a real one is announced, trimmed");
 });

@@ -188,7 +188,11 @@ export function getRecorderOptions(name, mimeType) {
 /**
  * @typedef {Object} CaptureAttainment
  * @property {CaptureProfileName} profile
- * @property {{sampleRate: number|null, channelCount: number|null}} requested
+ * @property {{sampleRate: number|null, channelCount: number|null,
+ *   audioBitsPerSecond: number|null}} requested What the profile asked for.
+ *   `audioBitsPerSecond` is always present and may be null: the profile
+ *   constrains it and `getRecorderOptions()` applies it, so a consumer reading
+ *   this record to see what was asked of the device has to be able to see it.
  * @property {{sampleRate?: number, channelCount?: number}} actual
  * @property {boolean|null} attained True only when every constrained value was
  *   verified within its limit; `false` when one was missed; `null` when the

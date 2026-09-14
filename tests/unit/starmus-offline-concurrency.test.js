@@ -284,3 +284,44 @@ test("an unrecognised failure is retried, not held", async () => {
     assert.equal(isNonRetryableUploadFailure(null), false, "including no message at all");
     assert.equal(isNonRetryableUploadFailure(undefined), false);
 });
+
+test("a metadata write reports whether it landed", async () => {
+    // The caller is about to transfer bytes identified by what this persists.
+    // Told nothing, a drain that had lost the row uploaded under an id no row
+    // recorded — so it and the tab that took the row resumed different
+    // server-side resources, and the take arrived twice.
+    freshEnvironment();
+    const a = await openTab();
+    const b = await openTab();
+    const id = await seed(a.queue);
+
+    const mine = await a.queue._claim(id);
+    assert.equal(
+        await a.queue._setMetadata(id, { ...META, uploadId: "owned" }, mine.token),
+        true,
+        "the owner's write lands",
+    );
+
+    const taken = await atTimeOffset(LEASE_MS + 1000, () => b.queue._claim(id));
+    assert.ok(taken.token);
+
+    const landed = await atTimeOffset(LEASE_MS + 1000, () =>
+        a.queue._setMetadata(id, { ...META, uploadId: "stale" }, mine.token),
+    );
+    assert.equal(landed, false, "the write from the lapsed lease is reported as not landing");
+
+    const [row] = await a.queue.getAll();
+    assert.equal(row.metadata.uploadId, "owned", "and the new owner's metadata is intact");
+});
+
+test("a metadata write to a recording that is gone reports that too", async () => {
+    // A row removed by the tab that completed it. There is nothing to upload,
+    // and a drain told the write succeeded would transfer it again.
+    freshEnvironment();
+    const tab = await openTab();
+    const id = await seed(tab.queue);
+    const claim = await tab.queue._claim(id);
+    await tab.queue.remove(id, claim.token);
+
+    assert.equal(await tab.queue._setMetadata(id, { ...META }, claim.token), false);
+});

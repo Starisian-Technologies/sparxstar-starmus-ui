@@ -905,3 +905,26 @@ test("a recording made while an upload runs also supersedes it", () => {
     assert.equal(state.status, "ready_to_submit", "the second take is still waiting to be sent");
     assert.equal(state.source.blob.size, 4096, "and it is the second take that is held");
 });
+
+test("the attainment record documents every value it reports", async () => {
+    // The typedef described `requested` as sample rate and channel count while
+    // the code had been setting a bitrate too. A consumer written against the
+    // documented shape does not know to look for an applied constraint.
+    const { readFileSync } = await import("node:fs");
+    const { describeAttainment } = await import("../../src/js/starmus-capture-profiles.js");
+    const source = readFileSync("src/js/starmus-capture-profiles.js", "utf8");
+
+    const typedef = source.slice(
+        source.indexOf("@typedef {Object} CaptureAttainment"),
+        source.indexOf("@returns {CaptureAttainment}"),
+    );
+    assert.match(typedef, /audioBitsPerSecond/, "the bitrate is part of the documented shape");
+
+    // And every key the implementation puts in `requested` is one of them.
+    const attainment = describeAttainment("conversation", {
+        getSettings: () => ({ sampleRate: 16000, channelCount: 1 }),
+    });
+    for (const key of Object.keys(attainment.requested)) {
+        assert.match(typedef, new RegExp(key), `${key} is documented`);
+    }
+});

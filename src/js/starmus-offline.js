@@ -931,6 +931,8 @@ class OfflineQueue {
             const store = tx.objectStore(CONFIG.storeName);
             const req = store.get(id);
 
+            let wrote = false;
+
             req.onsuccess = () => {
                 const item = req.result;
                 // Claim-checked like every other write. A drain suspended after
@@ -944,11 +946,16 @@ class OfflineQueue {
                 if (item) {
                     item.metadata = metadata;
                     store.put(item);
+                    wrote = true;
                 }
             };
 
             req.onerror = (ev) => reject(ev.target.error);
-            tx.oncomplete = () => resolve();
+            // Whether the metadata is actually stored, resolved after the
+            // transaction commits. The caller is about to transfer bytes
+            // identified by what this was asked to persist; told nothing, it
+            // proceeded under an id no row records.
+            tx.oncomplete = () => resolve(wrote);
             tx.onerror = (ev) => reject(ev.target.error);
         });
     }
@@ -1334,6 +1341,10 @@ class OfflineQueue {
                 // alone here and then silently re-identified on every attempt —
                 // a different fingerprint each time, never able to resume the
                 // partial the previous attempt left on the server.
+                // Set when a metadata write did not land because this drain no
+                // longer holds the row.
+                let lostClaim = false;
+
                 try {
                     // Canonicalised, not merely accepted. `isUploadId()` allows
                     // surrounding whitespace and `uploadTus()` trims before
@@ -1344,7 +1355,9 @@ class OfflineQueue {
                     const storedId = metadata?.uploadId;
                     if (isUploadId(storedId) && storedId !== storedId.trim()) {
                         metadata = { ...metadata, uploadId: storedId.trim() };
-                        await this._setMetadata(id, metadata, claimToken);
+                        if (!(await this._setMetadata(id, metadata, claimToken))) {
+                            lostClaim = true;
+                        }
                     }
 
                     if (!isUploadId(metadata?.uploadId)) {
@@ -1357,7 +1370,9 @@ class OfflineQueue {
                         // persisted one, could not resume the partial that
                         // first attempt had left on the server.
                         metadata = { ...(metadata || {}), uploadId: backfilled };
-                        await this._setMetadata(id, metadata, claimToken);
+                        if (!(await this._setMetadata(id, metadata, claimToken))) {
+                            lostClaim = true;
+                        }
                         debugLog("[Offline] Backfilled upload id for legacy entry:", id);
                     }
                 } catch (err) {
@@ -1371,6 +1386,20 @@ class OfflineQueue {
                     const msg = err && err.message ? err.message : String(err);
                     console.error("[Offline] Could not assign an upload id:", id, msg);
                     await this._hold(id, `No upload identifier could be assigned: ${msg}`, false, claimToken);
+                    continue;
+                }
+
+                // The upload id could not be recorded, because the lease lapsed
+                // and another tab took the row. That tab is uploading it now.
+                //
+                // Continuing anyway was the failure the lease exists to
+                // prevent, in its worst form: this drain would transfer under
+                // an id no row holds, so the two tabs would resume *different*
+                // server-side resources rather than the same one, and the
+                // platform would receive the same take twice — paid for twice
+                // out of the contributor's data. The row is left to its owner.
+                if (lostClaim) {
+                    debugLog("[Offline] Lease lapsed before the upload id was stored:", id);
                     continue;
                 }
 

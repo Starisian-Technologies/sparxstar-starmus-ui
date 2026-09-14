@@ -28,6 +28,40 @@ import { createUploadId, isUploadId, uploadWithPriority } from "./starmus-tus.js
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
+/**
+ * Whether an upload failure is one that retrying cannot fix.
+ *
+ * A stall is not such a failure. This is the decision that most directly
+ * decides whether a recording made on a slow link survives, so it is a named
+ * function rather than an expression buried in the drain: it can be stated,
+ * read, and tested against the message families that actually occur.
+ *
+ * The status match is structured — `response code 404`, `HTTP 413`, `status:
+ * 400` — and not a bare number. `/400/` matched any message containing those
+ * digits, "TUS_UPLOAD_STALLED: no progress for 4000ms" among them, so a stall
+ * was read as a server rejection and held on its first occurrence instead of
+ * being retried. Stalls are the normal case on the links this platform exists
+ * for, which makes that the worst possible thing to misread.
+ *
+ * Nothing here decides whether the recording is *kept*: it is kept either way
+ * (ADR-011). This decides only whether the queue keeps trying.
+ *
+ * @param {string} message Failure message from the transfer attempt.
+ * @returns {boolean} True when the queue should stop retrying and hold it.
+ */
+export function isNonRetryableUploadFailure(message) {
+    const msg = typeof message === "string" ? message : String(message ?? "");
+
+    // Transient by nature: a stalled transfer, a resume lookup that failed, a
+    // device that went offline before the attempt began.
+    const stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(msg);
+    if (stalled) {
+        return false;
+    }
+
+    return /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(msg);
+}
+
 const CONFIG = {
     dbName: "StarmusSubmissions",
     storeName: "pendingSubmissions",
@@ -1498,22 +1532,7 @@ class OfflineQueue {
                     // outcome, below — never before it. A separate release
                     // first made the row claimable while it still carried the
                     // previous attempt's backoff state.
-                    // A structured status, not a bare number. `/400/` matched
-                    // any message containing those digits — including
-                    // "TUS_UPLOAD_STALLED: no progress for 4000ms", so a stall
-                    // was classified as a server rejection and held on the
-                    // first occurrence instead of being retried. Stalls are the
-                    // normal case on the links this platform exists for, which
-                    // makes that the worst possible thing to misread.
-                    const stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(
-                        msg,
-                    );
-                    const nonRetryable =
-                        !stalled &&
-                        /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(
-                            msg,
-                        );
-                    if (nonRetryable) {
+                    if (isNonRetryableUploadFailure(msg)) {
                         // Retrying will not help, so stop retrying — and keep
                         // the recording. Deleting it here was the queue
                         // quietly deciding a contributor's material was

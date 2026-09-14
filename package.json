@@ -97,6 +97,7 @@
     "axe-playwright": "latest",
     "cssnano": "latest",
     "eslint": "latest",
+    "fake-indexeddb": "^6.2.5",
     "globals": "latest",
     "markdownlint-cli": "latest",
     "postcss": "latest",

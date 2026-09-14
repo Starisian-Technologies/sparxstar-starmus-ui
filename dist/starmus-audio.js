@@ -14641,6 +14641,38 @@
 
 
   /** @type {Object} Queue configuration constants */
+  /**
+   * Whether an upload failure is one that retrying cannot fix.
+   *
+   * A stall is not such a failure. This is the decision that most directly
+   * decides whether a recording made on a slow link survives, so it is a named
+   * function rather than an expression buried in the drain: it can be stated,
+   * read, and tested against the message families that actually occur.
+   *
+   * The status match is structured — `response code 404`, `HTTP 413`, `status:
+   * 400` — and not a bare number. `/400/` matched any message containing those
+   * digits, "TUS_UPLOAD_STALLED: no progress for 4000ms" among them, so a stall
+   * was read as a server rejection and held on its first occurrence instead of
+   * being retried. Stalls are the normal case on the links this platform exists
+   * for, which makes that the worst possible thing to misread.
+   *
+   * Nothing here decides whether the recording is *kept*: it is kept either way
+   * (ADR-011). This decides only whether the queue keeps trying.
+   *
+   * @param {string} message Failure message from the transfer attempt.
+   * @returns {boolean} True when the queue should stop retrying and hold it.
+   */
+  function isNonRetryableUploadFailure(message) {
+    var msg = typeof message === "string" ? message : String(message !== null && message !== void 0 ? message : "");
+
+    // Transient by nature: a stalled transfer, a resume lookup that failed, a
+    // device that went offline before the attempt began.
+    var stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(msg);
+    if (stalled) {
+      return false;
+    }
+    return /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(msg);
+  }
   var CONFIG = {
     dbName: "StarmusSubmissions",
     storeName: "pendingSubmissions",
@@ -16075,7 +16107,7 @@
                 _context16.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, _detail, _metadata12, _metadata13, _msg2, _msg3, stalled, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
+                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
@@ -16455,16 +16487,7 @@
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
-                        // A structured status, not a bare number. `/400/` matched
-                        // any message containing those digits — including
-                        // "TUS_UPLOAD_STALLED: no progress for 4000ms", so a stall
-                        // was classified as a server rejection and held on the
-                        // first occurrence instead of being retried. Stalls are the
-                        // normal case on the links this platform exists for, which
-                        // makes that the worst possible thing to misread.
-                        stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(_msg3);
-                        nonRetryable = !stalled && /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(_msg3);
-                        if (!nonRetryable) {
+                        if (!isNonRetryableUploadFailure(_msg3)) {
                           _context15.n = 40;
                           break;
                         }

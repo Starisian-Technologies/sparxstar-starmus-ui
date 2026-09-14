@@ -13757,7 +13757,30 @@
       chunkSize: settings.uploadChunkSize || 512 * 1024,
       // max 512 KB per AGENTS.md
       retryDelays: [0, 2000, 4000],
-      removeFingerprintOnSuccess: true,
+      // The resume fingerprint outlives the transfer, deliberately.
+      //
+      // Clearing it on success raced the durable record of that success. The
+      // queue writes `transferred: true` in a later IndexedDB transaction, so
+      // a page that died in between — an OS killing a backgrounded tab on a
+      // low-memory phone, which is the ordinary case here — left a row still
+      // marked untransferred and no fingerprint to resume by. The next drain
+      // could then do nothing but start a second TUS resource for a recording
+      // the server had already accepted, which is the duplicate ADR-038
+      // forbids and the contributor's data spent twice.
+      //
+      // Kept, the same crash resumes: `findPreviousUploads()` finds the
+      // resource, the server reports the offset already equals the size, and
+      // `onSuccess` fires without re-sending a byte. The row is then marked
+      // and removed as usual.
+      //
+      // The cost is that a completed upload's fingerprint stays in
+      // localStorage after its row is gone. Each entry is small and the queue
+      // is bounded, but nothing prunes them today. Removing one needs the
+      // `urlStorage` key, which tus-js-client returns publicly only for an
+      // upload found by `findPreviousUploads()` — never for a fresh one — so
+      // a cleanup pass has to look the entry up by fingerprint through an
+      // injected `urlStorage`. That is worth doing and is not done here.
+      removeFingerprintOnSuccess: false,
       maxChunkRetries: 3,
       // A stall watchdog, not a deadline. The old code aborted the whole
       // upload after 5 s, which on a 2G link ends every upload of a real
@@ -15454,16 +15477,18 @@
                   // identically either way let the caller continue into the
                   // completion event and cleanup after losing the row — emitting a
                   // duplicate boundary event while another tab owned it — and left a
-                  // `transferred: false` row behind after `removeFingerprintOnSuccess`
-                  // had already dropped the resume key, so the next drain uploaded
-                  // the same accepted recording again.
+                  // `transferred: false` row behind, which the next drain then
+                  // attempted again. The fingerprint is now kept until the transfer
+                  // is recorded, so such an attempt resumes the accepted resource
+                  // rather than creating a second one; the row still needs marking,
+                  // and this still has to say whether the marking happened.
                   // Storage could not answer, which is not the same as the row
                   // belonging to someone else — the distinction `_renewClaim()` also
                   // draws, and it matters more here. This runs *after* the bytes
-                  // landed and after `removeFingerprintOnSuccess` dropped the resume
-                  // key, so reading a failed write as "not ours" left the row
-                  // `transferred: false` and let a later drain start a second TUS
-                  // resource for a recording the server had already accepted.
+                  // landed, so reading a failed write as "not ours" left the row
+                  // `transferred: false` for a recording the server had accepted —
+                  // and before the fingerprint was kept past this point, the next
+                  // drain had no way to resume it and started a second TUS resource.
                   req.onerror = function () {
                     return resolve(null);
                   };
@@ -15586,14 +15611,16 @@
                       item.lastAttempt = Date.now();
                       // Whether the server already has these bytes.
                       //
-                      // It matters because `removeFingerprintOnSuccess` deletes
-                      // the resume fingerprint the moment a transfer completes.
-                      // An entry held *after* that — completion handling threw,
-                      // or the local delete failed — has no resume identity left,
-                      // so releasing it would not resume anything: it would start
-                      // a new TUS resource and hand the platform a second copy of
-                      // a recording it had already accepted. Recorded here so the
-                      // drain can finish the job instead of redoing it.
+                      // An entry held *after* a completed transfer — completion
+                      // handling threw, or the local delete failed — must not be
+                      // uploaded again when someone releases it: the platform
+                      // already has these bytes. The flag is what lets the drain
+                      // finish the job rather than redo it. It mattered more
+                      // sharply when the resume fingerprint was dropped on
+                      // success and such an entry had no resume identity at all;
+                      // the fingerprint is kept now, but resuming a completed
+                      // resource to rediscover that it is complete is still the
+                      // long way round.
                       if (transferred) {
                         item.transferred = true;
                       }
@@ -16154,9 +16181,9 @@
        * Three outcomes, not two. A storage failure is not evidence that the row
        * changed hands, and reporting it as such was how a *successful* upload got
        * abandoned: the drain saw `false`, stood down, and left the row
-       * `transferred: false` — while `removeFingerprintOnSuccess` had already
-       * dropped the resume fingerprint, so the next drain started a second TUS
-       * resource instead of reconciling the one the server had accepted. That is
+       * `transferred: false` for bytes the server had accepted — which, before
+       * the resume fingerprint was kept past the transfer, meant the next drain
+       * created a second TUS resource rather than reconciling the first. That is
        * the duplicate this whole mechanism exists to prevent, produced by the
        * mechanism itself.
        *
@@ -16444,12 +16471,12 @@
                         metadata = row.metadata;
                         _audioBlob = row.audioBlob, _fileName = row.fileName, _formFields = row.formFields, _instanceId = row.instanceId; // The server already has these bytes; what failed was
                         // afterwards. Uploading again would hand the platform a
-                        // second copy of a recording it accepted — and it could not
-                        // even resume the first, because `removeFingerprintOnSuccess`
-                        // deleted the resume fingerprint when the transfer
-                        // completed. So this entry is finished rather than resent:
-                        // the completion event that never fired is emitted now, and
-                        // the entry goes.
+                        // second copy of a recording it accepted. So this entry is
+                        // finished rather than resent: the completion event that
+                        // never fired is emitted now, and the entry goes. (Before
+                        // the fingerprint was kept past the transfer, it could not
+                        // even have resumed the first — there was no resume
+                        // identity left to try.)
                         //
                         // Reached only after a release, since holding is what put
                         // the flag here. Before this existed, releasing such an

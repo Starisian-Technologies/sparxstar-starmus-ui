@@ -150,7 +150,30 @@ function getConfig() {
     const defaults = {
         chunkSize: settings.uploadChunkSize || 512 * 1024, // max 512 KB per AGENTS.md
         retryDelays: [0, 2000, 4000],
-        removeFingerprintOnSuccess: true,
+        // The resume fingerprint outlives the transfer, deliberately.
+        //
+        // Clearing it on success raced the durable record of that success. The
+        // queue writes `transferred: true` in a later IndexedDB transaction, so
+        // a page that died in between — an OS killing a backgrounded tab on a
+        // low-memory phone, which is the ordinary case here — left a row still
+        // marked untransferred and no fingerprint to resume by. The next drain
+        // could then do nothing but start a second TUS resource for a recording
+        // the server had already accepted, which is the duplicate ADR-038
+        // forbids and the contributor's data spent twice.
+        //
+        // Kept, the same crash resumes: `findPreviousUploads()` finds the
+        // resource, the server reports the offset already equals the size, and
+        // `onSuccess` fires without re-sending a byte. The row is then marked
+        // and removed as usual.
+        //
+        // The cost is that a completed upload's fingerprint stays in
+        // localStorage after its row is gone. Each entry is small and the queue
+        // is bounded, but nothing prunes them today. Removing one needs the
+        // `urlStorage` key, which tus-js-client returns publicly only for an
+        // upload found by `findPreviousUploads()` — never for a fresh one — so
+        // a cleanup pass has to look the entry up by fingerprint through an
+        // injected `urlStorage`. That is worth doing and is not done here.
+        removeFingerprintOnSuccess: false,
         maxChunkRetries: 3,
         // A stall watchdog, not a deadline. The old code aborted the whole
         // upload after 5 s, which on a 2G link ends every upload of a real

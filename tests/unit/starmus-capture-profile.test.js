@@ -463,10 +463,11 @@ test("the local queue key survives a runtime with no secure randomness", async (
 });
 
 test("an entry whose bytes already landed is reconciled, never re-uploaded", async () => {
-    // `removeFingerprintOnSuccess` deletes the resume fingerprint when a
-    // transfer completes, so an entry held *after* that has no resume identity.
-    // Releasing it used to start a new TUS resource — a second copy of a
-    // recording the platform had already accepted.
+    // An entry held *after* a completed transfer must not be uploaded again
+    // when someone releases it: the platform already has the bytes. Releasing
+    // it used to start a new TUS resource — a second copy of a recording that
+    // had been accepted — which was unavoidable back when the resume
+    // fingerprint was dropped the moment a transfer succeeded.
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-offline.js", "utf8");
 
@@ -1201,4 +1202,27 @@ test("an unverifiable constraint is not reported as a failed capture", async () 
         "the warning is gated on an actual failure, not on falsiness",
     );
     assert.doesNotMatch(source, /if \(!attainment\.attained\) \{/, "not on truthiness");
+});
+
+test("the resume fingerprint outlives the record of the transfer", async () => {
+    // Cleared on success, the fingerprint raced the durable mark: the queue
+    // writes `transferred: true` in a later IndexedDB transaction, and a page
+    // that died in between left a row marked untransferred with no resume
+    // identity. The next drain could only start a second TUS resource for a
+    // recording the server had already accepted.
+    //
+    // On the devices this package exists for, a backgrounded tab being killed
+    // is the ordinary case, not the exotic one.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    assert.match(
+        source,
+        /removeFingerprintOnSuccess: false,/,
+        "the fingerprint survives a crash between the transfer and its record",
+    );
+    assert.doesNotMatch(source, /removeFingerprintOnSuccess: true,/);
+
+    // And it is still what the resume path looks for.
+    assert.match(source, /findPreviousUploads\(\)/, "the next attempt resumes by it");
 });

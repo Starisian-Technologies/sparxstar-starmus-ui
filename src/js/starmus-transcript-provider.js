@@ -331,6 +331,12 @@ function describeProviderDefect(candidate) {
     if (candidate.model !== null && typeof candidate.model !== "string") {
         return "`model` must be a string or an explicit null";
     }
+    if (typeof candidate.model === "string" && candidate.model.trim() === "") {
+        // A blank string is not "no model" — `null` is. Accepting it produced
+        // provenance carrying an empty model identifier, which reads as a
+        // model nobody named rather than an engine that exposes none.
+        return "`model` must be a non-empty version string, or an explicit null";
+    }
     return "";
 }
 

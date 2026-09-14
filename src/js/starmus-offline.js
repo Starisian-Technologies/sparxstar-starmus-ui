@@ -1239,6 +1239,15 @@ class OfflineQueue {
                 retryCount = current.retryCount ?? 0;
                 metadata = current.metadata;
 
+                if (current.transferred === true) {
+                    // Marked transferred between the snapshot and the claim.
+                    // Uploading now would send an asset the server already has;
+                    // the reconciliation path handles it on the next drain,
+                    // which is one tick away.
+                    await this._releaseClaim(id, claimToken);
+                    continue;
+                }
+
                 if (retryCount >= CONFIG.maxRetries) {
                     // Held, not removed. Exhausting the retries says the queue
                     // cannot fix this on its own; it does not say the recording
@@ -1279,6 +1288,18 @@ class OfflineQueue {
                 // a different fingerprint each time, never able to resume the
                 // partial the previous attempt left on the server.
                 try {
+                    // Canonicalised, not merely accepted. `isUploadId()` allows
+                    // surrounding whitespace and `uploadTus()` trims before
+                    // deriving the fingerprint and `upload_uuid` — so an id
+                    // stored with whitespace made the reconciliation path
+                    // announce a different string from the one the server knows
+                    // the resource by.
+                    const storedId = metadata?.uploadId;
+                    if (isUploadId(storedId) && storedId !== storedId.trim()) {
+                        metadata = { ...metadata, uploadId: storedId.trim() };
+                        await this._setMetadata(id, metadata, claimToken);
+                    }
+
                     if (!isUploadId(metadata?.uploadId)) {
                         const backfilled = createUploadId();
                         // The local variable is replaced, not just the stored
@@ -1313,6 +1334,8 @@ class OfflineQueue {
                     // fixed lease is both long enough for a real upload and
                     // short enough to free a row from a tab that died.
                     let lastRenewal = Date.now();
+                    /** @type {Promise<boolean>|null} The renewal still in flight. */
+                    let renewalInFlight = null;
                     // Set when a renewal reports that this drain no longer owns
                     // the row. Ignoring the result meant a drain kept going
                     // after another tab had taken over: it would emit the
@@ -1332,11 +1355,13 @@ class OfflineQueue {
                                 return;
                             }
                             lastRenewal = now;
-                            void this._renewClaim(id, claimToken).then((ok) => {
+                            renewalInFlight = this._renewClaim(id, claimToken).then((ok) => {
                                 if (!ok) {
                                     claimLost = true;
                                 }
+                                return ok;
                             });
+                            void renewalInFlight;
                         },
                     });
 
@@ -1347,6 +1372,22 @@ class OfflineQueue {
                     // protection against re-uploading an accepted asset did
                     // nothing at all.
                     uploaded = true;
+
+                    // The last renewal is allowed to land before ownership is
+                    // judged. It is an IndexedDB round-trip started from a
+                    // progress callback, so it could still be pending — or
+                    // resolve false moments after `onSuccess` — leaving this
+                    // drain to emit the boundary event and run cleanup for a row
+                    // another tab had already taken.
+                    if (renewalInFlight) {
+                        try {
+                            await renewalInFlight;
+                        } catch {
+                            // A renewal that could not be read is treated as
+                            // lost, below.
+                            claimLost = true;
+                        }
+                    }
 
                     if (claimLost) {
                         // Another tab owns this row now. Everything after a

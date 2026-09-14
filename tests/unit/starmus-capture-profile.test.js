@@ -699,3 +699,67 @@ test("a queue whose rows are all leased still schedules a wake-up", async () => 
         "and it is what the drain waits for when nothing is claimable",
     );
 });
+
+test("a finished recording keeps its own transcript", () => {
+    // `recording-available` is dispatched from MediaRecorder's stop handler,
+    // after a whole recording's worth of transcript updates. Clearing the draft
+    // there erased the take that had just finished, before `handleSubmit()`
+    // could snapshot it — so every recording uploaded with an empty transcript.
+    // The retake leak it was meant to fix belongs at mic-start instead.
+    const store = createStore();
+
+    store.dispatch({ type: "starmus/mic-start" });
+    store.dispatch({ type: "starmus/transcript-update", transcript: "kori kuta" });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    assert.equal(
+        store.getState().source.transcript,
+        "kori kuta",
+        "the draft survives to the submission that carries it",
+    );
+
+    // And a retake still does not inherit the previous take's words.
+    store.dispatch({ type: "starmus/mic-start" });
+    assert.equal(store.getState().source.transcript, "", "cleared when the mic reopens");
+});
+
+test("the attainment record carries no device identifiers", async () => {
+    // MediaTrackSettings includes deviceId and groupId — stable identifiers for
+    // the contributor's microphone — and this record is serialized into TUS
+    // metadata, so keeping it wholesale attached a device fingerprint to every
+    // asset a contributor uploaded.
+    const { describeAttainment } = await import("../../src/js/starmus-capture-profiles.js");
+    const track = {
+        getSettings: () => ({
+            sampleRate: 16000,
+            channelCount: 1,
+            deviceId: "a-stable-device-identifier",
+            groupId: "a-stable-group-identifier",
+            echoCancellation: true,
+        }),
+    };
+
+    const { actual } = describeAttainment("conversation", track);
+    assert.deepEqual(Object.keys(actual).sort(), ["channelCount", "sampleRate"]);
+    assert.equal(actual.deviceId, undefined, "no device identifier travels with the asset");
+    assert.equal(actual.groupId, undefined);
+});
+
+test("attaching a file does not re-arm a submission already in flight", () => {
+    // The file input stays active while `status === "submitting"`, so flipping
+    // the status back to ready_to_submit re-enabled submit and permitted a
+    // second submission alongside the first.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start" });
+    assert.equal(store.getState().status, "submitting");
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    assert.equal(store.getState().status, "submitting", "the in-flight upload keeps the UI");
+    assert.equal(store.getState().source.kind, "file", "while the attachment is still recorded");
+});

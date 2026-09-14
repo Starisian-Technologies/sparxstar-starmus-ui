@@ -194,7 +194,15 @@ if (fs.existsSync(tusFile)) {
     // tus-js-client's `start()` does not consult URL storage on its own, so
     // without this the stall abort orphans a partial resource and the retry
     // re-sends from byte zero — the re-upload ADR-038 forbids.
-    if (!/findPreviousUploads\s*\(/.test(tusContent) || !/resumeFromPreviousUpload\s*\(/.test(tusContent)) {
+    // Tested against the code with comments stripped. Both method names appear
+    // in this module's own explanatory comments, so the check passed on prose:
+    // deleting the actual calls and leaving the paragraph that describes them
+    // would have kept the build green while every retry restarted from byte
+    // zero. A guard that its own documentation satisfies is not a guard.
+    const tusCode = tusContent
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+    if (!/findPreviousUploads\s*\(/.test(tusCode) || !/resumeFromPreviousUpload\s*\(/.test(tusCode)) {
         console.log(
             "❌ starmus-tus.js: a retry must look up and resume the previous upload (findPreviousUploads + resumeFromPreviousUpload) before start(). ADR-038 forbids re-sending a partially transferred original.",
         );

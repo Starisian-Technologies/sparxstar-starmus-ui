@@ -235,7 +235,16 @@ export function initCore(store, instanceId, env) {
                 source.kind !== "file" && calibration.complete
                     ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
                     : null,
-            captureProfile: source.captureProfile || null,
+            // Normalised once, here, so the upload metadata and the completion
+            // event cannot disagree. The upload path treats a whitespace-only
+            // profile as absent; leaving the raw value in the snapshot meant
+            // TUS omitted the profile while `buildCompletionDetail()` reported
+            // `captureProfile: "   "` — a record contradicting what was sent,
+            // and neither absent nor named.
+            captureProfile:
+                typeof source.captureProfile === "string" && source.captureProfile.trim() !== ""
+                    ? source.captureProfile.trim()
+                    : null,
             captureAttainment,
             // Persisted so a queued upload that drains hours later can still
             // describe the asset it sent. The store state it came from is long

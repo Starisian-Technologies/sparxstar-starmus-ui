@@ -192,6 +192,18 @@
                     status: "recording",
                     error: null,
                     recorder: merge(state.recorder, { duration: 0, isPaused: false }),
+                    source: merge(state.source, {
+                        // The previous take's draft goes when the microphone
+                        // opens, not when the new recording lands.
+                        // `handleSubmit()` copies `source.transcript` into the
+                        // upload metadata, so a retake used to carry the
+                        // *previous* take's words; clearing at stop instead
+                        // erased the draft of the take that had just finished.
+                        // Here is the one moment when the old words are stale
+                        // and no new ones exist yet.
+                        transcript: "",
+                        interimTranscript: "",
+                    }),
                 });
 
             case "starmus/mic-pause":
@@ -227,14 +239,21 @@
                         // the payload cannot disagree. See `file-attached`
                         // below for what leaving the other one set costs.
                         file: null,
-                        // And the draft that belonged to whatever was recorded
-                        // or attached before. `handleSubmit()` copies
-                        // `source.transcript` into the upload metadata, so a
-                        // retake carried the *previous* take's words — the same
-                        // mislabelling as `file-attached`, in the direction
-                        // that fix did not cover.
-                        transcript: "",
-                        interimTranscript: "",
+                        // The transcript is deliberately NOT cleared here, and
+                        // an earlier version of this did clear it — which
+                        // erased every recording's own draft.
+                        //
+                        // `recording-available` is dispatched from
+                        // MediaRecorder's `stop` handler, *after* a whole
+                        // recording's worth of `transcript-update` actions have
+                        // accumulated. Clearing at stop therefore wiped the
+                        // draft belonging to the take that had just finished,
+                        // before `handleSubmit()` could snapshot it. The retake
+                        // leak it was meant to fix is handled at `mic-start`
+                        // instead: a new recording clears the previous draft
+                        // when the microphone opens, which is before any of the
+                        // new one's words exist.
+                        //
                         // The capture profile is deliberately NOT cleared here.
                         // `starmus/capture-profile` is dispatched when the
                         // microphone opens and `starmus/recording-available`
@@ -264,8 +283,15 @@
                 });
 
             case "starmus/file-attached":
+                // A submission already in flight is not interrupted. The file
+                // input stays active while `status === "submitting"`, so
+                // attaching a file mid-upload used to flip the status back to
+                // `ready_to_submit`, re-enabling submit and permitting a second
+                // submission to run alongside the first. The attachment is
+                // still recorded; only the status is left alone, so the
+                // in-flight upload keeps the UI it owns until it settles.
                 return merge(state, {
-                    status: "ready_to_submit",
+                    status: state.status === "submitting" ? state.status : "ready_to_submit",
                     source: merge(state.source, {
                         kind: "file",
                         file: action.file,

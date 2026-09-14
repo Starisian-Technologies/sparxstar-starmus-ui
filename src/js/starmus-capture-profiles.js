@@ -215,7 +215,21 @@ export function getRecorderOptions(name, mimeType) {
  */
 export function describeAttainment(name, track) {
     const profile = resolveCaptureProfile(name);
-    const actual = typeof track?.getSettings === "function" ? track.getSettings() : {};
+    // Projected to the fields the contract needs, never the whole settings
+    // object. `MediaTrackSettings` carries `deviceId` and `groupId` — stable
+    // identifiers for the contributor's microphone — and this record is
+    // serialized into TUS metadata, so keeping it wholesale attached a device
+    // fingerprint to every asset a contributor ever uploaded. Nothing
+    // downstream needs it, and a platform built on data sovereignty is the last
+    // place it should travel by accident.
+    const settings = typeof track?.getSettings === "function" ? track.getSettings() : {};
+    /** @type {{sampleRate?: number, channelCount?: number}} */
+    const actual = {};
+    for (const key of /** @type {const} */ (["sampleRate", "channelCount"])) {
+        if (typeof settings[key] === "number") {
+            actual[key] = settings[key];
+        }
+    }
     const requested = {
         sampleRate: profile.sampleRate,
         channelCount: profile.channelCount,

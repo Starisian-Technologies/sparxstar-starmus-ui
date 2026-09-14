@@ -2906,6 +2906,18 @@
             recorder: merge(state.recorder, {
               duration: 0,
               isPaused: false
+            }),
+            source: merge(state.source, {
+              // The previous take's draft goes when the microphone
+              // opens, not when the new recording lands.
+              // `handleSubmit()` copies `source.transcript` into the
+              // upload metadata, so a retake used to carry the
+              // *previous* take's words; clearing at stop instead
+              // erased the draft of the take that had just finished.
+              // Here is the one moment when the old words are stale
+              // and no new ones exist yet.
+              transcript: "",
+              interimTranscript: ""
             })
           });
         case "starmus/mic-pause":
@@ -2943,14 +2955,21 @@
               // the payload cannot disagree. See `file-attached`
               // below for what leaving the other one set costs.
               file: null,
-              // And the draft that belonged to whatever was recorded
-              // or attached before. `handleSubmit()` copies
-              // `source.transcript` into the upload metadata, so a
-              // retake carried the *previous* take's words — the same
-              // mislabelling as `file-attached`, in the direction
-              // that fix did not cover.
-              transcript: "",
-              interimTranscript: "",
+              // The transcript is deliberately NOT cleared here, and
+              // an earlier version of this did clear it — which
+              // erased every recording's own draft.
+              //
+              // `recording-available` is dispatched from
+              // MediaRecorder's `stop` handler, *after* a whole
+              // recording's worth of `transcript-update` actions have
+              // accumulated. Clearing at stop therefore wiped the
+              // draft belonging to the take that had just finished,
+              // before `handleSubmit()` could snapshot it. The retake
+              // leak it was meant to fix is handled at `mic-start`
+              // instead: a new recording clears the previous draft
+              // when the microphone opens, which is before any of the
+              // new one's words exist.
+              //
               // The capture profile is deliberately NOT cleared here.
               // `starmus/capture-profile` is dispatched when the
               // microphone opens and `starmus/recording-available`
@@ -2981,8 +3000,15 @@
             })
           });
         case "starmus/file-attached":
+          // A submission already in flight is not interrupted. The file
+          // input stays active while `status === "submitting"`, so
+          // attaching a file mid-upload used to flip the status back to
+          // `ready_to_submit`, re-enabling submit and permitting a second
+          // submission to run alongside the first. The attachment is
+          // still recorded; only the status is left alone, so the
+          // in-flight upload keeps the UI it owns until it settles.
           return merge(state, {
-            status: "ready_to_submit",
+            status: state.status === "submitting" ? state.status : "ready_to_submit",
             source: merge(state.source, {
               kind: "file",
               file: action.file,
@@ -15909,7 +15935,7 @@
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
           var _sparxstarIntegration,
             _this15 = this;
-          var pending, _iterator, _step, _loop, _ret, nextDelay, _t5, _t6, _t7;
+          var pending, _iterator, _step, _loop, _ret, nextDelay, _t6, _t7, _t8;
           return _regenerator().w(function (_context16) {
             while (1) switch (_context16.p = _context16.n) {
               case 0:
@@ -15943,7 +15969,7 @@
                 _context16.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, claimLost, result, _detail, _metadata11, _metadata12, _msg2, _msg3, stalled, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
+                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, _detail, _metadata12, _metadata13, _msg2, _msg3, stalled, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
@@ -16066,32 +16092,58 @@
                         current = claim.row;
                         retryCount = (_current$retryCount = current.retryCount) !== null && _current$retryCount !== void 0 ? _current$retryCount : 0;
                         metadata = current.metadata;
-                        if (!(retryCount >= CONFIG.maxRetries)) {
+                        if (!(current.transferred === true)) {
                           _context15.n = 16;
                           break;
                         }
                         _context15.n = 15;
-                        return _this15._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
+                        return _this15._releaseClaim(id, claimToken);
                       case 15:
                         return _context15.a(2, 0);
                       case 16:
-                        if (!(current.lastAttempt !== null && current.lastAttempt !== undefined)) {
-                          _context15.n = 18;
-                          break;
-                        }
-                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
-                        if (!(Date.now() - current.lastAttempt < delay)) {
+                        if (!(retryCount >= CONFIG.maxRetries)) {
                           _context15.n = 18;
                           break;
                         }
                         _context15.n = 17;
-                        return _this15._releaseClaim(id, claimToken);
+                        return _this15._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
                       case 17:
                         return _context15.a(2, 0);
                       case 18:
-                        _context15.p = 18;
-                        if (isUploadId((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId)) {
+                        if (!(current.lastAttempt !== null && current.lastAttempt !== undefined)) {
                           _context15.n = 20;
+                          break;
+                        }
+                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
+                        if (!(Date.now() - current.lastAttempt < delay)) {
+                          _context15.n = 20;
+                          break;
+                        }
+                        _context15.n = 19;
+                        return _this15._releaseClaim(id, claimToken);
+                      case 19:
+                        return _context15.a(2, 0);
+                      case 20:
+                        _context15.p = 20;
+                        // Canonicalised, not merely accepted. `isUploadId()` allows
+                        // surrounding whitespace and `uploadTus()` trims before
+                        // deriving the fingerprint and `upload_uuid` — so an id
+                        // stored with whitespace made the reconciliation path
+                        // announce a different string from the one the server knows
+                        // the resource by.
+                        storedId = (_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId;
+                        if (!(isUploadId(storedId) && storedId !== storedId.trim())) {
+                          _context15.n = 21;
+                          break;
+                        }
+                        metadata = _objectSpread2(_objectSpread2({}, metadata), {}, {
+                          uploadId: storedId.trim()
+                        });
+                        _context15.n = 21;
+                        return _this15._setMetadata(id, metadata, claimToken);
+                      case 21:
+                        if (isUploadId((_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.uploadId)) {
+                          _context15.n = 23;
                           break;
                         }
                         backfilled = createUploadId(); // The local variable is replaced, not just the stored
@@ -16104,14 +16156,14 @@
                         metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
                           uploadId: backfilled
                         });
-                        _context15.n = 19;
+                        _context15.n = 22;
                         return _this15._setMetadata(id, metadata, claimToken);
-                      case 19:
-                      case 20:
-                        _context15.n = 23;
+                      case 22:
+                      case 23:
+                        _context15.n = 26;
                         break;
-                      case 21:
-                        _context15.p = 21;
+                      case 24:
+                        _context15.p = 24;
                         _t2 = _context15.v;
                         // `createUploadId()` throws where there is no secure
                         // randomness. Unguarded, that threw out of the whole loop:
@@ -16122,25 +16174,27 @@
                         // lived. One unusable row must cost one row.
                         _msg = _t2 && _t2.message ? _t2.message : String(_t2);
                         console.error("[Offline] Could not assign an upload id:", id, _msg);
-                        _context15.n = 22;
+                        _context15.n = 25;
                         return _this15._hold(id, "No upload identifier could be assigned: ".concat(_msg), false, claimToken);
-                      case 22:
+                      case 25:
                         return _context15.a(2, 0);
-                      case 23:
-                        _context15.p = 23;
+                      case 26:
+                        _context15.p = 26;
                         // The claim is renewed as bytes move, not sized to outlast
                         // the upload. A capture may run to MAX_DURATION_SECONDS and
                         // a progressing transfer is deliberately unbounded, so no
                         // fixed lease is both long enough for a real upload and
                         // short enough to free a row from a tab that died.
-                        lastRenewal = Date.now(); // Set when a renewal reports that this drain no longer owns
+                        lastRenewal = Date.now();
+                        /** @type {Promise<boolean>|null} The renewal still in flight. */
+                        renewalInFlight = null; // Set when a renewal reports that this drain no longer owns
                         // the row. Ignoring the result meant a drain kept going
                         // after another tab had taken over: it would emit the
                         // completion event and run cleanup against a row it did not
                         // own, which is what made every stale-owner race below
                         // reachable in the first place.
                         claimLost = false;
-                        _context15.n = 24;
+                        _context15.n = 27;
                         return uploadWithPriority({
                           blob: audioBlob,
                           fileName: fileName,
@@ -16153,14 +16207,15 @@
                               return;
                             }
                             lastRenewal = now;
-                            void _this15._renewClaim(id, claimToken).then(function (ok) {
+                            renewalInFlight = _this15._renewClaim(id, claimToken).then(function (ok) {
                               if (!ok) {
                                 claimLost = true;
                               }
+                              return ok;
                             });
                           }
                         });
-                      case 24:
+                      case 27:
                         result = _context15.v;
                         // Set here, the moment the bytes are known to have landed —
                         // not at the end of the block. Setting it last made the
@@ -16169,8 +16224,32 @@
                         // protection against re-uploading an accepted asset did
                         // nothing at all.
                         uploaded = true;
+
+                        // The last renewal is allowed to land before ownership is
+                        // judged. It is an IndexedDB round-trip started from a
+                        // progress callback, so it could still be pending — or
+                        // resolve false moments after `onSuccess` — leaving this
+                        // drain to emit the boundary event and run cleanup for a row
+                        // another tab had already taken.
+                        if (!renewalInFlight) {
+                          _context15.n = 31;
+                          break;
+                        }
+                        _context15.p = 28;
+                        _context15.n = 29;
+                        return renewalInFlight;
+                      case 29:
+                        _context15.n = 31;
+                        break;
+                      case 30:
+                        _context15.p = 30;
+                        _context15.v;
+                        // A renewal that could not be read is treated as
+                        // lost, below.
+                        claimLost = true;
+                      case 31:
                         if (!claimLost) {
-                          _context15.n = 25;
+                          _context15.n = 32;
                           break;
                         }
                         // Another tab owns this row now. Everything after a
@@ -16182,10 +16261,10 @@
                         // resource rather than starting a second one.
                         console.warn("[Offline] Lost the claim during transfer; leaving completion to the current owner:", id);
                         return _context15.a(2, 0);
-                      case 25:
-                        _context15.n = 26;
+                      case 32:
+                        _context15.n = 33;
                         return _this15._markTransferred(id, claimToken);
-                      case 26:
+                      case 33:
                         // `starmus:complete` is the boundary before any
                         // server-side processing (ADR-034). A queued upload that
                         // drains is as complete as an immediate one, so it fires
@@ -16197,11 +16276,11 @@
                           metadata: metadata,
                           formFields: formFields,
                           fileName: fileName,
-                          mimeType: ((_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.mimeType) || audioBlob.type || "",
-                          durationMs: (_metadata$durationMs2 = (_metadata9 = metadata) === null || _metadata9 === void 0 ? void 0 : _metadata9.durationMs) !== null && _metadata$durationMs2 !== void 0 ? _metadata$durationMs2 : 0,
-                          language: ((_metadata0 = metadata) === null || _metadata0 === void 0 ? void 0 : _metadata0.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
-                          contributorId: ((_metadata1 = metadata) === null || _metadata1 === void 0 || (_metadata1 = _metadata1.env) === null || _metadata1 === void 0 || (_metadata1 = _metadata1.identifiers) === null || _metadata1 === void 0 ? void 0 : _metadata1.visitorId) || "",
-                          calibrationApplied: !!((_metadata10 = metadata) !== null && _metadata10 !== void 0 && _metadata10.calibration)
+                          mimeType: ((_metadata9 = metadata) === null || _metadata9 === void 0 ? void 0 : _metadata9.mimeType) || audioBlob.type || "",
+                          durationMs: (_metadata$durationMs2 = (_metadata0 = metadata) === null || _metadata0 === void 0 ? void 0 : _metadata0.durationMs) !== null && _metadata$durationMs2 !== void 0 ? _metadata$durationMs2 : 0,
+                          language: ((_metadata1 = metadata) === null || _metadata1 === void 0 ? void 0 : _metadata1.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
+                          contributorId: ((_metadata10 = metadata) === null || _metadata10 === void 0 || (_metadata10 = _metadata10.env) === null || _metadata10 === void 0 || (_metadata10 = _metadata10.identifiers) === null || _metadata10 === void 0 ? void 0 : _metadata10.visitorId) || "",
+                          calibrationApplied: !!((_metadata11 = metadata) !== null && _metadata11 !== void 0 && _metadata11.calibration)
                         }); // Always emitted. A format this client cannot name is
                         // reported as `unknown` rather than suppressing the event:
                         // `starmus:complete` is the boundary before any server-side
@@ -16221,25 +16300,25 @@
                         // missing one is not. Losing the event is the worse failure,
                         // so the ordering favours repeating it.
                         emitCompletionEvent(_detail);
-                        _context15.n = 27;
+                        _context15.n = 34;
                         return _this15._markCompletionEmitted(id, claimToken);
-                      case 27:
+                      case 34:
                         if (_detail.format === "unknown") {
                           sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
                             instanceId: instanceId,
                             fileName: fileName,
-                            mimeType: ((_metadata11 = metadata) === null || _metadata11 === void 0 ? void 0 : _metadata11.mimeType) || audioBlob.type || "",
-                            captureProfile: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.captureProfile) || null
+                            mimeType: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.mimeType) || audioBlob.type || "",
+                            captureProfile: ((_metadata13 = metadata) === null || _metadata13 === void 0 ? void 0 : _metadata13.captureProfile) || null
                           });
                         }
-                        _context15.n = 34;
+                        _context15.n = 41;
                         break;
-                      case 28:
-                        _context15.p = 28;
-                        _t3 = _context15.v;
+                      case 35:
+                        _context15.p = 35;
+                        _t4 = _context15.v;
                         if (!uploaded) {
-                          _context15.n = 30;
+                          _context15.n = 37;
                           break;
                         }
                         // Reaching here after a successful transfer means the
@@ -16247,14 +16326,14 @@
                         // or retrying would send an asset the server already
                         // has. Hold it instead, so a person can see it and the
                         // next drain does not upload it again.
-                        _msg2 = _t3 && _t3.message ? _t3.message : String(_t3);
+                        _msg2 = _t4 && _t4.message ? _t4.message : String(_t4);
                         console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
-                        _context15.n = 29;
+                        _context15.n = 36;
                         return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
-                      case 29:
+                      case 36:
                         return _context15.a(2, 0);
-                      case 30:
-                        _msg3 = _t3 && _t3.message ? _t3.message : String(_t3); // The claim is dropped by the same write that records the
+                      case 37:
+                        _msg3 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
@@ -16268,38 +16347,38 @@
                         stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(_msg3);
                         nonRetryable = !stalled && /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(_msg3);
                         if (!nonRetryable) {
-                          _context15.n = 32;
+                          _context15.n = 39;
                           break;
                         }
-                        _context15.n = 31;
+                        _context15.n = 38;
                         return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
-                      case 31:
-                        _context15.n = 33;
+                      case 38:
+                        _context15.n = 40;
                         break;
-                      case 32:
+                      case 39:
                         nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        _context15.n = 33;
+                        _context15.n = 40;
                         return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
-                      case 33:
+                      case 40:
                         return _context15.a(2, 0);
-                      case 34:
-                        _context15.p = 34;
-                        _context15.n = 35;
+                      case 41:
+                        _context15.p = 41;
+                        _context15.n = 42;
                         return _this15.remove(id, claimToken);
-                      case 35:
-                        _context15.n = 37;
+                      case 42:
+                        _context15.n = 44;
                         break;
-                      case 36:
-                        _context15.p = 36;
-                        _t4 = _context15.v;
-                        _msg4 = _t4 && _t4.message ? _t4.message : String(_t4);
+                      case 43:
+                        _context15.p = 43;
+                        _t5 = _context15.v;
+                        _msg4 = _t5 && _t5.message ? _t5.message : String(_t5);
                         console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
-                        _context15.n = 37;
+                        _context15.n = 44;
                         return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
-                      case 37:
+                      case 44:
                         return _context15.a(2);
                     }
-                  }, _loop, null, [[34, 36], [23, 28], [18, 21], [8, 10]]);
+                  }, _loop, null, [[41, 43], [28, 30], [26, 35], [20, 24], [8, 10]]);
                 });
                 _iterator.s();
               case 7:
@@ -16323,8 +16402,8 @@
                 break;
               case 11:
                 _context16.p = 11;
-                _t5 = _context16.v;
-                _iterator.e(_t5);
+                _t6 = _context16.v;
+                _iterator.e(_t6);
               case 12:
                 _context16.p = 12;
                 _iterator.f();
@@ -16334,8 +16413,8 @@
                 break;
               case 14:
                 _context16.p = 14;
-                _t6 = _context16.v;
-                console.error("[Offline] Queue fatal:", _t6);
+                _t7 = _context16.v;
+                console.error("[Offline] Queue fatal:", _t7);
               case 15:
                 _context16.p = 15;
                 this.isProcessing = false;
@@ -16351,8 +16430,8 @@
                 break;
               case 18:
                 _context16.p = 18;
-                _t7 = _context16.v;
-                console.error("[Offline] Failed to schedule next queue processing:", _t7);
+                _t8 = _context16.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t8);
               case 19:
                 return _context16.f(15);
               case 20:
@@ -16445,7 +16524,7 @@
       key: "_getNextProcessDelay",
       value: (function () {
         var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
-          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t8;
+          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t9;
           return _regenerator().w(function (_context17) {
             while (1) switch (_context17.p = _context17.n) {
               case 0:
@@ -16504,8 +16583,8 @@
                 break;
               case 7:
                 _context17.p = 7;
-                _t8 = _context17.v;
-                _iterator2.e(_t8);
+                _t9 = _context17.v;
+                _iterator2.e(_t9);
               case 8:
                 _context17.p = 8;
                 _iterator2.f();
@@ -17071,7 +17150,13 @@
                   gain: calibration.gain,
                   speechLevel: calibration.speechLevel
                 } : null,
-                captureProfile: source.captureProfile || null,
+                // Normalised once, here, so the upload metadata and the completion
+                // event cannot disagree. The upload path treats a whitespace-only
+                // profile as absent; leaving the raw value in the snapshot meant
+                // TUS omitted the profile while `buildCompletionDetail()` reported
+                // `captureProfile: "   "` — a record contradicting what was sent,
+                // and neither absent nor named.
+                captureProfile: typeof source.captureProfile === "string" && source.captureProfile.trim() !== "" ? source.captureProfile.trim() : null,
                 captureAttainment: captureAttainment,
                 // Persisted so a queued upload that drains hours later can still
                 // describe the asset it sent. The store state it came from is long
@@ -18118,7 +18203,22 @@
    */
   function describeAttainment(name, track) {
     var profile = resolveCaptureProfile(name);
-    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    // Projected to the fields the contract needs, never the whole settings
+    // object. `MediaTrackSettings` carries `deviceId` and `groupId` — stable
+    // identifiers for the contributor's microphone — and this record is
+    // serialized into TUS metadata, so keeping it wholesale attached a device
+    // fingerprint to every asset a contributor ever uploaded. Nothing
+    // downstream needs it, and a platform built on data sovereignty is the last
+    // place it should travel by accident.
+    var settings = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    /** @type {{sampleRate?: number, channelCount?: number}} */
+    var actual = {};
+    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
+      var key = _arr[_i];
+      if (typeof settings[key] === "number") {
+        actual[key] = settings[key];
+      }
+    }
     var requested = {
       sampleRate: profile.sampleRate,
       channelCount: profile.channelCount,
@@ -18133,18 +18233,18 @@
     /** @type {string[]} */
     var unverified = [];
     var constrained = 0;
-    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
-      var key = _arr[_i];
-      var limit = profile[key];
+    for (var _i2 = 0, _arr2 = /** @type {const} */["sampleRate", "channelCount"]; _i2 < _arr2.length; _i2++) {
+      var _key = _arr2[_i2];
+      var limit = profile[_key];
       if (limit === null) {
         continue;
       }
       constrained += 1;
-      var reported = actual[key];
+      var reported = actual[_key];
       if (typeof reported !== "number") {
-        unverified.push(key);
+        unverified.push(_key);
       } else if (reported > limit) {
-        exceeded.push(key);
+        exceeded.push(_key);
       }
     }
 

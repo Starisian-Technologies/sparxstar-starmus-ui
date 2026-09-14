@@ -411,13 +411,33 @@ class OfflineQueue {
      * @param {string} id
      * @returns {Promise<void>}
      */
-    async remove(id) {
+    async remove(id, token = null) {
         if (!this.db) {
             return;
         }
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
-            tx.objectStore(CONFIG.storeName).delete(id);
+            const store = tx.objectStore(CONFIG.storeName);
+
+            if (token === null) {
+                // An unclaimed removal, for callers that never took a claim.
+                store.delete(id);
+            } else {
+                // Read and delete in the same transaction, so a drain whose
+                // lease lapsed cannot delete a row another tab has since
+                // claimed and may be uploading. An unconditional delete here
+                // was the last place an expired owner could still destroy the
+                // new owner's work.
+                const req = store.get(id);
+                req.onsuccess = () => {
+                    const item = req.result;
+                    if (item && item.leaseOwner === token) {
+                        store.delete(id);
+                    }
+                };
+                req.onerror = (ev) => reject(ev.target.error);
+            }
+
             tx.oncomplete = () => {
                 this._notifyQueueUpdate();
                 resolve();
@@ -446,6 +466,41 @@ class OfflineQueue {
      * @param {string} token The claim this drain holds.
      * @returns {Promise<void>}
      */
+    /**
+     * Record that the server has accepted these bytes.
+     *
+     * Written under the claim, before any completion handling, so that a tab
+     * which dies afterwards leaves a row the next drain *reconciles* rather
+     * than uploads again.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} token The claim this drain holds.
+     * @returns {Promise<void>}
+     */
+    async _markTransferred(id, token) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item && item.leaseOwner === token) {
+                    item.transferred = true;
+                    store.put(item);
+                }
+            };
+
+            req.onerror = () => resolve();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+        });
+    }
+
     async _markCompletionEmitted(id, token) {
         if (!this.db) {
             return;
@@ -645,7 +700,11 @@ class OfflineQueue {
                 item.error = null;
                 // And the drain claim from whatever attempt led to the hold, so
                 // the next drain can pick this up now rather than waiting out a
-                // lease left by an attempt that is long over.
+                // lease left by an attempt that is long over. Both fields:
+                // clearing only the expiry left the old owner token in place,
+                // so a late `_renewClaim()` from that drain could renew a row
+                // it no longer had any business holding.
+                item.leaseOwner = null;
                 item.leaseUntil = null;
                 store.put(item);
             };
@@ -711,6 +770,15 @@ class OfflineQueue {
             req.onsuccess = () => {
                 const item = req.result;
                 if (!item) {
+                    // Nothing was deleted, so nothing is reported as deleted.
+                    // Falling through here logged the discard and emitted the
+                    // `submission_discarded` audit event for a row that did not
+                    // exist — an audit trail recording a deletion that never
+                    // happened is worse than one with a gap.
+                    refusal = new Error(
+                        `DiscardRefused: ${id} is not in the queue.`,
+                    );
+                    tx.abort();
                     return;
                 }
                 if (item.held !== true) {
@@ -810,7 +878,7 @@ class OfflineQueue {
      * @param {Object} metadata
      * @returns {Promise<void>}
      */
-    async _setMetadata(id, metadata) {
+    async _setMetadata(id, metadata, token = null) {
         if (!this.db) {
             return;
         }
@@ -821,6 +889,14 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
+                // Claim-checked like every other write. A drain suspended after
+                // claiming, whose lease then lapsed and whose row another tab
+                // took, could otherwise overwrite the new owner's metadata —
+                // its upload UUID included, which is the fingerprint its
+                // in-flight transfer resumes against.
+                if (token !== null && item && item.leaseOwner !== token) {
+                    return;
+                }
                 if (item) {
                     item.metadata = metadata;
                     store.put(item);
@@ -1089,20 +1165,22 @@ class OfflineQueue {
                     // for an asset the server already has would start downstream
                     // processing a second time.
                     if (item.completionEmitted !== true) {
-                        await this._markCompletionEmitted(id, reconcileToken);
+                        // Emit, then mark — see the success path for why
+                        // at-least-once is the right side to err on.
                         emitCompletionEvent(detail);
+                        await this._markCompletionEmitted(id, reconcileToken);
                     } else {
                         debugLog("[Offline] Completion already announced; not re-emitting:", id);
                     }
                     try {
-                        await this.remove(id);
+                        await this.remove(id, reconcileToken);
                         debugLog("[Offline] Reconciled an already-transferred entry:", id);
                     } catch (cleanupError) {
                         const msg =
                             cleanupError && cleanupError.message
                                 ? cleanupError.message
                                 : String(cleanupError);
-                        await this._hold(id, `Reconciled; local cleanup failed: ${msg}`, true);
+                        await this._hold(id, `Reconciled; local cleanup failed: ${msg}`, true, reconcileToken);
                     }
                     continue;
                 }
@@ -1178,7 +1256,7 @@ class OfflineQueue {
                         // persisted one, could not resume the partial that
                         // first attempt had left on the server.
                         metadata = { ...(metadata || {}), uploadId: backfilled };
-                        await this._setMetadata(id, metadata);
+                        await this._setMetadata(id, metadata, claimToken);
                         debugLog("[Offline] Backfilled upload id for legacy entry:", id);
                     }
                 } catch (err) {
@@ -1202,6 +1280,13 @@ class OfflineQueue {
                     // fixed lease is both long enough for a real upload and
                     // short enough to free a row from a tab that died.
                     let lastRenewal = Date.now();
+                    // Set when a renewal reports that this drain no longer owns
+                    // the row. Ignoring the result meant a drain kept going
+                    // after another tab had taken over: it would emit the
+                    // completion event and run cleanup against a row it did not
+                    // own, which is what made every stale-owner race below
+                    // reachable in the first place.
+                    let claimLost = false;
                     const result = await uploadWithPriority({
                         blob: audioBlob,
                         fileName,
@@ -1214,7 +1299,11 @@ class OfflineQueue {
                                 return;
                             }
                             lastRenewal = now;
-                            void this._renewClaim(id, claimToken);
+                            void this._renewClaim(id, claimToken).then((ok) => {
+                                if (!ok) {
+                                    claimLost = true;
+                                }
+                            });
                         },
                     });
 
@@ -1225,6 +1314,30 @@ class OfflineQueue {
                     // protection against re-uploading an accepted asset did
                     // nothing at all.
                     uploaded = true;
+
+                    if (claimLost) {
+                        // Another tab owns this row now. Everything after a
+                        // transfer — the boundary event, the removal — belongs
+                        // to whoever holds the claim, and doing it here would
+                        // double the event and race the owner's cleanup. The
+                        // bytes are not wasted: the fingerprint is the
+                        // submission id, so the owner resumes the same TUS
+                        // resource rather than starting a second one.
+                        console.warn(
+                            "[Offline] Lost the claim during transfer; leaving completion to the current owner:",
+                            id,
+                        );
+                        continue;
+                    }
+
+                    // Persisted before any completion handling. `uploaded` is a
+                    // local variable: a tab closed between the transfer landing
+                    // and the cleanup finishing left the row `transferred:
+                    // false`, and because `removeFingerprintOnSuccess` has
+                    // already dropped the resume fingerprint, the next drain
+                    // started a *second* upload instead of reconciling the one
+                    // the server had accepted.
+                    await this._markTransferred(id, claimToken);
 
                     // `starmus:complete` is the boundary before any
                     // server-side processing (ADR-034). A queued upload that
@@ -1251,11 +1364,19 @@ class OfflineQueue {
                     // the server with nobody told it existed, recoverable only
                     // by a person noticing a held entry. The Node rules on the
                     // format, where refusing does not cost the recording.
-                    // Marked before it fires, so a failure between the two
-                    // cannot produce a second boundary event for one upload
-                    // when the entry is later released and reconciled.
-                    await this._markCompletionEmitted(id, claimToken);
+                    // Emitted first, then marked. At-least-once, deliberately.
+                    //
+                    // Marking first traded a duplicate event for a *lost* one:
+                    // a page that died between the write and the dispatch left
+                    // the entry recorded as announced, so the next drain removed
+                    // it without ever emitting the boundary — an asset on the
+                    // server that nothing downstream was told about, which is
+                    // unrecoverable. A duplicate `starmus:complete` carries the
+                    // same `uploadId` and is dedupable by the consumer; a
+                    // missing one is not. Losing the event is the worse failure,
+                    // so the ordering favours repeating it.
                     emitCompletionEvent(detail);
+                    await this._markCompletionEmitted(id, claimToken);
                     if (detail.format === "unknown") {
                         sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
@@ -1301,7 +1422,7 @@ class OfflineQueue {
                 // upload failure it left the entry retryable and the next drain
                 // uploaded the same recording again.
                 try {
-                    await this.remove(id);
+                    await this.remove(id, claimToken);
                 } catch (cleanupError) {
                     const msg =
                         cleanupError && cleanupError.message

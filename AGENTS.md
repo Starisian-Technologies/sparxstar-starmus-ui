@@ -164,7 +164,7 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // `mp4a…` parameter). A bare `audio/mp4` or `.m4a` is the container `mp4`:
     // it may hold HE-AAC or ALAC, and naming a codec the client cannot
     // establish misdescribes the asset.
-    format: 'opus' | 'aac-lc' | 'mp4' | 'wav' | 'mp3' | 'webm' | 'unknown',
+    format: 'opus' | 'aac-lc' | 'mp4' | 'ogg' | 'wav' | 'mp3' | 'webm' | 'unknown',
     language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
     consentGranted: boolean,
@@ -479,7 +479,7 @@ JavaScript and TypeScript --- CI Fail Conditions
 | FAIL | API call without timeout (`AbortSignal.timeout(5000)` minimum) |
 | FAIL | Event listener without throttle or debounce |
 | FAIL | Continuous interval without bounded execution |
-| FAIL | JS bundle exceeds 150 KB gzipped. Enforced by `pnpm run size-check` (size-limit, brotli budgets in `package.json`) — the budget that fails a build is the one there, and the two are kept consistent. |
+| FAIL | JS bundle exceeds 150 KB gzipped. Enforced by `pnpm run size-check` (size-limit, brotli budgets in `package.json`) — the budget that fails a build is the one there, and the two are kept consistent. **The budget is measured on the unminified `dist/` artifact, which is not what a user downloads:** `roll-up.config.mjs` emits unminified output on purpose and the consuming build minifies. Measured 2026-09-14, `starmus-audio.js` was 127.3 kB brotli as built and 91.1 kB with comments stripped — 28.5% of the measured bytes are explanatory comments that no device ever receives. The `starmus-audio.js` budget is 140 kB to leave room for that gap; the number to shrink when it binds is the shipped one, and the durable fix is to measure a minified artifact instead. Raising a budget is otherwise not the answer — the transcript bundle went over and the cause was fixed, not the limit. |
 | FAIL | Blob in memory exceeds 5 MB |
 | FAIL | Sensor active beyond 5000ms without auto-disable |
 | FAIL | Infinite retry loop --- max 3 attempts with exponential backoff |

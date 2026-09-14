@@ -372,7 +372,17 @@ export async function uploadTus(
     // a present-but-blank profile — the exact state this rule exists to
     // prevent, passing the build check while violating the rule that check
     // enforces.
-    const captureProfile = sanitizeMetadata(metadata.captureProfile).trim();
+    // Only a non-empty string counts. `sanitizeMetadata()` routes anything of
+    // type `object` through `JSON.stringify`, and `typeof null === "object"` —
+    // so the documented "no profile" value, `null`, came back as the *string*
+    // `"null"`, which is truthy and was sent on the wire. That is precisely the
+    // present-but-meaningless profile this rule exists to prevent, it made the
+    // wire metadata disagree with the completion event (which reports `null`),
+    // and it satisfied the build check while breaking the rule the check
+    // enforces.
+    const rawProfile = metadata.captureProfile;
+    const captureProfile =
+        typeof rawProfile === "string" ? sanitizeMetadata(rawProfile).trim() : "";
     if (captureProfile) {
         tusMetadata.captureProfile = captureProfile;
     } else {

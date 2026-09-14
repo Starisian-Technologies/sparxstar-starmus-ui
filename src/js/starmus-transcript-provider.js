@@ -312,6 +312,28 @@ export function createBrowserSpeechProvider({ language } = {}) {
 
 registerTranscriptProvider("browser-speech-recognition", createBrowserSpeechProvider);
 
+/**
+ * Why a provider cannot be used, or an empty string when it can.
+ *
+ * @param {Object} candidate
+ * @returns {string}
+ */
+function describeProviderDefect(candidate) {
+    if (typeof candidate.start !== "function" || typeof candidate.stop !== "function") {
+        return "it must implement start() and stop()";
+    }
+    if (typeof candidate.engine !== "string" || candidate.engine.trim() === "") {
+        return "provenance needs a non-empty `engine`";
+    }
+    if (!("model" in candidate)) {
+        return "provenance needs `model`; use an explicit null when the engine exposes none";
+    }
+    if (candidate.model !== null && typeof candidate.model !== "string") {
+        return "`model` must be a string or an explicit null";
+    }
+    return "";
+}
+
 /* ---- The slot ---- */
 
 /**
@@ -364,10 +386,26 @@ export function openTranscriptSlot({
 
     let provider = null;
     for (const factory of providerFactories) {
-        provider = factory.create({ language, tier, sessionId });
-        if (provider) {
-            break;
+        const candidate = factory.create({ language, tier, sessionId });
+        if (!candidate) {
+            continue;
         }
+        // Shape-checked, not merely truthy. ADR-038 requires every draft to
+        // carry provenance naming the engine and the model version, with the
+        // model explicitly absent where the engine exposes none. A provider
+        // missing `engine`, or with `model` simply undefined rather than an
+        // explicit `null`, produced a draft whose provenance was incomplete —
+        // and an incomplete provenance reads downstream as an unattributed
+        // claim rather than as a missing one.
+        const invalid = describeProviderDefect(candidate);
+        if (invalid) {
+            console.warn(
+                `[Transcript] Ignoring provider "${factory.name}": ${invalid}`,
+            );
+            continue;
+        }
+        provider = candidate;
+        break;
     }
     if (!provider) {
         return null;
@@ -439,13 +477,24 @@ export function openTranscriptSlot({
             // produces them, and validated rather than trusted: numbers only,
             // non-negative, ordered, and not claiming to be from later in the
             // recording than the clock has reached.
+            // The last boundary already committed to the draft. A measured
+            // token may not start before it: ADR-038 puts these offsets on the
+            // recording's own timeline, and a timeline that goes backwards is
+            // not one. Validating each token only against itself and the clock
+            // let a provider emit 1000 ms and then 500 ms, leaving a draft whose
+            // offsets regress.
+            const priorEndMs = supersedesInterim
+                ? (tail?.startMs ?? 0)
+                : (tokens[tokens.length - 1]?.endMs ?? 0);
+
             const measured =
                 provider.providesTimings === true &&
                 Number.isFinite(token.startMs) &&
                 Number.isFinite(token.endMs) &&
                 token.startMs >= 0 &&
                 token.endMs >= token.startMs &&
-                token.endMs <= clockMs;
+                token.endMs <= clockMs &&
+                token.startMs >= priorEndMs;
 
             if (provider.providesTimings === true && !measured) {
                 console.warn(

@@ -217,8 +217,13 @@ if (fs.existsSync(tusFile)) {
     // literal `if (metadata.captureProfile)` and so certified a blank profile
     // as conforming. A check that pins a spelling instead of the guarantee is
     // worse than no check, because it is believed.
+    // Non-strings are absent, not stringified. `sanitizeMetadata()` sends any
+    // `object` through `JSON.stringify`, and `typeof null === "object"` — so the
+    // documented "no profile" value came back as the *string* `"null"`, truthy,
+    // and went out on the wire. The check now requires the type test as well as
+    // the trim, because the trim alone let that through.
     const profileTrimmedBeforeTest =
-        /const\s+captureProfile\s*=\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\)\s*\.trim\(\)/.test(
+        /typeof\s+rawProfile\s*===\s*"string"\s*\?\s*sanitizeMetadata\(\s*rawProfile\s*\)\s*\.trim\(\)\s*:\s*""/.test(
             tusContent,
         );
     const profileSentConditionally = /if\s*\(\s*captureProfile\s*\)\s*\{\s*\n\s*tusMetadata\.captureProfile\s*=\s*captureProfile;/.test(

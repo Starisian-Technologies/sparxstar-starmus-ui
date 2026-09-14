@@ -278,9 +278,21 @@ test("a capture profile of only whitespace is absent, not present and blank", as
 
     assert.match(
         source,
-        /const captureProfile = sanitizeMetadata\(metadata\.captureProfile\)\.trim\(\);/,
-        "the value is sanitized and trimmed before it is tested",
+        /typeof rawProfile === "string" \? sanitizeMetadata\(rawProfile\)\.trim\(\) : ""/,
+        "a non-string profile is absent rather than stringified",
     );
+
+    // The bug this guards: `sanitizeMetadata()` routes anything of type
+    // `object` through `JSON.stringify`, and `typeof null === "object"`, so the
+    // documented "no profile" value serialized to the truthy string `"null"`
+    // and was transmitted — while the completion event reported `null`, leaving
+    // the wire metadata and the event disagreeing about the same asset.
+    const sanitize = (value) => {
+        const raw = typeof value === "object" ? JSON.stringify(value) : String(value || "");
+        return raw.replace(/[\r\n\t]/g, " ");
+    };
+    assert.equal(sanitize(null).trim(), "null", "this is why the type test is needed");
+    assert.ok(sanitize(null).trim(), "and why trimming alone did not catch it");
     assert.match(
         source,
         /if \(captureProfile\) \{\s*\n\s*tusMetadata\.captureProfile = captureProfile;/,
@@ -583,4 +595,52 @@ test("every write to a queued row happens under a claim", async () => {
     const rGate = retryBody.indexOf("item.leaseOwner !== token");
     const rMutate = retryBody.indexOf("item.retryCount = retryCount;");
     assert.ok(rGate > -1 && rMutate > -1 && rGate < rMutate, "_updateRetry does too");
+});
+
+test("an unconstrained profile reports not-applicable, never attained", async () => {
+    // `import` constrains nothing, so the loop found no violations and returned
+    // `attained: true` — claiming attainment of a profile that asks for
+    // nothing. The documented contract is `null`: not applicable.
+    const { describeAttainment } = await import("../../src/js/starmus-capture-profiles.js");
+    const track = { getSettings: () => ({ sampleRate: 16000, channelCount: 1 }) };
+
+    assert.equal(describeAttainment("import", track).attained, null);
+    assert.equal(
+        describeAttainment("conversation", null).attained,
+        null,
+        "and so does a profile whose constraints could not be verified at all",
+    );
+});
+
+test("a bitrate the profile applies is accounted for, not invisible", async () => {
+    // `audioBitsPerSecond` is declared by `conversation` and applied by
+    // `getRecorderOptions()`, but it is a MediaRecorder option rather than a
+    // track setting, so `getSettings()` never reports it. Leaving it out of the
+    // record let `attained: true` quietly cover a constraint nobody checked.
+    const { describeAttainment, CAPTURE_PROFILES } = await import(
+        "../../src/js/starmus-capture-profiles.js"
+    );
+    assert.equal(CAPTURE_PROFILES.conversation.audioBitsPerSecond, 32000);
+
+    const track = { getSettings: () => ({ sampleRate: 16000, channelCount: 1 }) };
+    const attainment = describeAttainment("conversation", track);
+
+    assert.equal(attainment.requested.audioBitsPerSecond, 32000, "it travels in the record");
+    assert.ok(
+        attainment.unverified.includes("audioBitsPerSecond"),
+        "and is named as unverified rather than silently counted as met",
+    );
+});
+
+test("a container is never reported as the codec it might contain", async () => {
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+
+    // Ogg may hold Vorbis, FLAC or Speex; mp4 may hold HE-AAC or ALAC.
+    assert.equal(resolveUploadFormat("audio/ogg", "take.ogg"), "ogg");
+    assert.equal(resolveUploadFormat("audio/mp4", "take.m4a"), "mp4");
+
+    // A stated codec is still named.
+    assert.equal(resolveUploadFormat("audio/opus", "take.opus"), "opus");
+    assert.equal(resolveUploadFormat('audio/ogg; codecs="opus"', "take.ogg"), "opus");
+    assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
 });

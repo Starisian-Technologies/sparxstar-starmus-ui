@@ -592,3 +592,73 @@ test("a provider that declares no timings is stamped from the clock, as before",
     await slot.stop();
     clearTranscriptProviders();
 });
+
+test("a provider without complete provenance is skipped, not selected", async () => {
+    // ADR-038 requires every draft to carry provenance naming the engine and
+    // the model version, with the model explicitly absent where the engine
+    // exposes none. Accepting any truthy factory result produced drafts whose
+    // provenance was incomplete — which reads downstream as an unattributed
+    // claim rather than a missing one.
+    const { openTranscriptSlot, registerTranscriptProvider, clearTranscriptProviders } =
+        await import("../../src/js/starmus-transcript-provider.js");
+
+    clearTranscriptProviders();
+    // Registered last is preferred, so the good one is registered first and the
+    // bad ones must be skipped past to reach it.
+    registerTranscriptProvider("good", () => ({
+        engine: "good",
+        model: null,
+        start() {},
+        stop() {},
+    }));
+    registerTranscriptProvider("no-model", () => ({
+        engine: "no-model",
+        start() {},
+        stop() {},
+    }));
+    registerTranscriptProvider("no-engine", () => ({
+        model: "v1",
+        start() {},
+        stop() {},
+    }));
+
+    const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => 0 });
+    assert.equal(
+        slot.draft().provenance.engine,
+        "good",
+        "the invalid providers were skipped and a conforming one selected",
+    );
+    clearTranscriptProviders();
+});
+
+test("measured timings that go backwards fall back to the clock", async () => {
+    const { openTranscriptSlot, registerTranscriptProvider, clearTranscriptProviders } =
+        await import("../../src/js/starmus-transcript-provider.js");
+
+    let clock = 4000;
+    clearTranscriptProviders();
+    registerTranscriptProvider("measuring", () => ({
+        engine: "measuring",
+        model: "v1",
+        tokenGranularity: "word",
+        providesTimings: true,
+        start(context) {
+            context.emit({ text: "one", isFinal: true, startMs: 600, endMs: 1000 });
+            // Starts before the previous token ended — a timeline that regresses.
+            context.emit({ text: "two", isFinal: true, startMs: 500, endMs: 900 });
+        },
+        stop() {},
+    }));
+
+    const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => clock });
+    slot.start();
+    const tokens = slot.draft().tokens;
+
+    assert.equal(tokens[0].timing, "measured");
+    assert.equal(tokens[0].endMs, 1000);
+    assert.equal(tokens[1].timing, "approximate", "the regressing token is not trusted");
+    assert.ok(tokens[1].startMs >= tokens[0].endMs, "and the draft's timeline still moves forward");
+
+    await slot.stop();
+    clearTranscriptProviders();
+});

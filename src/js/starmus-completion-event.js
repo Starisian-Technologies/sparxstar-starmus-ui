@@ -42,14 +42,17 @@ export function resolveUploadFormat(mimeType, fileName) {
         return "mp4";
     }
 
-    if (
-        type.includes("audio/ogg") ||
-        type.includes("audio/opus") ||
-        type.includes("opus") ||
-        ext === "opus" ||
-        ext === "ogg"
-    ) {
+    // Opus only when Opus is stated. `audio/opus`, a `codecs=opus` parameter and
+    // an `.opus` file each name the codec; a bare `audio/ogg` or `.ogg` names a
+    // *container*, which may hold Vorbis, FLAC or Speex. This is the same
+    // container-for-codec substitution the mp4 branch above was corrected for,
+    // and imported material is exactly where it would misdescribe an asset.
+    if (type.includes("audio/opus") || type.includes("opus") || ext === "opus") {
         return "opus";
+    }
+
+    if (type.includes("audio/ogg") || ext === "ogg") {
+        return "ogg";
     }
 
     // WAV and MP3 are reported as themselves. ADR-035 holds the container and

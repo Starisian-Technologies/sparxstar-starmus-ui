@@ -1228,7 +1228,7 @@ class OfflineQueue {
         }
 
         this._clearScheduledProcessQueue();
-        const pending = await this.getAll();
+        const pending = await this._pendingSummaries();
         if (pending.length === 0) {
             return;
         }
@@ -1244,14 +1244,16 @@ class OfflineQueue {
             debugLog(`[Offline] Processing ${pending.length} items`);
 
             for (const item of pending) {
-                const { id, audioBlob, fileName, formFields, instanceId } = item;
-                // Reassigned from the claimed row below, which is the
-                // authoritative copy for this attempt.
-                let { retryCount } = item;
-                // Not destructured as a `const`: the backfill below has to be
-                // able to replace it wholesale for a row that has no metadata
-                // object at all.
-                let { metadata } = item;
+                // Only the id. Everything this attempt needs — the recording
+                // included — comes from the row the claim transaction reads,
+                // which has been the authoritative copy since the claim was
+                // introduced and is now the only copy loaded at all.
+                const { id } = item;
+                /** @type {number} */
+                let retryCount = 0;
+                /** @type {Object|undefined} Replaced wholesale by the backfill
+                 * below for a row that has no metadata object at all. */
+                let metadata;
                 // Whether the bytes reached the server on this attempt.
                 let uploaded = false;
 
@@ -1284,6 +1286,7 @@ class OfflineQueue {
                         continue;
                     }
                     metadata = row.metadata;
+                    const { audioBlob, fileName, formFields, instanceId } = row;
                     // The server already has these bytes; what failed was
                     // afterwards. Uploading again would hand the platform a
                     // second copy of a recording it accepted — and it could not
@@ -1368,6 +1371,7 @@ class OfflineQueue {
                 const current = claim.row;
                 retryCount = current.retryCount ?? 0;
                 metadata = current.metadata;
+                const { audioBlob, fileName, formFields, instanceId } = current;
 
                 if (current.transferred === true) {
                     // Marked transferred between the snapshot and the claim.
@@ -1793,6 +1797,57 @@ class OfflineQueue {
             void this.processQueue();
         }, safeDelay);
     }
+    /**
+     * The ids the drain should consider, and the two flags it triages on.
+     *
+     * No recordings. `getAll()` deserialised every queued row — each with its
+     * audio Blob — before the drain had claimed even the first one, so a drain
+     * over a full queue held up to the 20 MB queue cap at once against the 5 MB
+     * in-memory Blob budget AGENTS.md states as a FAIL condition. It also
+     * undid the cursor-based protection `usage()` and `getHeld()` already have,
+     * by the one path that runs most often.
+     *
+     * Nothing is lost by not carrying the rows: `_claim()` returns the row as
+     * its own transaction read it, and the attempt has been proceeding from
+     * that copy rather than from the snapshot since the claim was introduced.
+     * The snapshot's remaining job is to say which ids exist and which are not
+     * worth claiming.
+     *
+     * @private
+     * @returns {Promise<Array<{id: string, held: boolean, transferred: boolean}>>}
+     */
+    async _pendingSummaries() {
+        if (!this.db) {
+            return [];
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const req = tx.objectStore(CONFIG.storeName).openCursor();
+            /** @type {Array<Object>} */
+            const rows = [];
+
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor) {
+                    return;
+                }
+                const value = cursor.value;
+                if (value) {
+                    rows.push({
+                        id: value.id,
+                        held: value.held === true,
+                        transferred: value.transferred === true,
+                    });
+                }
+                cursor.continue();
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(rows);
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
     /**
      * How many recordings the queue is holding.
      *

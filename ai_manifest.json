@@ -18,6 +18,7 @@
         { "symbol": "_getNextProcessDelay",  "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_scheduleSnapshot",     "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_countPending",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "_pendingSummaries",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_scheduleProcessQueue", "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "initOffline",           "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "queueSubmission",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },

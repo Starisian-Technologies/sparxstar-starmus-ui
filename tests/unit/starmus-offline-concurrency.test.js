@@ -552,3 +552,52 @@ test("every storage failure in the transfer marker answers unknown", async () =>
     assert.match(drain.slice(0, 2000), /recorded === false/, "a definite loss stands it down");
     assert.match(drain.slice(0, 2000), /recorded === null/, "an unknown holds the row instead");
 });
+
+test("a drain does not load every recording before claiming one", async () => {
+    // `getAll()` deserialised every queued row — each with its audio — before
+    // the drain had claimed even the first. On a full queue that is the 20 MB
+    // cap held at once against the 5 MB in-memory Blob budget AGENTS.md states
+    // as a FAIL condition, by the path that runs most often.
+    freshEnvironment();
+    const tab = await openTab();
+    const MB = 1024 * 1024;
+    await seed(tab.queue, { size: 4 * MB, name: "a.webm" });
+    await seed(tab.queue, { size: 4 * MB, name: "b.webm" });
+    await seed(tab.queue, { size: 4 * MB, name: "c.webm" });
+
+    const summaries = await tab.queue._pendingSummaries();
+    assert.equal(summaries.length, 3);
+    for (const row of summaries) {
+        assert.deepEqual(
+            Object.keys(row).sort(),
+            ["held", "id", "transferred"],
+            "the drain's listing carries no recording",
+        );
+    }
+
+    // And the drain itself goes through it. Asserting only on the helper left
+    // this passing with `processQueue()` still calling `getAll()`.
+    // Counted rather than thrown from: `processQueue()` catches, so a throwing
+    // stub was swallowed and this test passed with the drain still calling
+    // `getAll()`.
+    const realGetAll = tab.queue.getAll.bind(tab.queue);
+    let materialised = 0;
+    tab.queue.getAll = (...args) => {
+        materialised += 1;
+        return realGetAll(...args);
+    };
+    try {
+        // Online, because `processQueue()` returns immediately when offline —
+        // which is how this test first passed without the drain ever running.
+        // No upload endpoint is configured, so every attempt fails and the rows
+        // are retried or held; none of that reaches `getAll()`.
+        navigator.onLine = true;
+        await tab.queue.processQueue();
+    } finally {
+        navigator.onLine = false;
+        tab.queue.getAll = realGetAll;
+    }
+    assert.equal(materialised, 0, "the drain never loaded the whole queue");
+
+    assert.equal((await tab.queue.getAll()).length, 3, "and every recording is still here");
+});

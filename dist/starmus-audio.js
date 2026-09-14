@@ -16359,7 +16359,7 @@
               case 1:
                 this._clearScheduledProcessQueue();
                 _context16.n = 2;
-                return this.getAll();
+                return this._pendingSummaries();
               case 2:
                 pending = _context16.v;
                 if (!(pending.length === 0)) {
@@ -16381,17 +16381,21 @@
                 _context16.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, audioBlob, fileName, formFields, instanceId, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, detail, msg, claim, claimToken, current, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
+                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
                         item = _step.value;
-                        id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, instanceId = item.instanceId; // Reassigned from the claimed row below, which is the
-                        // authoritative copy for this attempt.
-                        retryCount = item.retryCount; // Not destructured as a `const`: the backfill below has to be
-                        // able to replace it wholesale for a row that has no metadata
-                        // object at all.
-                        metadata = item.metadata; // Whether the bytes reached the server on this attempt.
+                        // Only the id. Everything this attempt needs — the recording
+                        // included — comes from the row the claim transaction reads,
+                        // which has been the authoritative copy since the claim was
+                        // introduced and is now the only copy loaded at all.
+                        id = item.id;
+                        /** @type {number} */
+                        retryCount = 0;
+                        /** @type {Object|undefined} Replaced wholesale by the backfill
+                         * below for a row that has no metadata object at all. */
+                        // Whether the bytes reached the server on this attempt.
                         uploaded = false;
                         if (!item.held) {
                           _context15.n = 1;
@@ -16425,7 +16429,7 @@
                         return _context15.a(2, 0);
                       case 5:
                         metadata = row.metadata;
-                        // The server already has these bytes; what failed was
+                        _audioBlob = row.audioBlob, _fileName = row.fileName, _formFields = row.formFields, _instanceId = row.instanceId; // The server already has these bytes; what failed was
                         // afterwards. Uploading again would hand the platform a
                         // second copy of a recording it accepted — and it could not
                         // even resume the first, because `removeFingerprintOnSuccess`
@@ -16438,17 +16442,17 @@
                         // the flag here. Before this existed, releasing such an
                         // entry duplicated the recording.
                         detail = buildCompletionDetail({
-                          instanceId: instanceId,
+                          instanceId: _instanceId,
                           result: {
                             success: true,
                             uploadId: (_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId
                           },
                           metadata: metadata,
-                          formFields: formFields,
-                          fileName: fileName,
-                          mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || audioBlob.type || "",
+                          formFields: _formFields,
+                          fileName: _fileName,
+                          mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || _audioBlob.type || "",
                           durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
-                          language: ((_metadata4 = metadata) === null || _metadata4 === void 0 ? void 0 : _metadata4.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
+                          language: ((_metadata4 = metadata) === null || _metadata4 === void 0 ? void 0 : _metadata4.language) || (_formFields === null || _formFields === void 0 ? void 0 : _formFields.language),
                           contributorId: ((_metadata5 = metadata) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.env) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.identifiers) === null || _metadata5 === void 0 ? void 0 : _metadata5.visitorId) || "",
                           calibrationApplied: !!((_metadata6 = metadata) !== null && _metadata6 !== void 0 && _metadata6.calibration)
                         }); // At-least-once, and the ordering says so: the event is
@@ -16507,6 +16511,7 @@
                         current = claim.row;
                         retryCount = (_current$retryCount = current.retryCount) !== null && _current$retryCount !== void 0 ? _current$retryCount : 0;
                         metadata = current.metadata;
+                        audioBlob = current.audioBlob, fileName = current.fileName, formFields = current.formFields, instanceId = current.instanceId;
                         if (!(current.transferred === true)) {
                           _context15.n = 16;
                           break;
@@ -16998,6 +17003,77 @@
         }, safeDelay);
       }
       /**
+       * The ids the drain should consider, and the two flags it triages on.
+       *
+       * No recordings. `getAll()` deserialised every queued row — each with its
+       * audio Blob — before the drain had claimed even the first one, so a drain
+       * over a full queue held up to the 20 MB queue cap at once against the 5 MB
+       * in-memory Blob budget AGENTS.md states as a FAIL condition. It also
+       * undid the cursor-based protection `usage()` and `getHeld()` already have,
+       * by the one path that runs most often.
+       *
+       * Nothing is lost by not carrying the rows: `_claim()` returns the row as
+       * its own transaction read it, and the attempt has been proceeding from
+       * that copy rather than from the snapshot since the claim was introduced.
+       * The snapshot's remaining job is to say which ids exist and which are not
+       * worth claiming.
+       *
+       * @private
+       * @returns {Promise<Array<{id: string, held: boolean, transferred: boolean}>>}
+       */
+    }, {
+      key: "_pendingSummaries",
+      value: (function () {
+        var _pendingSummaries2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+          var _this19 = this;
+          return _regenerator().w(function (_context17) {
+            while (1) switch (_context17.n) {
+              case 0:
+                if (this.db) {
+                  _context17.n = 1;
+                  break;
+                }
+                return _context17.a(2, []);
+              case 1:
+                return _context17.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this19.db.transaction([CONFIG.storeName], "readonly");
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value) {
+                      rows.push({
+                        id: value.id,
+                        held: value.held === true,
+                        transferred: value.transferred === true
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee16, this);
+        }));
+        function _pendingSummaries() {
+          return _pendingSummaries2.apply(this, arguments);
+        }
+        return _pendingSummaries;
+      }()
+      /**
        * How many recordings the queue is holding.
        *
        * Counted by the store rather than by reading it. `getAll()` deserialises
@@ -17008,22 +17084,23 @@
        * @private
        * @returns {Promise<number>}
        */
+      )
     }, {
       key: "_countPending",
       value: (function () {
-        var _countPending2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
-          var _this19 = this;
-          return _regenerator().w(function (_context17) {
-            while (1) switch (_context17.n) {
+        var _countPending2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
+          var _this20 = this;
+          return _regenerator().w(function (_context18) {
+            while (1) switch (_context18.n) {
               case 0:
                 if (this.db) {
-                  _context17.n = 1;
+                  _context18.n = 1;
                   break;
                 }
-                return _context17.a(2, 0);
+                return _context18.a(2, 0);
               case 1:
-                return _context17.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this19.db.transaction([CONFIG.storeName], "readonly");
+                return _context18.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this20.db.transaction([CONFIG.storeName], "readonly");
                   var req = tx.objectStore(CONFIG.storeName).count();
                   var total = 0;
                   req.onsuccess = function () {
@@ -17040,7 +17117,7 @@
                   };
                 }));
             }
-          }, _callee16, this);
+          }, _callee17, this);
         }));
         function _countPending() {
           return _countPending2.apply(this, arguments);
@@ -17071,19 +17148,19 @@
     }, {
       key: "_scheduleSnapshot",
       value: (function () {
-        var _scheduleSnapshot2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
-          var _this20 = this;
-          return _regenerator().w(function (_context18) {
-            while (1) switch (_context18.n) {
+        var _scheduleSnapshot2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
+          var _this21 = this;
+          return _regenerator().w(function (_context19) {
+            while (1) switch (_context19.n) {
               case 0:
                 if (this.db) {
-                  _context18.n = 1;
+                  _context19.n = 1;
                   break;
                 }
-                return _context18.a(2, []);
+                return _context19.a(2, []);
               case 1:
-                return _context18.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this20.db.transaction([CONFIG.storeName], "readonly");
+                return _context19.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this21.db.transaction([CONFIG.storeName], "readonly");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.openCursor();
                   /** @type {Array<Object>} */
@@ -17114,7 +17191,7 @@
                   };
                 }));
             }
-          }, _callee17, this);
+          }, _callee18, this);
         }));
         function _scheduleSnapshot() {
           return _scheduleSnapshot2.apply(this, arguments);
@@ -17124,10 +17201,10 @@
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
           var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t9;
-          return _regenerator().w(function (_context19) {
-            while (1) switch (_context19.p = _context19.n) {
+          return _regenerator().w(function (_context20) {
+            while (1) switch (_context20.p = _context20.n) {
               case 0:
                 // Held entries are excluded. `_hold()` leaves `retryCount` at the
                 // limit, and the branch below returns 0 for anything at the limit — so
@@ -17136,10 +17213,10 @@
                 // On a phone with a failing upload and a low battery that is the worst
                 // possible loop to leave running.
                 now = Date.now();
-                _context19.n = 1;
+                _context20.n = 1;
                 return this._scheduleSnapshot();
               case 1:
-                live = _context19.v;
+                live = _context20.v;
                 // Leased rows are excluded from the immediate work, but their expiry
                 // still has to wake somebody.
                 //
@@ -17155,59 +17232,59 @@
                 /** @type {Array<Object>} */
                 pending = [];
                 _iterator2 = _createForOfIteratorHelper$1(live);
-                _context19.p = 2;
+                _context20.p = 2;
                 _iterator2.s();
               case 3:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context19.n = 6;
+                  _context20.n = 6;
                   break;
                 }
                 _item = _step2.value;
                 if (!(typeof _item.leaseUntil === "number" && _item.leaseUntil > now)) {
-                  _context19.n = 4;
+                  _context20.n = 4;
                   break;
                 }
                 untilExpiry = _item.leaseUntil - now;
                 if (earliestLease === null || untilExpiry < earliestLease) {
                   earliestLease = untilExpiry;
                 }
-                return _context19.a(3, 5);
+                return _context20.a(3, 5);
               case 4:
                 pending.push(_item);
               case 5:
-                _context19.n = 3;
+                _context20.n = 3;
                 break;
               case 6:
-                _context19.n = 8;
+                _context20.n = 8;
                 break;
               case 7:
-                _context19.p = 7;
-                _t9 = _context19.v;
+                _context20.p = 7;
+                _t9 = _context20.v;
                 _iterator2.e(_t9);
               case 8:
-                _context19.p = 8;
+                _context20.p = 8;
                 _iterator2.f();
-                return _context19.f(8);
+                return _context20.f(8);
               case 9:
                 if (!(pending.length === 0)) {
-                  _context19.n = 10;
+                  _context20.n = 10;
                   break;
                 }
-                return _context19.a(2, earliestLease);
+                return _context20.a(2, earliestLease);
               case 10:
                 nextDelay = null;
                 _i = 0, _pending = pending;
               case 11:
                 if (!(_i < _pending.length)) {
-                  _context19.n = 14;
+                  _context20.n = 14;
                   break;
                 }
                 item = _pending[_i];
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context19.n = 12;
+                  _context20.n = 12;
                   break;
                 }
-                return _context19.a(2, 0);
+                return _context20.a(2, 0);
               case 12:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -17216,12 +17293,12 @@
                 }
               case 13:
                 _i++;
-                _context19.n = 11;
+                _context20.n = 11;
                 break;
               case 14:
-                return _context19.a(2, nextDelay);
+                return _context20.a(2, nextDelay);
             }
-          }, _callee18, this, [[2, 7, 8, 9]]);
+          }, _callee19, this, [[2, 7, 8, 9]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -17319,22 +17396,22 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
-      return _regenerator().w(function (_context20) {
-        while (1) switch (_context20.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
+      return _regenerator().w(function (_context21) {
+        while (1) switch (_context21.n) {
           case 0:
             if (offlineQueue.db) {
-              _context20.n = 2;
+              _context21.n = 2;
               break;
             }
-            _context20.n = 1;
+            _context21.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context20.a(2, offlineQueue);
+            return _context21.a(2, offlineQueue);
         }
-      }, _callee19);
+      }, _callee20);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
@@ -17351,18 +17428,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context21) {
-        while (1) switch (_context21.n) {
+      return _regenerator().w(function (_context22) {
+        while (1) switch (_context22.n) {
           case 0:
-            _context21.n = 1;
+            _context22.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context21.v;
-            return _context21.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context22.v;
+            return _context22.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee20);
+      }, _callee21);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -17383,18 +17460,18 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22() {
       var q;
-      return _regenerator().w(function (_context22) {
-        while (1) switch (_context22.n) {
+      return _regenerator().w(function (_context23) {
+        while (1) switch (_context23.n) {
           case 0:
-            _context22.n = 1;
+            _context23.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context22.v;
-            return _context22.a(2, q._countPending());
+            q = _context23.v;
+            return _context23.a(2, q._countPending());
         }
-      }, _callee21);
+      }, _callee22);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -17411,18 +17488,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23() {
       var q;
-      return _regenerator().w(function (_context23) {
-        while (1) switch (_context23.n) {
+      return _regenerator().w(function (_context24) {
+        while (1) switch (_context24.n) {
           case 0:
-            _context23.n = 1;
+            _context24.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context23.v;
-            return _context23.a(2, q.getHeld());
+            q = _context24.v;
+            return _context24.a(2, q.getHeld());
         }
-      }, _callee22);
+      }, _callee23);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -17437,18 +17514,18 @@
    * @returns {Promise<void>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24() {
       var q;
-      return _regenerator().w(function (_context24) {
-        while (1) switch (_context24.n) {
+      return _regenerator().w(function (_context25) {
+        while (1) switch (_context25.n) {
           case 0:
-            _context24.n = 1;
+            _context25.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context24.v;
-            return _context24.a(2, q.usage());
+            q = _context25.v;
+            return _context25.a(2, q.usage());
         }
-      }, _callee23);
+      }, _callee24);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
@@ -17467,18 +17544,18 @@
    * @returns {Promise<void>}
    */
   function _releaseHeldSubmission() {
-    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24(id) {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee25(id) {
       var q;
-      return _regenerator().w(function (_context25) {
-        while (1) switch (_context25.n) {
+      return _regenerator().w(function (_context26) {
+        while (1) switch (_context26.n) {
           case 0:
-            _context25.n = 1;
+            _context26.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context25.v;
-            return _context25.a(2, q.releaseHold(id));
+            q = _context26.v;
+            return _context26.a(2, q.releaseHold(id));
         }
-      }, _callee24);
+      }, _callee25);
     }));
     return _releaseHeldSubmission.apply(this, arguments);
   }
@@ -17492,18 +17569,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _discardHeldSubmission() {
-    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee25(id, reason) {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee26(id, reason) {
       var q;
-      return _regenerator().w(function (_context26) {
-        while (1) switch (_context26.n) {
+      return _regenerator().w(function (_context27) {
+        while (1) switch (_context27.n) {
           case 0:
-            _context26.n = 1;
+            _context27.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context26.v;
-            return _context26.a(2, q.discardHeld(id, reason));
+            q = _context27.v;
+            return _context27.a(2, q.discardHeld(id, reason));
         }
-      }, _callee25);
+      }, _callee26);
     }));
     return _discardHeldSubmission.apply(this, arguments);
   }

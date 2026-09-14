@@ -146,8 +146,28 @@
                 const shouldResetStatus =
                     (state.status === "calibrating" || state.status === "recording") &&
                     (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+
+                // A submission that failed terminally has to give the UI back.
+                //
+                // `starmus/error` left `status` alone, so a queue failure while
+                // submitting — the queue full, IndexedDB unavailable — left the
+                // contributor on "Uploading…" with the submit control disabled,
+                // their recording still in state, and no way to retry it. The
+                // upload is over; pretending it is still running helps nobody.
+                //
+                // Not when the bytes already landed. A post-transfer failure
+                // carries `uploadId`, and returning that to a submittable state
+                // would invite a second upload of an asset the server has.
+                const submissionFailed =
+                    state.status === "submitting" &&
+                    errObj.retryable === false &&
+                    !errObj.uploadId;
                 return merge(state, {
-                    status: shouldResetStatus ? "ready" : state.status,
+                    status: shouldResetStatus
+                        ? "ready"
+                        : submissionFailed
+                          ? "ready_to_submit"
+                          : state.status,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });
@@ -232,6 +252,13 @@
             case "starmus/recording-available":
                 return merge(state, {
                     status: "ready_to_submit",
+                    // As in `file-attached`: a recording that arrives while an
+                    // upload is still running replaces the source under it, so
+                    // that upload's result no longer describes what is here.
+                    submission:
+                        state.status === "submitting"
+                            ? merge(state.submission, { superseded: true })
+                            : state.submission,
                     source: merge(state.source, {
                         kind: "blob",
                         blob: action.payload.blob,
@@ -292,6 +319,14 @@
                 // in-flight upload keeps the UI it owns until it settles.
                 return merge(state, {
                     status: state.status === "submitting" ? state.status : "ready_to_submit",
+                    // The in-flight upload no longer describes what is on
+                    // screen. It carries the bytes of a source that has just
+                    // been replaced, so whatever it reports back cannot be
+                    // said about this attachment.
+                    submission:
+                        state.status === "submitting"
+                            ? merge(state.submission, { superseded: true })
+                            : state.submission,
                     source: merge(state.source, {
                         kind: "file",
                         file: action.file,
@@ -346,18 +381,59 @@
                 });
 
             case "starmus/submit-start":
-                return merge(state, { status: "submitting", error: null });
+                return merge(state, {
+                    status: "submitting",
+                    error: null,
+                    // Which submission is in flight. The file input stays usable
+                    // during an upload, so without this a completion could land
+                    // on a source it never uploaded.
+                    submission: merge(state.submission, {
+                        activeId: action.submissionId || null,
+                    }),
+                });
 
             case "starmus/submit-progress":
                 return merge(state, {
                     submission: merge(state.submission, { progress: action.progress }),
                 });
 
-            case "starmus/submit-complete":
+            case "starmus/submit-complete": {
+                // Ignored when it does not belong to the submission in flight.
+                //
+                // A contributor who attaches a file while an upload is running
+                // replaces `source`; the earlier upload then finished and set
+                // *that* source to `complete`, disabling submit for a file
+                // which was never uploaded. The upload that started is the only
+                // one allowed to complete.
+                // Once a submission has announced itself, only that submission
+                // completes. An unidentified completion is not waved through
+                // either: it is indistinguishable from the stale one this
+                // guard exists to reject. A completion is only unconditional
+                // when nothing named itself as being in flight.
+                const active = state.submission?.activeId ?? null;
+                const finished = action.submissionId ?? null;
+                if (active !== null && active !== finished) {
+                    return state;
+                }
+
+                // A submission whose source was replaced under it settles, but
+                // it does not settle *this* source. The upload that finished
+                // sent the earlier recording; marking the attachment that
+                // replaced it `complete` disabled submit for a file nothing
+                // had ever uploaded — the contributor was shown a delivery
+                // that never happened and given no way to send the real one.
+                // The UI goes back to submittable so the attachment can go.
+                if (state.submission?.superseded === true) {
+                    return merge(state, {
+                        status: "ready_to_submit",
+                        submission: { progress: 0, isQueued: false, activeId: null },
+                    });
+                }
                 return merge(state, {
                     status: "complete",
-                    submission: { progress: 1, isQueued: false },
+                    submission: { progress: 1, isQueued: false, activeId: null },
                 });
+            }
 
             case "starmus/submit-queued":
                 return merge(state, {

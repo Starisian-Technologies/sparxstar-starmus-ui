@@ -37,7 +37,11 @@ export function resolveUploadFormat(mimeType, fileName) {
     // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
     // cannot establish — the same overclaim as calling a container its codec,
     // one level down.
-    if (type.includes("audio/aac") || type.includes("mp4a.40.2") || ext === "aac") {
+    // Matched at a token boundary, not by substring. `includes("mp4a.40.2")`
+    // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
+    // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
+    // was written to exclude.
+    if (type.includes("audio/aac") || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
         return "aac-lc";
     }
 
@@ -206,7 +210,12 @@ export function buildCompletionDetail(input) {
         format,
         language: input.language || input.formFields?.language || "",
         contributorId: input.contributorId || "",
-        consentGranted: !!(consent && consent.granted),
+        // Strictly `true`, not merely truthy. A stored record of
+        // `{ granted: "false" }` or `{ granted: 1 }` — a malformed write, an
+        // older schema, a host that stringified it — coerced to
+        // `consentGranted: true` under `!!`. Consent is the one field where a
+        // permissive read is indefensible: it asserts that a contributor agreed.
+        consentGranted: consent?.granted === true,
         calibrationApplied: !!input.calibrationApplied,
     };
 }

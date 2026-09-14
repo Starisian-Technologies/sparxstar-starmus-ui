@@ -255,8 +255,6 @@ export function initCore(store, instanceId, env) {
             tier: stateEnv.tier || currentEnvData?.tier || "C",
         };
 
-        store.dispatch({ type: "starmus/submit-start" });
-
         // Whether the bytes reached the server. Everything after that point —
         // naming the format, building the completion detail, notifying the
         // host — can still fail, and none of those failures mean the recording
@@ -265,6 +263,16 @@ export function initCore(store, instanceId, env) {
 
         try {
             metadata.uploadId = createUploadId();
+
+            // Dispatched here, after the id exists, and not before the `try`.
+            //
+            // The id names which submission is in flight, so a completion can
+            // be matched against it; announced while it was still null, the
+            // match was between null and an id and never rejected anything.
+            // `createUploadId()` can throw on an insecure origin, and a submit
+            // that never began needs no "Uploading…" to undo, so starting the
+            // announcement after it is also the honest order.
+            store.dispatch({ type: "starmus/submit-start", submissionId: metadata.uploadId });
 
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
@@ -324,7 +332,11 @@ export function initCore(store, instanceId, env) {
             // its local record together, over a UI listener's bug. The event
             // is built entirely from the submit-time snapshot, so nothing in
             // it depends on this dispatch having happened first.
-            store.dispatch({ type: "starmus/submit-complete", payload: result });
+            store.dispatch({
+                type: "starmus/submit-complete",
+                payload: result,
+                submissionId: metadata.uploadId,
+            });
 
                 const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
                 if (redirect) {

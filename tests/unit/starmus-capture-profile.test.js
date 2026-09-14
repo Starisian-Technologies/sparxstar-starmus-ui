@@ -572,8 +572,15 @@ test("the boundary event is emitted before the store dispatch that can throw", a
     const source = readFileSync("src/js/starmus-core.js", "utf8");
 
     const emit = source.indexOf("emitCompletionEvent(detail);");
-    const dispatch = source.indexOf('store.dispatch({ type: "starmus/submit-complete"');
+    // Matched on the action type, not on the call's formatting: this guards an
+    // ordering, and a reflow of the dispatch must not read as the guard failing.
+    const dispatch = source.indexOf('"starmus/submit-complete"');
     assert.ok(emit > -1 && dispatch > -1, "both are present");
+    assert.equal(
+        source.split('"starmus/submit-complete"').length - 1,
+        1,
+        "and the dispatch is the only mention, so the index is the dispatch",
+    );
     assert.ok(emit < dispatch, "the boundary event does not depend on the dispatch succeeding");
 });
 
@@ -762,4 +769,139 @@ test("attaching a file does not re-arm a submission already in flight", () => {
     store.dispatch({ type: "starmus/file-attached", file: fakeFile });
     assert.equal(store.getState().status, "submitting", "the in-flight upload keeps the UI");
     assert.equal(store.getState().source.kind, "file", "while the attachment is still recorded");
+});
+
+test("a completion from a superseded submission does not mark the new source complete", () => {
+    // The file input stays usable during an upload. A contributor who attaches
+    // a different file mid-transfer replaces `source`, and the earlier upload
+    // then completed against it: the new file was set `complete`, submit was
+    // disabled, and a recording nothing had ever uploaded looked delivered.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-first" });
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-first" });
+
+    const state = store.getState();
+    assert.equal(
+        state.status,
+        "ready_to_submit",
+        "the attachment is offered for submission instead of being marked delivered",
+    );
+    assert.equal(state.source.kind, "file", "and it is the attachment that is waiting");
+    assert.equal(state.submission.isQueued, false);
+});
+
+test("a completion naming a submission that is not the one in flight is ignored", () => {
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-current" });
+
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-earlier" });
+    assert.equal(store.getState().status, "submitting", "a foreign id does not complete");
+
+    store.dispatch({ type: "starmus/submit-complete", submissionId: null });
+    assert.equal(store.getState().status, "submitting", "nor does an unidentified one");
+
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-current" });
+    assert.equal(store.getState().status, "complete", "the submission in flight completes");
+});
+
+test("a submission that could not be queued returns the recording to the contributor", () => {
+    // `starmus/error` left `status` untouched, so a queue failure — storage
+    // full, IndexedDB unavailable — left "Uploading…" on screen forever with
+    // the blob still in state, submit disabled, and no way to retry.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+    assert.equal(store.getState().status, "submitting");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull: 4 held recordings", retryable: false },
+    });
+
+    assert.equal(store.getState().status, "ready_to_submit", "submit is offered again");
+    assert.equal(store.getState().source.blob.size, 2048, "with the recording still held");
+});
+
+test("a failure after the bytes landed does not offer the upload again", () => {
+    // The post-transfer path reports with `uploadId`, because the asset is on
+    // the server and only this client's handling afterwards failed. Returning
+    // that to a submittable state would invite a second upload of an asset the
+    // platform already holds — bandwidth the contributor has already spent.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-2" });
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect resolution failed", retryable: false, uploadId: "upload-2" },
+    });
+
+    assert.equal(store.getState().status, "submitting", "the accepted upload is not re-offered");
+});
+
+test("a retryable failure while submitting leaves the queue to it", () => {
+    // A retryable error means the queue is expected to carry the recording. The
+    // status belongs to the queue path then, not to the contributor.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-3" });
+
+    store.dispatch({ type: "starmus/error", error: { message: "network error", retryable: true } });
+
+    assert.equal(store.getState().status, "submitting");
+});
+
+test("the announced submission id is the real one, not a placeholder", async () => {
+    // `metadata.uploadId` is null until `createUploadId()` runs, and that call
+    // sits inside the try because it throws on an insecure origin. Dispatching
+    // submit-start above it announced a null id, so every later completion
+    // compared null against a real id and the guard rejected nothing.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const created = source.indexOf("metadata.uploadId = createUploadId();");
+    const announced = source.indexOf('"starmus/submit-start"');
+    assert.ok(created > -1 && announced > -1, "both are present");
+    assert.ok(created < announced, "the id exists before the submission is announced");
+});
+
+test("a recording made while an upload runs also supersedes it", () => {
+    // Same replacement as `file-attached`, by the other route: the completion
+    // of the upload that was running describes bytes this state no longer
+    // holds, and must not be reported as this recording's delivery.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "first.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-first" });
+
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 4096 }, fileName: "second.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-first" });
+
+    const state = store.getState();
+    assert.equal(state.status, "ready_to_submit", "the second take is still waiting to be sent");
+    assert.equal(state.source.blob.size, 4096, "and it is the second take that is held");
 });

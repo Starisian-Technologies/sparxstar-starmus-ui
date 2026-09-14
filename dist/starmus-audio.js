@@ -2856,8 +2856,21 @@
               severity: errObj.retryable === false ? "hard" : "soft"
             });
             var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+
+            // A submission that failed terminally has to give the UI back.
+            //
+            // `starmus/error` left `status` alone, so a queue failure while
+            // submitting — the queue full, IndexedDB unavailable — left the
+            // contributor on "Uploading…" with the submit control disabled,
+            // their recording still in state, and no way to retry it. The
+            // upload is over; pretending it is still running helps nobody.
+            //
+            // Not when the bytes already landed. A post-transfer failure
+            // carries `uploadId`, and returning that to a submittable state
+            // would invite a second upload of an asset the server has.
+            var submissionFailed = state.status === "submitting" && errObj.retryable === false && !errObj.uploadId;
             return merge(state, {
-              status: shouldResetStatus ? "ready" : state.status,
+              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : state.status,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -2948,6 +2961,12 @@
         case "starmus/recording-available":
           return merge(state, {
             status: "ready_to_submit",
+            // As in `file-attached`: a recording that arrives while an
+            // upload is still running replaces the source under it, so
+            // that upload's result no longer describes what is here.
+            submission: state.status === "submitting" ? merge(state.submission, {
+              superseded: true
+            }) : state.submission,
             source: merge(state.source, {
               kind: "blob",
               blob: action.payload.blob,
@@ -3009,6 +3028,13 @@
           // in-flight upload keeps the UI it owns until it settles.
           return merge(state, {
             status: state.status === "submitting" ? state.status : "ready_to_submit",
+            // The in-flight upload no longer describes what is on
+            // screen. It carries the bytes of a source that has just
+            // been replaced, so whatever it reports back cannot be
+            // said about this attachment.
+            submission: state.status === "submitting" ? merge(state.submission, {
+              superseded: true
+            }) : state.submission,
             source: merge(state.source, {
               kind: "file",
               file: action.file,
@@ -3066,7 +3092,13 @@
         case "starmus/submit-start":
           return merge(state, {
             status: "submitting",
-            error: null
+            error: null,
+            // Which submission is in flight. The file input stays usable
+            // during an upload, so without this a completion could land
+            // on a source it never uploaded.
+            submission: merge(state.submission, {
+              activeId: action.submissionId || null
+            })
           });
         case "starmus/submit-progress":
           return merge(state, {
@@ -3075,13 +3107,52 @@
             })
           });
         case "starmus/submit-complete":
-          return merge(state, {
-            status: "complete",
-            submission: {
-              progress: 1,
-              isQueued: false
+          {
+            var _state$submission$act, _state$submission, _action$submissionId, _state$submission2;
+            // Ignored when it does not belong to the submission in flight.
+            //
+            // A contributor who attaches a file while an upload is running
+            // replaces `source`; the earlier upload then finished and set
+            // *that* source to `complete`, disabling submit for a file
+            // which was never uploaded. The upload that started is the only
+            // one allowed to complete.
+            // Once a submission has announced itself, only that submission
+            // completes. An unidentified completion is not waved through
+            // either: it is indistinguishable from the stale one this
+            // guard exists to reject. A completion is only unconditional
+            // when nothing named itself as being in flight.
+            var active = (_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
+            var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
+            if (active !== null && active !== finished) {
+              return state;
             }
-          });
+
+            // A submission whose source was replaced under it settles, but
+            // it does not settle *this* source. The upload that finished
+            // sent the earlier recording; marking the attachment that
+            // replaced it `complete` disabled submit for a file nothing
+            // had ever uploaded — the contributor was shown a delivery
+            // that never happened and given no way to send the real one.
+            // The UI goes back to submittable so the attachment can go.
+            if (((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) === true) {
+              return merge(state, {
+                status: "ready_to_submit",
+                submission: {
+                  progress: 0,
+                  isQueued: false,
+                  activeId: null
+                }
+              });
+            }
+            return merge(state, {
+              status: "complete",
+              submission: {
+                progress: 1,
+                isQueued: false,
+                activeId: null
+              }
+            });
+          }
         case "starmus/submit-queued":
           return merge(state, {
             status: "complete",
@@ -14318,7 +14389,11 @@
     // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
     // cannot establish — the same overclaim as calling a container its codec,
     // one level down.
-    if (type.includes("audio/aac") || type.includes("mp4a.40.2") || ext === "aac") {
+    // Matched at a token boundary, not by substring. `includes("mp4a.40.2")`
+    // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
+    // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
+    // was written to exclude.
+    if (type.includes("audio/aac") || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
       return "aac-lc";
     }
 
@@ -14471,7 +14546,12 @@
       format: format,
       language: input.language || ((_input$formFields = input.formFields) === null || _input$formFields === void 0 ? void 0 : _input$formFields.language) || "",
       contributorId: input.contributorId || "",
-      consentGranted: !!(consent && consent.granted),
+      // Strictly `true`, not merely truthy. A stored record of
+      // `{ granted: "false" }` or `{ granted: 1 }` — a malformed write, an
+      // older schema, a host that stringified it — coerced to
+      // `consentGranted: true` under `!!`. Consent is the one field where a
+      // permissive read is indefensible: it asserts that a contributor agreed.
+      consentGranted: (consent === null || consent === void 0 ? void 0 : consent.granted) === true,
       calibrationApplied: !!input.calibrationApplied
     };
   }
@@ -15098,21 +15178,31 @@
                   var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
+                  var committed = false;
                   req.onsuccess = function () {
                     var item = req.result;
                     if (item && item.leaseOwner === token) {
                       item.transferred = true;
                       store.put(item);
+                      committed = true;
                     }
                   };
+
+                  // Resolves with whether the marker was actually written. Resolving
+                  // identically either way let the caller continue into the
+                  // completion event and cleanup after losing the row — emitting a
+                  // duplicate boundary event while another tab owned it — and left a
+                  // `transferred: false` row behind after `removeFingerprintOnSuccess`
+                  // had already dropped the resume key, so the next drain uploaded
+                  // the same accepted recording again.
                   req.onerror = function () {
-                    return resolve();
+                    return resolve(false);
                   };
                   tx.oncomplete = function () {
-                    return resolve();
+                    return resolve(committed);
                   };
                   tx.onerror = function () {
-                    return resolve();
+                    return resolve(false);
                   };
                 }));
             }
@@ -16055,11 +16145,14 @@
                           language: ((_metadata4 = metadata) === null || _metadata4 === void 0 ? void 0 : _metadata4.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
                           contributorId: ((_metadata5 = metadata) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.env) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.identifiers) === null || _metadata5 === void 0 ? void 0 : _metadata5.visitorId) || "",
                           calibrationApplied: !!((_metadata6 = metadata) !== null && _metadata6 !== void 0 && _metadata6.calibration)
-                        }); // Emitted once per upload, ever. The flag is written
-                        // before the event so that a failure between the two leaves
-                        // the entry marked as announced: re-emitting `starmus:complete`
-                        // for an asset the server already has would start downstream
-                        // processing a second time.
+                        }); // At-least-once, and the ordering says so: the event is
+                        // emitted first and the marker written after. An earlier
+                        // revision did the reverse and this comment still described
+                        // it. Marking first traded a duplicate for a *lost* event —
+                        // a page dying in between left the entry recorded as
+                        // announced and the next drain removed it without ever
+                        // emitting the boundary. A duplicate carries the same
+                        // `uploadId` and is dedupable; a missing one is not.
                         if (!(row.completionEmitted !== true)) {
                           _context15.n = 7;
                           break;
@@ -16281,6 +16374,15 @@
                         _context15.n = 33;
                         return _this15._markTransferred(id, claimToken);
                       case 33:
+                        if (_context15.v) {
+                          _context15.n = 34;
+                          break;
+                        }
+                        // The row is not ours any more. Everything after a
+                        // transfer belongs to whoever holds the claim.
+                        console.warn("[Offline] Lost the claim before the transfer could be recorded; leaving completion to the current owner:", id);
+                        return _context15.a(2, 0);
+                      case 34:
                         // `starmus:complete` is the boundary before any
                         // server-side processing (ADR-034). A queued upload that
                         // drains is as complete as an immediate one, so it fires
@@ -16316,9 +16418,9 @@
                         // missing one is not. Losing the event is the worse failure,
                         // so the ordering favours repeating it.
                         emitCompletionEvent(_detail);
-                        _context15.n = 34;
+                        _context15.n = 35;
                         return _this15._markCompletionEmitted(id, claimToken);
-                      case 34:
+                      case 35:
                         if (_detail.format === "unknown") {
                           sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
@@ -16328,13 +16430,13 @@
                             captureProfile: ((_metadata13 = metadata) === null || _metadata13 === void 0 ? void 0 : _metadata13.captureProfile) || null
                           });
                         }
-                        _context15.n = 41;
+                        _context15.n = 42;
                         break;
-                      case 35:
-                        _context15.p = 35;
+                      case 36:
+                        _context15.p = 36;
                         _t4 = _context15.v;
                         if (!uploaded) {
-                          _context15.n = 37;
+                          _context15.n = 38;
                           break;
                         }
                         // Reaching here after a successful transfer means the
@@ -16344,11 +16446,11 @@
                         // next drain does not upload it again.
                         _msg2 = _t4 && _t4.message ? _t4.message : String(_t4);
                         console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
-                        _context15.n = 36;
+                        _context15.n = 37;
                         return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
-                      case 36:
-                        return _context15.a(2, 0);
                       case 37:
+                        return _context15.a(2, 0);
+                      case 38:
                         _msg3 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
@@ -16363,38 +16465,38 @@
                         stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(_msg3);
                         nonRetryable = !stalled && /(?:response code|status|HTTP)\D{0,3}4\d\d|Invalid JSON|QuotaExceeded/i.test(_msg3);
                         if (!nonRetryable) {
-                          _context15.n = 39;
+                          _context15.n = 40;
                           break;
                         }
-                        _context15.n = 38;
+                        _context15.n = 39;
                         return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
-                      case 38:
-                        _context15.n = 40;
-                        break;
                       case 39:
-                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        _context15.n = 40;
-                        return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
-                      case 40:
-                        return _context15.a(2, 0);
-                      case 41:
-                        _context15.p = 41;
-                        _context15.n = 42;
-                        return _this15.remove(id, claimToken);
-                      case 42:
-                        _context15.n = 44;
+                        _context15.n = 41;
                         break;
+                      case 40:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context15.n = 41;
+                        return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
+                      case 41:
+                        return _context15.a(2, 0);
+                      case 42:
+                        _context15.p = 42;
+                        _context15.n = 43;
+                        return _this15.remove(id, claimToken);
                       case 43:
-                        _context15.p = 43;
+                        _context15.n = 45;
+                        break;
+                      case 44:
+                        _context15.p = 44;
                         _t5 = _context15.v;
                         _msg4 = _t5 && _t5.message ? _t5.message : String(_t5);
                         console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
-                        _context15.n = 44;
+                        _context15.n = 45;
                         return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
-                      case 44:
+                      case 45:
                         return _context15.a(2);
                     }
-                  }, _loop, null, [[41, 43], [28, 30], [26, 35], [20, 24], [8, 10]]);
+                  }, _loop, null, [[42, 44], [28, 30], [26, 36], [20, 24], [8, 10]]);
                 });
                 _iterator.s();
               case 7:
@@ -17181,18 +17283,26 @@
                 mimeType: ((_source$metadata2 = source.metadata) === null || _source$metadata2 === void 0 ? void 0 : _source$metadata2.mimeType) || audioBlob.type || "",
                 env: stateEnv,
                 tier: stateEnv.tier || (currentEnvData === null || currentEnvData === void 0 ? void 0 : currentEnvData.tier) || "C"
-              };
-              store.dispatch({
-                type: "starmus/submit-start"
-              });
-
-              // Whether the bytes reached the server. Everything after that point —
+              }; // Whether the bytes reached the server. Everything after that point —
               // naming the format, building the completion detail, notifying the
               // host — can still fail, and none of those failures mean the recording
               // needs sending again.
               transferred = false;
               _context.p = 2;
               metadata.uploadId = createUploadId();
+
+              // Dispatched here, after the id exists, and not before the `try`.
+              //
+              // The id names which submission is in flight, so a completion can
+              // be matched against it; announced while it was still null, the
+              // match was between null and an id and never rejected anything.
+              // `createUploadId()` can throw on an insecure origin, and a submit
+              // that never began needs no "Uploading…" to undo, so starting the
+              // announcement after it is also the honest order.
+              store.dispatch({
+                type: "starmus/submit-start",
+                submissionId: metadata.uploadId
+              });
               if (navigator.onLine) {
                 _context.n = 3;
                 break;
@@ -17256,7 +17366,8 @@
                 // it depends on this dispatch having happened first.
                 store.dispatch({
                   type: "starmus/submit-complete",
-                  payload: result
+                  payload: result,
+                  submissionId: metadata.uploadId
                 });
                 redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
                 if (redirect) {

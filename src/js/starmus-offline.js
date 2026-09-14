@@ -487,17 +487,27 @@ class OfflineQueue {
             const store = tx.objectStore(CONFIG.storeName);
             const req = store.get(id);
 
+            let committed = false;
+
             req.onsuccess = () => {
                 const item = req.result;
                 if (item && item.leaseOwner === token) {
                     item.transferred = true;
                     store.put(item);
+                    committed = true;
                 }
             };
 
-            req.onerror = () => resolve();
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => resolve();
+            // Resolves with whether the marker was actually written. Resolving
+            // identically either way let the caller continue into the
+            // completion event and cleanup after losing the row — emitting a
+            // duplicate boundary event while another tab owned it — and left a
+            // `transferred: false` row behind after `removeFingerprintOnSuccess`
+            // had already dropped the resume key, so the next drain uploaded
+            // the same accepted recording again.
+            req.onerror = () => resolve(false);
+            tx.oncomplete = () => resolve(committed);
+            tx.onerror = () => resolve(false);
         });
     }
 
@@ -1181,11 +1191,14 @@ class OfflineQueue {
                         contributorId: metadata?.env?.identifiers?.visitorId || "",
                         calibrationApplied: !!metadata?.calibration,
                     });
-                    // Emitted once per upload, ever. The flag is written
-                    // before the event so that a failure between the two leaves
-                    // the entry marked as announced: re-emitting `starmus:complete`
-                    // for an asset the server already has would start downstream
-                    // processing a second time.
+                    // At-least-once, and the ordering says so: the event is
+                    // emitted first and the marker written after. An earlier
+                    // revision did the reverse and this comment still described
+                    // it. Marking first traded a duplicate for a *lost* event —
+                    // a page dying in between left the entry recorded as
+                    // announced and the next drain removed it without ever
+                    // emitting the boundary. A duplicate carries the same
+                    // `uploadId` and is dedupable; a missing one is not.
                     if (row.completionEmitted !== true) {
                         // Emit, then mark — see the success path for why
                         // at-least-once is the right side to err on.
@@ -1411,7 +1424,15 @@ class OfflineQueue {
                     // already dropped the resume fingerprint, the next drain
                     // started a *second* upload instead of reconciling the one
                     // the server had accepted.
-                    await this._markTransferred(id, claimToken);
+                    if (!(await this._markTransferred(id, claimToken))) {
+                        // The row is not ours any more. Everything after a
+                        // transfer belongs to whoever holds the claim.
+                        console.warn(
+                            "[Offline] Lost the claim before the transfer could be recorded; leaving completion to the current owner:",
+                            id,
+                        );
+                        continue;
+                    }
 
                     // `starmus:complete` is the boundary before any
                     // server-side processing (ADR-034). A queued upload that

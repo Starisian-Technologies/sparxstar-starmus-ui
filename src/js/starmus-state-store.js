@@ -262,6 +262,15 @@
                         // which for an archive is worse than an upload that
                         // fails outright.
                         blob: null,
+                        // The live-transcript draft goes with it. It belongs to
+                        // the recording that was just replaced, and
+                        // `handleSubmit()` copies `source.transcript` into the
+                        // upload metadata — so an imported file arrived at
+                        // ingestion carrying another take's words, which is the
+                        // same mislabelling by a different field.
+                        transcript: "",
+                        interimTranscript: "",
+
                         fileName: action.file.name,
                         // An attached file is prerecorded material, which is
                         // exactly what ADR-035 calls the `import` profile:

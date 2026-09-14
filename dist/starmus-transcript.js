@@ -109,6 +109,14 @@ var StarmusTranscript = (function (exports) {
      *     model: string|null,      // engine's model/version identifier, or null
      *                              // when the engine does not expose one
      *     tokenGranularity?: 'word'|'utterance',  // defaults to 'utterance'
+     *     providesTimings?: boolean,  // true when the engine measures its own
+     *                              //   original-timeline offsets and emits them as
+     *                              //   `startMs`/`endMs`. Omitted or false, the
+     *                              //   slot stamps the recorder clock and marks
+     *                              //   the token `timing: 'approximate'`.
+     *     abort?(): void,          // force the engine down, discarding anything
+     *                              //   undelivered. Called only when `stop()`
+     *                              //   produced no terminal event in time.
      *     start(context): void,    // context.emit(token)
      *                              // context.fail(error)
      *                              // context.ended(reason) — the engine stopped
@@ -195,6 +203,12 @@ var StarmusTranscript = (function (exports) {
             engine.lang = language;
           }
           engine.addEventListener("result", event => {
+            if (recognition !== engine) {
+              // A result from a superseded engine. Appending it would put
+              // another run's words into this draft — the transcript
+              // equivalent of uploading the wrong audio.
+              return;
+            }
             for (let i = event.resultIndex; i < event.results.length; i += 1) {
               const result = event.results[i];
               const alternative = result[0];
@@ -209,6 +223,12 @@ var StarmusTranscript = (function (exports) {
             }
           });
           engine.addEventListener("error", event => {
+            if (recognition !== engine) {
+              // A superseded engine's error. `context.fail()` stops
+              // whichever run is current, so forwarding this would kill a
+              // healthy engine because a dead one complained.
+              return;
+            }
             // `no-speech` and `aborted` are ordinary during a recording and
             // are not failures of the slot. The `end` that follows them is
             // handled below, so the slot is never left believing a dead
@@ -224,9 +244,14 @@ var StarmusTranscript = (function (exports) {
           // also ends because we asked. Only the slot can tell those apart,
           // so both are reported and it decides.
           engine.addEventListener("end", () => {
-            if (recognition === engine) {
-              recognition = null;
+            if (recognition !== engine) {
+              // Superseded. `abort()` cleared the reference, or a later
+              // `start()` replaced it, and this event is the old engine
+              // finishing its own shutdown. Reporting it would let a dead
+              // engine end — or restart — the run that replaced it.
+              return;
             }
+            recognition = null;
             context.ended(stopping ? "stopped" : "engine-ended");
           });
           engine.start();
@@ -391,7 +416,7 @@ var StarmusTranscript = (function (exports) {
           if (!running && !stopping) {
             return;
           }
-          const endMs = Math.max(0, Math.round(getElapsedMs()));
+          const clockMs = Math.max(0, Math.round(getElapsedMs()));
           const tail = tokens[tokens.length - 1];
           // A trailing interim is provisional text for the utterance still
           // being spoken. Both a revised interim and the final result for
@@ -399,13 +424,35 @@ var StarmusTranscript = (function (exports) {
           // the draft holding two readings of one stretch of speech, and the
           // interim one would carry a start time the final one needs.
           const supersedesInterim = !!tail && !tail.isFinal;
+
+          // A provider that measures its own offsets keeps them.
+          //
+          // The slot stamps the recorder clock because browser speech
+          // recognition reports no timings, and inventing them would read
+          // downstream as measurement. But the contract allows
+          // `tokenGranularity: 'word'`, and ADR-038 says a future Yahura live
+          // provider fills this same slot without UI rework — which it cannot
+          // do if every offset it measured is overwritten on the way through.
+          // So measured offsets are carried when the provider declares it
+          // produces them, and validated rather than trusted: numbers only,
+          // non-negative, ordered, and not claiming to be from later in the
+          // recording than the clock has reached.
+          const measured = provider.providesTimings === true && Number.isFinite(token.startMs) && Number.isFinite(token.endMs) && token.startMs >= 0 && token.endMs >= token.startMs && token.endMs <= clockMs;
+          if (provider.providesTimings === true && !measured) {
+            console.warn("[Transcript] Provider declares timings but this token's were unusable; falling back to the recorder clock.");
+          }
+          const endMs = measured ? Math.round(token.endMs) : clockMs;
           const entry = {
             text: String(token.text || ""),
-            startMs: supersedesInterim ? tail.startMs : Math.min(lastStartMs, endMs),
+            startMs: measured ? Math.round(token.startMs) : supersedesInterim ? tail.startMs : Math.min(lastStartMs, endMs),
             endMs,
-            // The browser engine reports no word timings; the Node's VAD
-            // holds boundaries of record and ESU holds alignment.
-            timing: "approximate",
+            // `approximate` means stamped from the recorder clock at the
+            // moment the result arrived: the browser engine reports no word
+            // timings, the Node's VAD holds boundaries of record, and ESU
+            // holds alignment. `measured` means the provider reported these
+            // offsets itself — still a lowest-authority draft, but not a
+            // guess about when the words were said.
+            timing: measured ? "measured" : "approximate",
             confidence: (_token$confidence = token.confidence) !== null && _token$confidence !== void 0 ? _token$confidence : null,
             isFinal: !!token.isFinal
           };
@@ -462,6 +509,12 @@ var StarmusTranscript = (function (exports) {
               return;
             } catch (error) {
               console.warn("[Transcript] Provider would not restart:", error.message);
+              // The provider may have built its engine before throwing,
+              // so settling here without forcing it down left recognition
+              // running after the slot had finished — the same open
+              // microphone the grace timer exists to prevent, reached by
+              // the one path that did not call this.
+              forceProviderDown();
             }
           }
           console.warn(`[Transcript] Provider ended (${reason}) and will not be restarted; settling the draft.`);
@@ -470,12 +523,6 @@ var StarmusTranscript = (function (exports) {
         }
       };
 
-      /**
-       * Finish: drop any trailing interim, and hand the draft to whoever is
-       * waiting on `stop()`.
-       *
-       * @returns {void}
-       */
       /**
        * Shut the provider down without waiting for it to finish.
        *
@@ -495,6 +542,13 @@ var StarmusTranscript = (function (exports) {
           console.warn("[Transcript] Provider would not shut down:", error.message);
         }
       }
+
+      /**
+       * Finish: drop any trailing interim, and hand the draft to whoever is
+       * waiting on `stop()`.
+       *
+       * @returns {void}
+       */
       function settle() {
         if (settleTimer) {
           clearTimeout(settleTimer);
@@ -562,6 +616,12 @@ var StarmusTranscript = (function (exports) {
           provider.stop();
         } catch (error) {
           console.warn("[Transcript] Provider would not stop cleanly:", error.message);
+          // A provider that threw on `stop()` has not necessarily stopped.
+          // Settling straight from here reported the slot finished while the
+          // engine may still have been listening — the same open microphone
+          // the grace timer exists to prevent, reached by the one remaining
+          // path that did not force it down.
+          forceProviderDown();
           settle();
           return settled;
         }

@@ -174,6 +174,10 @@ export function initCore(store, instanceId, env) {
         };
 
         const audioBlob = source.blob || source.file;
+        // Snapshotted with the bytes. Everything that describes this submission
+        // is read once, here, so a source change mid-upload cannot re-describe
+        // audio that has already been sent.
+        const submittedLanguage = source.language;
         const fileName =
             source.fileName || (source.file ? source.file.name : `rec-${Date.now()}.webm`);
 
@@ -212,9 +216,18 @@ export function initCore(store, instanceId, env) {
             // first and the part that can fail happens where it is caught.
             uploadId: null,
             transcript: source.transcript?.trim() || null,
-            calibration: calibration.complete
-                ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
-                : null,
+            // Calibration describes a microphone session, so it is reported
+            // only for audio this device actually captured. An attached file's
+            // bytes never passed through the calibrated path — reporting them
+            // as calibrated tells a consumer the gain and speech level were
+            // applied to material they were not, which is a measurement claim
+            // about somebody else's recording. The calibration itself is left
+            // in state rather than reset: the contributor may record next, and
+            // it is still theirs.
+            calibration:
+                source.kind !== "file" && calibration.complete
+                    ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
+                    : null,
             captureProfile: source.captureProfile || null,
             captureAttainment,
             // Persisted so a queued upload that drains hours later can still
@@ -263,21 +276,29 @@ export function initCore(store, instanceId, env) {
             // Emit starmus:complete — boundary between recording and server-side processing.
             // Nothing downstream triggers until this event fires.
             if (result && result.success) {
-                const completedState = store.getState();
-                const completedSource = completedState.source || {};
-                const completedCalibration = completedState.calibration || {};
-
+                // Described from the submit-time snapshot, not from the store as
+                // it stands now.
+                //
+                // The bytes and `metadata` were captured before the transfer
+                // began, but these fields were being read back out of the live
+                // state afterwards — and the file input stays active while
+                // `status === "submitting"`. A contributor who attached a file
+                // during a slow upload therefore had `starmus:complete` report
+                // the *new* source's mime type, duration and language for the
+                // *old* source's bytes: an asset described as something it is
+                // not, which is the same mislabelling the source transitions
+                // were fixed to prevent, arriving by a different route.
                 const detail = buildCompletionDetail({
                     instanceId,
                     result,
                     metadata,
                     formFields,
                     fileName,
-                    mimeType: completedSource.metadata?.mimeType || audioBlob.type || "",
-                    durationMs: Math.round((completedSource.metadata?.duration || 0) * 1000),
-                    language: completedSource.language,
-                    contributorId: completedState.env?.identifiers?.visitorId || "",
-                    calibrationApplied: !!completedCalibration.complete,
+                    mimeType: metadata.mimeType || audioBlob.type || "",
+                    durationMs: metadata.durationMs ?? 0,
+                    language: submittedLanguage,
+                    contributorId: stateEnv.identifiers?.visitorId || "",
+                    calibrationApplied: !!metadata.calibration,
                 });
 
                 emitCompletionEvent(detail);

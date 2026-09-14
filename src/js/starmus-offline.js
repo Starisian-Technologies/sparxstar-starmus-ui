@@ -59,6 +59,25 @@ const CONFIG = {
      * ruled on, nothing is deleted automatically.
      */
     maxTotalBytes: 20 * 1024 * 1024,
+    /**
+     * How long one drain may claim a row before another may take it.
+     *
+     * `isProcessing` is an in-memory flag, so it says nothing about the tab
+     * next door: two tabs read the same rows and both start uploading. Because
+     * the TUS fingerprint is the submission id, the second tab *resumes* the
+     * same resource rather than creating a second one — so the server does not
+     * end up with two copies — but both tabs still spend the contributor's
+     * bandwidth on one recording, both fire `starmus:complete`, and both race
+     * to delete the row.
+     *
+     * The lease is generous because the alternative failure is worse: a lease
+     * that expires under a slow upload hands the row to another tab while the
+     * first is still sending. Ten minutes is longer than the stall watchdog
+     * (two minutes of no progress ends an attempt), so a live upload always
+     * outlives its own lease renewal window, and a tab that dies mid-upload
+     * blocks the row for at most this long.
+     */
+    leaseMs: 10 * 60 * 1000,
 };
 
 /** Tracks whether the singleton queue has installed its network listener. */
@@ -87,6 +106,9 @@ function getMaxBlobSize(metadata = {}) {
     return CONFIG.defaultMaxBlobSize;
 }
 
+/** Monotonic within a page, so the fallback below cannot collide with itself. */
+let offlineIdCounter = 0;
+
 function createOfflineSubmissionId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
         return `starmus-offline-${crypto.randomUUID()}`;
@@ -100,7 +122,21 @@ function createOfflineSubmissionId() {
         const suffix = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
         return `starmus-offline-${suffix}`;
     }
-    throw new Error("Secure UUID generation is not available in this runtime");
+    // No secure randomness. This id is a **local IndexedDB key** — it has to be
+    // unique within one device's queue and nothing more. It is not the
+    // `upload_uuid` the ingestion contract fixes (that is `createUploadId()`,
+    // which still refuses rather than invent one), it never leaves the device,
+    // and nothing downstream reads it.
+    //
+    // So it falls back rather than throwing. Throwing here meant that on a
+    // runtime without `crypto` — an insecure origin on an old Android, which is
+    // exactly this package's device — `queueSubmission()` threw, the catch in
+    // `starmus-core.js` dispatched an error, and the recording was gone. ADR-011
+    // keeps the material unconditionally: a device that cannot generate a
+    // strong key can still hold a contributor's recording until it can be sent.
+    offlineIdCounter += 1;
+    const entropy = Math.floor(Math.random() * 0xffffffff).toString(16);
+    return `starmus-offline-local-${Date.now().toString(36)}-${offlineIdCounter}-${entropy}`;
 }
 
 /**
@@ -145,7 +181,6 @@ class OfflineQueue {
         this.processQueueTimeoutId = null;
         /** @type {number|null} */
         this.processQueueDueAt = null;
-        /** @type {Promise<void>} Serializes `add()` so the budget check holds. */
     }
 
     /**
@@ -392,7 +427,7 @@ class OfflineQueue {
      * @param {string} reason
      * @returns {Promise<void>}
      */
-    async _hold(id, reason) {
+    async _hold(id, reason, transferred = false) {
         if (!this.db) {
             return;
         }
@@ -407,6 +442,19 @@ class OfflineQueue {
                     item.held = true;
                     item.heldReason = reason;
                     item.lastAttempt = Date.now();
+                    // Whether the server already has these bytes.
+                    //
+                    // It matters because `removeFingerprintOnSuccess` deletes
+                    // the resume fingerprint the moment a transfer completes.
+                    // An entry held *after* that — completion handling threw,
+                    // or the local delete failed — has no resume identity left,
+                    // so releasing it would not resume anything: it would start
+                    // a new TUS resource and hand the platform a second copy of
+                    // a recording it had already accepted. Recorded here so the
+                    // drain can finish the job instead of redoing it.
+                    if (transferred) {
+                        item.transferred = true;
+                    }
                     store.put(item);
                 }
             };
@@ -537,6 +585,10 @@ class OfflineQueue {
                 item.retryCount = 0;
                 item.lastAttempt = null;
                 item.error = null;
+                // And the drain claim from whatever attempt led to the hold, so
+                // the next drain can pick this up now rather than waiting out a
+                // lease left by an attempt that is long over.
+                item.leaseUntil = null;
                 store.put(item);
             };
 
@@ -579,23 +631,57 @@ class OfflineQueue {
             );
         }
 
-        const all = await this.getAll();
-        const item = all.find((entry) => entry.id === id);
-        if (!item) {
+        if (!this.db) {
             return;
         }
-        if (item.held !== true) {
-            throw new Error(
-                `DiscardRefused: ${id} is not held. Only a held submission can be discarded, and only on an explicit instruction.`,
-            );
-        }
+
+        // The held check and the delete are one readwrite transaction.
+        //
+        // Reading with `getAll()` and deleting afterwards left a window: a
+        // concurrent `releaseHold()` could clear `held` in between, and the
+        // delete then went ahead on an entry that was no longer held — the one
+        // thing this method exists to make impossible. The same
+        // check-then-act split was what let two `add()` calls both see room.
+        const heldReason = await new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+            /** @type {Error|null} */
+            let refusal = null;
+            let found = null;
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (!item) {
+                    return;
+                }
+                if (item.held !== true) {
+                    refusal = new Error(
+                        `DiscardRefused: ${id} is not held. Only a held submission can be discarded, and only on an explicit instruction.`,
+                    );
+                    tx.abort();
+                    return;
+                }
+                found = item.heldReason || null;
+                store.delete(id);
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(found);
+            tx.onabort = (ev) => reject(refusal || ev.target.error);
+            tx.onerror = (ev) => reject(refusal || ev.target.error);
+        });
+
+        // Reported after the delete commits, not before. An audit line for a
+        // deletion that then failed to happen is a different kind of wrong
+        // record from no line at all.
         console.warn("[Offline] Discarded on instruction:", id, given);
         sparxstarIntegration.reportError("submission_discarded", {
             submissionId: id,
             reason: given,
-            heldReason: item.heldReason || null,
+            heldReason,
         });
-        await this.remove(id);
+        this._notifyQueueUpdate();
     }
 
     /**
@@ -604,11 +690,58 @@ class OfflineQueue {
      * Surfaced so a host can show them rather than let them sit invisibly: a
      * held recording that nobody is told about is a lost one with extra steps.
      *
-     * @returns {Promise<Array<Object>>}
+     * Summaries, not records. `getAll()` materialises every queued entry
+     * *including its audio Blob*, so a host listing held items to draw a panel
+     * pulled the whole queue — up to the 20 MB cap — into memory to render a
+     * few lines of text, on devices with far less headroom than that. Nothing a
+     * host needs in order to describe a held recording lives in the bytes, so
+     * the bytes do not come along. A cursor visits the rows; only the fields
+     * that describe them are kept.
+     *
+     * @returns {Promise<Array<Object>>} One summary per held submission.
      */
     async getHeld() {
-        const all = await this.getAll();
-        return all.filter((item) => item.held === true);
+        if (!this.db) {
+            return [];
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const store = tx.objectStore(CONFIG.storeName);
+            const held = [];
+
+            const req = store.openCursor();
+            req.onerror = (ev) => reject(ev.target.error);
+            req.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    return;
+                }
+                const item = cursor.value;
+                if (item?.held === true) {
+                    held.push({
+                        id: item.id,
+                        instanceId: item.instanceId,
+                        fileName: item.fileName,
+                        timestamp: item.timestamp,
+                        heldReason: item.heldReason || null,
+                        retryCount: item.retryCount ?? 0,
+                        lastAttempt: item.lastAttempt ?? null,
+                        error: item.error ?? null,
+                        sizeBytes: item.audioBlob?.size || 0,
+                        mimeType: item.audioBlob?.type || item.metadata?.mimeType || "",
+                        captureProfile: item.metadata?.captureProfile || null,
+                        // Whether the server already has these bytes. A host
+                        // showing this entry needs to know that releasing it
+                        // finishes the job rather than sending it again.
+                        transferred: item.transferred === true,
+                    });
+                }
+                cursor.continue();
+            };
+
+            tx.oncomplete = () => resolve(held);
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
     }
 
     /**
@@ -643,6 +776,78 @@ class OfflineQueue {
     }
 
     /** @private */
+    /**
+     * Claim a row for this drain, or report that someone else holds it.
+     *
+     * One readwrite transaction, so two tabs cannot both see the row free.
+     *
+     * @private
+     * @param {string} id
+     * @returns {Promise<boolean>} True when this drain may upload the row.
+     */
+    async _claim(id) {
+        if (!this.db) {
+            return false;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+            let claimed = false;
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (!item) {
+                    // Gone since `getAll()` — another drain finished it.
+                    return;
+                }
+                const now = Date.now();
+                if (typeof item.leaseUntil === "number" && item.leaseUntil > now) {
+                    return;
+                }
+                item.leaseUntil = now + CONFIG.leaseMs;
+                store.put(item);
+                claimed = true;
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(claimed);
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
+    /**
+     * Give up a claim, so the row is retryable before the lease would expire.
+     *
+     * @private
+     * @param {string} id
+     * @returns {Promise<void>}
+     */
+    async _releaseClaim(id) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item) {
+                    item.leaseUntil = null;
+                    store.put(item);
+                }
+            };
+
+            // A claim that cannot be released is not an error worth failing a
+            // drain over: the lease expires on its own.
+            req.onerror = () => resolve();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+        });
+    }
+
     async _updateRetry(id, retryCount, error) {
         if (!this.db) {
             return;
@@ -703,38 +908,53 @@ class OfflineQueue {
                 // Whether the bytes reached the server on this attempt.
                 let uploaded = false;
 
-                // Entries queued before the submission id existed have no
-                // `metadata.uploadId`, so every retry would mint a new one and
-                // start a new TUS resource instead of resuming the partial it
-                // already has. Backfilled once and persisted, so the
-                // one-id-per-submission rule reaches recordings already sitting
-                // on devices rather than only new ones.
-                // The same test the upload module applies, not merely
-                // "is something there". `uploadTus()` replaces any id that is
-                // not a UUID v4 with a freshly minted one, so a stored entry
-                // carrying a non-empty invalid id was left alone here and then
-                // silently re-identified on every attempt — a different
-                // fingerprint each time, and never able to resume the partial
-                // the previous attempt left on the server. Asking the module
-                // that decides keeps one answer to the question.
-                if (!isUploadId(metadata?.uploadId)) {
-                    const backfilled = createUploadId();
-                    // The local variable is replaced, not just the stored row.
-                    // Guarding the assignment on `metadata` being truthy left a
-                    // row that had no metadata at all still passing `undefined`
-                    // into this first attempt: the upload minted a *different*
-                    // id, and the next drain — now reading the persisted one —
-                    // could not resume the partial that first attempt left on
-                    // the server. The backfill has to reach the attempt it was
-                    // written for, not only the one after it.
-                    metadata = { ...(metadata || {}), uploadId: backfilled };
-                    await this._setMetadata(id, metadata);
-                    debugLog("[Offline] Backfilled upload id for legacy entry:", id);
-                }
-
                 if (item.held) {
                     // Already held for a person. Retrying it on every drain
                     // would burn the contributor's bandwidth to no effect.
+                    //
+                    // Checked before the backfill below, not after it: an entry
+                    // nobody is going to upload does not need an identifier
+                    // minted for it, and minting is the one step here that can
+                    // fail outright.
+                    continue;
+                }
+
+                if (item.transferred === true) {
+                    // The server already has these bytes; what failed was
+                    // afterwards. Uploading again would hand the platform a
+                    // second copy of a recording it accepted — and it could not
+                    // even resume the first, because `removeFingerprintOnSuccess`
+                    // deleted the resume fingerprint when the transfer
+                    // completed. So this entry is finished rather than resent:
+                    // the completion event that never fired is emitted now, and
+                    // the entry goes.
+                    //
+                    // Reached only after a release, since holding is what put
+                    // the flag here. Before this existed, releasing such an
+                    // entry duplicated the recording.
+                    const detail = buildCompletionDetail({
+                        instanceId,
+                        result: { success: true, uploadId: metadata?.uploadId },
+                        metadata,
+                        formFields,
+                        fileName,
+                        mimeType: metadata?.mimeType || audioBlob.type || "",
+                        durationMs: metadata?.durationMs ?? 0,
+                        language: formFields?.language,
+                        contributorId: metadata?.env?.identifiers?.visitorId || "",
+                        calibrationApplied: !!metadata?.calibration,
+                    });
+                    emitCompletionEvent(detail);
+                    try {
+                        await this.remove(id);
+                        debugLog("[Offline] Reconciled an already-transferred entry:", id);
+                    } catch (cleanupError) {
+                        const msg =
+                            cleanupError && cleanupError.message
+                                ? cleanupError.message
+                                : String(cleanupError);
+                        await this._hold(id, `Reconciled; local cleanup failed: ${msg}`, true);
+                    }
                     continue;
                 }
 
@@ -755,6 +975,57 @@ class OfflineQueue {
                     if (Date.now() - item.lastAttempt < delay) {
                         continue;
                     }
+                }
+
+                // Entries queued before the submission id existed have no
+                // `metadata.uploadId`, so every retry would mint a new one and
+                // start a new TUS resource instead of resuming the partial it
+                // already has. Backfilled once and persisted, so the
+                // one-id-per-submission rule reaches recordings already sitting
+                // on devices rather than only new ones.
+                //
+                // The test is the one the upload module applies, not merely "is
+                // something there": `uploadTus()` replaces any id that is not a
+                // UUID v4, so an entry carrying a non-empty invalid id was left
+                // alone here and then silently re-identified on every attempt —
+                // a different fingerprint each time, never able to resume the
+                // partial the previous attempt left on the server.
+                try {
+                    if (!isUploadId(metadata?.uploadId)) {
+                        const backfilled = createUploadId();
+                        // The local variable is replaced, not just the stored
+                        // row. Guarding this on `metadata` being truthy left a
+                        // row with no metadata at all still passing `undefined`
+                        // into this first attempt, which then minted a
+                        // *different* id — so the next drain, reading the
+                        // persisted one, could not resume the partial that
+                        // first attempt had left on the server.
+                        metadata = { ...(metadata || {}), uploadId: backfilled };
+                        await this._setMetadata(id, metadata);
+                        debugLog("[Offline] Backfilled upload id for legacy entry:", id);
+                    }
+                } catch (err) {
+                    // `createUploadId()` throws where there is no secure
+                    // randomness. Unguarded, that threw out of the whole loop:
+                    // the drain stopped, every later entry went untried, and
+                    // the `finally` below rescheduled with this item's retry
+                    // state untouched — so the next delay was zero and the
+                    // queue span the same failure for as long as the page
+                    // lived. One unusable row must cost one row.
+                    const msg = err && err.message ? err.message : String(err);
+                    console.error("[Offline] Could not assign an upload id:", id, msg);
+                    await this._hold(id, `No upload identifier could be assigned: ${msg}`);
+                    continue;
+                }
+
+                // Claimed before the transfer, released on every exit from it.
+                // Without this, a second tab — with its own `isProcessing` flag
+                // and its own view of the same store — uploaded the same row in
+                // parallel, spending a contributor's bandwidth twice on one
+                // recording and firing `starmus:complete` twice for it.
+                if (!(await this._claim(id))) {
+                    debugLog("[Offline] Another drain holds this entry; skipping:", id);
+                    continue;
                 }
 
                 try {
@@ -818,10 +1089,14 @@ class OfflineQueue {
                         // next drain does not upload it again.
                         const msg = err && err.message ? err.message : String(err);
                         console.error("[Offline] Uploaded, but completion failed:", id, msg);
-                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`);
+                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`, true);
                         continue;
                     }
                     const msg = err && err.message ? err.message : String(err);
+                    // The row stays, so the claim must not: otherwise a failed
+                    // attempt locks its own recording out of the next drain for
+                    // the whole lease.
+                    await this._releaseClaim(id);
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                     if (nonRetryable) {
                         // Retrying will not help, so stop retrying — and keep
@@ -848,7 +1123,7 @@ class OfflineQueue {
                             ? cleanupError.message
                             : String(cleanupError);
                     console.error("[Offline] Uploaded but could not clear the entry:", id, msg);
-                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`);
+                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`, true);
                 }
             }
         } catch (fatal) {
@@ -1083,6 +1358,11 @@ export async function getPendingCount() {
  * Returns the submissions that are kept but will not be retried on their own.
  *
  * A host shows these so someone can act. They are never deleted by the queue.
+ *
+ * Each entry is a summary — id, file name, timestamp, held reason, retry count,
+ * size, mime type, capture profile, and whether the bytes already reached the
+ * server — and carries no audio Blob. Listing held recordings is a thing hosts
+ * do to draw a panel, and it must not cost the memory of the whole queue.
  *
  * @returns {Promise<Array<Object>>}
  */

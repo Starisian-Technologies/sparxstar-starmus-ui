@@ -519,3 +519,76 @@ test("the draft carries tokens, under a name that cannot be read as VAD output",
     await slot.stop();
     clearTranscriptProviders();
 });
+
+test("a provider that measures its own timings keeps them; one that does not is stamped", async () => {
+    // ADR-038 says a future Yahura live provider fills this same slot without UI
+    // rework. It cannot, if every offset it measured is overwritten by the
+    // recorder clock on the way through.
+    const { openTranscriptSlot, registerTranscriptProvider, clearTranscriptProviders } =
+        await import("../../src/js/starmus-transcript-provider.js");
+
+    let clock = 5000;
+
+    clearTranscriptProviders();
+    registerTranscriptProvider("measuring", () => ({
+        engine: "measuring",
+        model: "v1",
+        tokenGranularity: "word",
+        providesTimings: true,
+        start(context) {
+            // Measured, and inside the elapsed clock.
+            context.emit({ text: "kori", isFinal: true, startMs: 120, endMs: 480 });
+            // Unusable: claims to end after the recording has reached.
+            context.emit({ text: "future", isFinal: true, startMs: 0, endMs: clock + 9000 });
+        },
+        stop() {},
+    }));
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        tier: "A",
+        getElapsedMs: () => clock,
+    });
+    slot.start();
+
+    const tokens = slot.draft().tokens;
+    assert.equal(tokens[0].startMs, 120, "the measured start survives");
+    assert.equal(tokens[0].endMs, 480, "and so does the measured end");
+    assert.equal(tokens[0].timing, "measured", "and it is labelled as measured, not guessed");
+
+    assert.equal(
+        tokens[1].timing,
+        "approximate",
+        "a token whose timings fail validation falls back rather than being trusted",
+    );
+    assert.equal(tokens[1].endMs, clock, "and is stamped from the clock");
+
+    await slot.stop();
+    clearTranscriptProviders();
+});
+
+test("a provider that declares no timings is stamped from the clock, as before", async () => {
+    const { openTranscriptSlot, registerTranscriptProvider, clearTranscriptProviders } =
+        await import("../../src/js/starmus-transcript-provider.js");
+
+    clearTranscriptProviders();
+    registerTranscriptProvider("plain", () => ({
+        engine: "plain",
+        model: null,
+        start(context) {
+            // Supplies numbers, but does not declare that it measures them.
+            context.emit({ text: "kori", isFinal: true, startMs: 120, endMs: 480 });
+        },
+        stop() {},
+    }));
+
+    const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => 3000 });
+    slot.start();
+
+    const token = slot.draft().tokens[0];
+    assert.equal(token.timing, "approximate");
+    assert.equal(token.endMs, 3000, "the clock wins over numbers nobody vouched for");
+
+    await slot.stop();
+    clearTranscriptProviders();
+});

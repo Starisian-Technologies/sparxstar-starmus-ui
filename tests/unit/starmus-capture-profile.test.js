@@ -85,20 +85,42 @@ test("a host form field cannot overwrite reserved capture metadata", async () =>
 
     assert.match(
         source,
-        /RESERVED_METADATA_KEYS/,
-        "reserved keys are declared",
+        /const reserved = reservedMetadataKeys\(tusMetadata\);/,
+        "the reserved set is derived from what the module actually assigned",
     );
-    for (const key of ["upload_uuid", "captureProfile", "captureAttainment"]) {
-        assert.ok(
-            new RegExp(`"${key}"`).test(source),
-            `${key} is reserved against host form fields`,
-        );
-    }
     assert.match(
         source,
-        /if \(RESERVED_METADATA_KEYS\.has\(key\)\)/,
+        /if \(reserved\.has\(key\)\)/,
         "the merge loop skips reserved keys rather than overwriting them",
     );
+
+    // The rule itself, not its spelling. A hand-kept list had drifted:
+    // `upload_uuid` and the profile keys were protected while `tier`,
+    // `instanceId`, `transcript`, `calibration` and `env` — assigned in the
+    // same object literal — were not, so a host form field named `tier`
+    // silently replaced the resolved device tier on its way to ingestion.
+    const { reservedMetadataKeys } = await import("../../src/js/starmus-tus.js");
+    const assigned = {
+        upload_uuid: "x",
+        filename: "x",
+        filetype: "x",
+        instanceId: "x",
+        tier: "x",
+        transcript: "x",
+        calibration: "x",
+        env: "x",
+    };
+    const reserved = reservedMetadataKeys(assigned);
+
+    for (const key of Object.keys(assigned)) {
+        assert.ok(reserved.has(key), `${key} is reserved because the module assigns it`);
+    }
+    // Absent from `assigned` on purpose: a profile that was not set must still
+    // be unsettable by a host, or a form field could claim how audio was
+    // captured for an asset that has no profile at all.
+    assert.ok(reserved.has("captureProfile"));
+    assert.ok(reserved.has("captureAttainment"));
+    assert.equal(reserved.has("language"), false, "an ordinary host field still passes through");
 });
 
 test("holding a recording is a state with a way out, not a slower deletion", async () => {
@@ -347,4 +369,96 @@ test("queue usage is summed without materialising every recording", async () => 
 
     assert.match(body, /store\.openCursor\(\)/, "usage walks a cursor");
     assert.doesNotMatch(body, /this\.getAll\(\)/, "and never loads the whole queue to count it");
+});
+
+test("attaching a file does not carry the previous recording's transcript", () => {
+    // `handleSubmit()` copies `source.transcript` into the upload metadata, so a
+    // live transcript collected before the file was chosen would arrive at
+    // ingestion paired with the imported asset — another take's words attached
+    // to somebody else's audio.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 1024 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/transcript-update", transcript: "kori kuta" });
+    assert.equal(store.getState().source.transcript, "kori kuta");
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    const source = store.getState().source;
+    assert.equal(source.transcript, "", "the draft does not follow the file");
+    assert.equal(source.interimTranscript, "");
+});
+
+test("the local queue key survives a runtime with no secure randomness", async () => {
+    // `createUploadId()` refuses in that runtime, correctly — it is the
+    // `upload_uuid` the ingestion contract fixes. The offline submission id is
+    // only an IndexedDB key: it never leaves the device and nothing downstream
+    // reads it. Throwing for it meant `queueSubmission()` threw and the
+    // recording was lost, which ADR-011 forbids.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const body = source.slice(
+        source.indexOf("function createOfflineSubmissionId"),
+        source.indexOf("class OfflineQueue"),
+    );
+
+    assert.doesNotMatch(
+        body,
+        /throw new Error/,
+        "the local key falls back rather than refusing",
+    );
+    assert.match(body, /starmus-offline-local-/, "and says in the id that it is the fallback");
+
+    const upload = readFileSync("src/js/starmus-tus.js", "utf8");
+    const uploadBody = upload.slice(upload.indexOf("export function createUploadId"));
+    assert.match(
+        uploadBody.slice(0, 900),
+        /throw new Error\("Secure UUID generation is not available/,
+        "while the contract identifier still refuses to be invented",
+    );
+});
+
+test("an entry whose bytes already landed is reconciled, never re-uploaded", async () => {
+    // `removeFingerprintOnSuccess` deletes the resume fingerprint when a
+    // transfer completes, so an entry held *after* that has no resume identity.
+    // Releasing it used to start a new TUS resource — a second copy of a
+    // recording the platform had already accepted.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    assert.match(source, /if \(item\.transferred === true\) \{/, "the drain recognises the state");
+    const branch = source.slice(source.indexOf("if (item.transferred === true) {"));
+    const emit = branch.indexOf("emitCompletionEvent(detail)");
+    const upload = branch.indexOf("uploadWithPriority");
+    assert.ok(emit > -1, "it emits the completion that never fired");
+    assert.ok(emit < upload, "and reaches that before any upload call");
+    assert.match(
+        source,
+        /await this\._hold\(id, `Uploaded; completion handling failed: \$\{msg\}`, true\)/,
+        "post-transfer holds record that the bytes landed",
+    );
+});
+
+test("a drain claims a row before uploading it", async () => {
+    // `isProcessing` is in-memory, so it says nothing about the tab next door.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const claim = source.indexOf("if (!(await this._claim(id)))");
+    const upload = source.indexOf("await uploadWithPriority({");
+    assert.ok(claim > -1, "rows are claimed");
+    assert.ok(claim < upload, "and claimed before the transfer starts");
+    assert.match(source, /await this\._releaseClaim\(id\);/, "and released when an attempt fails");
+});
+
+test("listing held recordings does not load their audio", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const body = source.slice(source.indexOf("async getHeld()"), source.indexOf("async getHeld()") + 2600);
+
+    assert.match(body, /store\.openCursor\(\)/, "it walks a cursor");
+    assert.doesNotMatch(body, /this\.getAll\(\)/, "rather than materialising every record");
+    assert.doesNotMatch(body, /audioBlob: /, "and no Blob travels in the summary");
+    assert.match(body, /sizeBytes: item\.audioBlob\?\.size/, "only its size does");
 });

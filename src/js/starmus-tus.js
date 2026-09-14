@@ -190,13 +190,34 @@ function getConfig() {
  *
  * @type {ReadonlySet<string>}
  */
-const RESERVED_METADATA_KEYS = new Set([
-    "upload_uuid",
-    "captureProfile",
-    "captureAttainment",
-    "filename",
-    "filetype",
-]);
+/**
+ * Metadata keys this module owns that are only set *conditionally*.
+ *
+ * Everything else reserved is derived from what was actually assigned (see
+ * `reservedMetadataKeys()`), so the list cannot drift from the code. These two
+ * have to be named explicitly because an absent capture profile must still be
+ * unsettable by a host form field — otherwise a form named `captureProfile`
+ * could supply one for an asset that has none, which is a claim about how the
+ * audio was captured made by something that did not capture it.
+ */
+const CONDITIONAL_MODULE_KEYS = ["captureProfile", "captureAttainment"];
+
+/**
+ * The metadata keys a host form field must not overwrite.
+ *
+ * Derived from the object the module has already populated rather than kept as
+ * a second list beside it. A hand-maintained set had drifted: `upload_uuid`,
+ * `captureProfile`, `captureAttainment`, `filename` and `filetype` were
+ * protected while `instanceId`, `tier`, `transcript`, `calibration` and `env`
+ * — assigned in the same object literal — were not, so a host form field named
+ * `tier` silently replaced the resolved device tier on its way to ingestion.
+ *
+ * @param {Object} assigned The metadata this module has set.
+ * @returns {Set<string>}
+ */
+export function reservedMetadataKeys(assigned) {
+    return new Set([...Object.keys(assigned), ...CONDITIONAL_MODULE_KEYS]);
+}
 
 /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
 const UUID_V4_PATTERN =
@@ -373,8 +394,12 @@ export async function uploadTus(
     // over by whatever the host's form happened to be named. A field called
     // `captureProfile` could replace the validated value with an empty string,
     // satisfying the build check and violating the rule it enforces.
+    //
+    // The reserved set is computed here, after every module-owned key has been
+    // assigned, so it covers them all by construction.
+    const reserved = reservedMetadataKeys(tusMetadata);
     for (const [key, val] of Object.entries(fields)) {
-        if (RESERVED_METADATA_KEYS.has(key)) {
+        if (reserved.has(key)) {
             console.warn(
                 `[TUS] Ignoring form field '${key}': it is reserved capture metadata and the host does not set it.`,
             );

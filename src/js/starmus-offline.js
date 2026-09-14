@@ -779,6 +779,19 @@ class OfflineQueue {
             req.onsuccess = () => {
                 const item = req.result;
                 if (!item) {
+                    // Nothing by that id. Resolving quietly let a host believe
+                    // it had made a recording retryable when the row was
+                    // already gone — and then scheduled a drain on the strength
+                    // of it. `discardHeld()` refuses an unknown id; this is the
+                    // same state machine and refuses it too.
+                    refusal = new Error(
+                        `ReleaseRefused: no queued submission with id ${id}.`,
+                    );
+                    // Aborted, because the promise rejects from `onabort` —
+                    // setting `refusal` and returning let the transaction
+                    // complete and the call resolve as a success, which is the
+                    // behaviour this branch was added to stop.
+                    tx.abort();
                     return;
                 }
                 // Only a held entry. Releasing clears `retryCount`,
@@ -1032,8 +1045,9 @@ class OfflineQueue {
      * submission a person had explicitly stopped.
      *
      * Returns the row as it stands *inside* the claiming transaction, not as
-     * the caller's snapshot had it. `processQueue()` reads its rows with
-     * `getAll()` and claims them one at a time, so by the time a row is claimed
+     * the caller's snapshot had it. `processQueue()` lists ids with
+     * `_pendingSummaries()` and claims them one at a time, so by the time a row
+     * is claimed
      * another tab may have recorded a failed attempt against it and released
      * it. Working from the snapshot then used a stale `retryCount` and
      * `lastAttempt` — bypassing the backoff and overwriting the newer state —
@@ -1232,7 +1246,27 @@ class OfflineQueue {
         }
 
         this._clearScheduledProcessQueue();
-        const pending = await this._pendingSummaries();
+
+        // Guarded, and it reschedules. The drain is invoked as
+        // `void this.processQueue()` from a timer, so a storage failure here —
+        // before the try below, before `isProcessing` is set — became an
+        // unhandled rejection *and* left no wake scheduled, stranding every
+        // queued recording until a reload or an unrelated online event.
+        /** @type {Array<Object>} */
+        let pending;
+        try {
+            pending = await this._pendingSummaries();
+        } catch (err) {
+            const msg = err && err.message ? err.message : String(err);
+            console.error("[Offline] Could not list the queue:", msg);
+            this._reportStorageFailure("queue_listing_failed", err);
+            // A bounded retry rather than silence. If storage is failing for
+            // good this costs one wake per interval; if it was transient the
+            // queue resumes on its own, which is the case worth surviving.
+            this._scheduleProcessQueue(CONFIG.retryDelays[CONFIG.retryDelays.length - 1]);
+            return;
+        }
+
         if (pending.length === 0) {
             return;
         }

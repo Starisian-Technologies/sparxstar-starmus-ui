@@ -2820,7 +2820,7 @@
       return out;
     }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment2, _state$submission5;
+      var _action$attainment$pr, _action$attainment, _action$attainment2;
       if (!action || !action.type) {
         return state;
       }
@@ -2847,7 +2847,7 @@
           }
         case "starmus/error":
           {
-            var _state$submission, _state$submission2;
+            var _state$submission$act, _state$submission, _state$submission2, _state$submission3;
             var errObj = action.error || action.payload;
             var currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
             currentErrors.push({
@@ -2888,11 +2888,18 @@
             // uploaded, which is the same defect the superseded state was
             // added to prevent, arriving through the error path instead of
             // the completion path.
-            var deliveredThenFailed = state.status === "submitting" && Boolean(errObj.uploadId) && ((_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.superseded) !== true;
+            // Matched against the submission in flight, not merely
+            // "carries some id". An older upload reporting a
+            // completion-handling failure after a new `submit-start` would
+            // otherwise mark the new source complete — the same stale-event
+            // hole `submit-complete` is guarded against, through the error
+            // path.
+            var failedUploadIsCurrent = Boolean(errObj.uploadId) && (((_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null) === null || errObj.uploadId === state.submission.activeId);
+            var deliveredThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) !== true;
 
             // The replaced source goes back to submittable, exactly as it
             // does when a superseded upload completes normally.
-            var supersededThenFailed = state.status === "submitting" && Boolean(errObj.uploadId) && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) === true;
+            var supersededThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.superseded) === true;
             // A submission that has ended leaves no record of itself.
             //
             // These branches moved `status` out of `submitting` while
@@ -3178,7 +3185,7 @@
           });
         case "starmus/submit-complete":
           {
-            var _state$submission$act, _state$submission3, _action$submissionId, _state$submission4;
+            var _state$submission$act2, _state$submission4, _action$submissionId, _state$submission5;
             // Ignored when it does not belong to the submission in flight.
             //
             // A contributor who attaches a file while an upload is running
@@ -3191,7 +3198,7 @@
             // either: it is indistinguishable from the stale one this
             // guard exists to reject. A completion is only unconditional
             // when nothing named itself as being in flight.
-            var active = (_state$submission$act = (_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
+            var active = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
             var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
             if (active !== null && active !== finished) {
               return state;
@@ -3204,7 +3211,7 @@
             // had ever uploaded — the contributor was shown a delivery
             // that never happened and given no way to send the real one.
             // The UI goes back to submittable so the attachment can go.
-            if (((_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.superseded) === true) {
+            if (((_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
                 submission: {
@@ -3224,29 +3231,43 @@
             });
           }
         case "starmus/submit-queued":
-          // The recording that was queued is the one that was in flight,
-          // which is not what is on screen when the source has been
-          // replaced. Reporting "Queued" over the new attachment claimed
-          // the platform was holding a file it had never been given, and
-          // disabled the control that would have sent it. The queue entry
-          // for the earlier recording stands either way.
-          if (((_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.superseded) === true) {
+          {
+            var _state$submission$act3, _state$submission6, _action$uploadId, _state$submission7;
+            // Ignored when it does not belong to the submission in flight.
+            // `queueSubmission()` is asynchronous, so a slow result from an
+            // earlier attempt could otherwise mark whatever is on screen as
+            // queued. Matched on `uploadId` — the same identifier
+            // `submit-start` records — and not on `submissionId`, which is
+            // the queue's own row id and would never match it.
+            var inFlight = (_state$submission$act3 = (_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
+            var queuedUpload = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
+            if (inFlight !== null && queuedUpload !== null && inFlight !== queuedUpload) {
+              return state;
+            }
+            // The recording that was queued is the one that was in flight,
+            // which is not what is on screen when the source has been
+            // replaced. Reporting "Queued" over the new attachment claimed
+            // the platform was holding a file it had never been given, and
+            // disabled the control that would have sent it. The queue entry
+            // for the earlier recording stands either way.
+            if (((_state$submission7 = state.submission) === null || _state$submission7 === void 0 ? void 0 : _state$submission7.superseded) === true) {
+              return merge(state, {
+                status: "ready_to_submit",
+                submission: {
+                  progress: 0,
+                  isQueued: false,
+                  activeId: null
+                }
+              });
+            }
             return merge(state, {
-              status: "ready_to_submit",
+              status: "complete",
               submission: {
                 progress: 0,
-                isQueued: false,
-                activeId: null
+                isQueued: true
               }
             });
           }
-          return merge(state, {
-            status: "complete",
-            submission: {
-              progress: 0,
-              isQueued: true
-            }
-          });
         case "starmus/reset":
           return merge(shallowClone(DEFAULT_INITIAL_STATE), {
             instanceId: state.instanceId,
@@ -14540,7 +14561,11 @@
     // *container*, which may hold Vorbis, FLAC or Speex. This is the same
     // container-for-codec substitution the mp4 branch above was corrected for,
     // and imported material is exactly where it would misdescribe an asset.
-    if (type.includes("audio/opus") || type.includes("opus") || ext === "opus") {
+    // Token-matched, like the AAC branch above. `includes("opus")` is also true
+    // of `audio/ogg; codecs=notopus` and of any future parameter containing the
+    // word, so the substring test could name a codec the value explicitly is
+    // not.
+    if (/\baudio\/opus(?![\w+.-])/.test(type) || /\bopus\b/.test(type) || ext === "opus") {
       return "opus";
     }
     if (type.includes("audio/ogg") || ext === "ogg") {
@@ -15790,6 +15815,17 @@
                   req.onsuccess = function () {
                     var item = req.result;
                     if (!item) {
+                      // Nothing by that id. Resolving quietly let a host believe
+                      // it had made a recording retryable when the row was
+                      // already gone — and then scheduled a drain on the strength
+                      // of it. `discardHeld()` refuses an unknown id; this is the
+                      // same state machine and refuses it too.
+                      refusal = new Error("ReleaseRefused: no queued submission with id ".concat(id, "."));
+                      // Aborted, because the promise rejects from `onabort` —
+                      // setting `refusal` and returning let the transaction
+                      // complete and the call resolve as a success, which is the
+                      // behaviour this branch was added to stop.
+                      tx.abort();
                       return;
                     }
                     // Only a held entry. Releasing clears `retryCount`,
@@ -16116,8 +16152,9 @@
        * submission a person had explicitly stopped.
        *
        * Returns the row as it stands *inside* the claiming transaction, not as
-       * the caller's snapshot had it. `processQueue()` reads its rows with
-       * `getAll()` and claims them one at a time, so by the time a row is claimed
+       * the caller's snapshot had it. `processQueue()` lists ids with
+       * `_pendingSummaries()` and claims them one at a time, so by the time a row
+       * is claimed
        * another tab may have recorded a failed attempt against it and released
        * it. Working from the snapshot then used a stale `retryCount` and
        * `lastAttempt` — bypassing the backoff and overwriting the newer state —
@@ -16406,7 +16443,7 @@
         var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
           var _sparxstarIntegration,
             _this15 = this;
-          var pending, _iterator, _step, _loop, _ret, nextDelay, _t6, _t7, _t8;
+          var pending, msg, _iterator, _step, _loop, _ret, nextDelay, _t6, _t7, _t8, _t9;
           return _regenerator().w(function (_context16) {
             while (1) switch (_context16.p = _context16.n) {
               case 0:
@@ -16417,30 +16454,52 @@
                 return _context16.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context16.n = 2;
+
+                // Guarded, and it reschedules. The drain is invoked as
+                // `void this.processQueue()` from a timer, so a storage failure here —
+                // before the try below, before `isProcessing` is set — became an
+                // unhandled rejection *and* left no wake scheduled, stranding every
+                // queued recording until a reload or an unrelated online event.
+                /** @type {Array<Object>} */
+                _context16.p = 2;
+                _context16.n = 3;
                 return this._pendingSummaries();
-              case 2:
-                pending = _context16.v;
-                if (!(pending.length === 0)) {
-                  _context16.n = 3;
-                  break;
-                }
-                return _context16.a(2);
               case 3:
-                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context16.n = 4;
+                pending = _context16.v;
+                _context16.n = 5;
+                break;
+              case 4:
+                _context16.p = 4;
+                _t6 = _context16.v;
+                msg = _t6 && _t6.message ? _t6.message : String(_t6);
+                console.error("[Offline] Could not list the queue:", msg);
+                this._reportStorageFailure("queue_listing_failed", _t6);
+                // A bounded retry rather than silence. If storage is failing for
+                // good this costs one wake per interval; if it was transient the
+                // queue resumes on its own, which is the case worth surviving.
+                this._scheduleProcessQueue(CONFIG.retryDelays[CONFIG.retryDelays.length - 1]);
+                return _context16.a(2);
+              case 5:
+                if (!(pending.length === 0)) {
+                  _context16.n = 6;
                   break;
                 }
                 return _context16.a(2);
-              case 4:
+              case 6:
+                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
+                  _context16.n = 7;
+                  break;
+                }
+                return _context16.a(2);
+              case 7:
                 this.isProcessing = true;
-                _context16.p = 5;
+                _context16.p = 8;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator = _createForOfIteratorHelper$1(pending);
-                _context16.p = 6;
+                _context16.p = 9;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg2, _msg3, nextRetryCount, _msg4, _t, _t2, _t4, _t5;
+                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, _msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg2, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg3, _msg4, nextRetryCount, _msg5, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
@@ -16545,9 +16604,9 @@
                       case 10:
                         _context15.p = 10;
                         _t = _context15.v;
-                        msg = _t && _t.message ? _t.message : String(_t);
+                        _msg = _t && _t.message ? _t.message : String(_t);
                         _context15.n = 11;
-                        return _this15._hold(id, "Reconciled; local cleanup failed: ".concat(msg), true, reconcileToken);
+                        return _this15._hold(id, "Reconciled; local cleanup failed: ".concat(_msg), true, reconcileToken);
                       case 11:
                         return _context15.a(2, 0);
                       case 12:
@@ -16683,10 +16742,10 @@
                         // state untouched — so the next delay was zero and the
                         // queue span the same failure for as long as the page
                         // lived. One unusable row must cost one row.
-                        _msg = _t2 && _t2.message ? _t2.message : String(_t2);
-                        console.error("[Offline] Could not assign an upload id:", id, _msg);
+                        _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
+                        console.error("[Offline] Could not assign an upload id:", id, _msg2);
                         _context15.n = 28;
-                        return _this15._hold(id, "No upload identifier could be assigned: ".concat(_msg), false, claimToken);
+                        return _this15._hold(id, "No upload identifier could be assigned: ".concat(_msg2), false, claimToken);
                       case 28:
                         return _context15.a(2, 0);
                       case 29:
@@ -16877,30 +16936,30 @@
                         // or retrying would send an asset the server already
                         // has. Hold it instead, so a person can see it and the
                         // next drain does not upload it again.
-                        _msg2 = _t4 && _t4.message ? _t4.message : String(_t4);
-                        console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
+                        _msg3 = _t4 && _t4.message ? _t4.message : String(_t4);
+                        console.error("[Offline] Uploaded, but completion failed:", id, _msg3);
                         _context15.n = 42;
-                        return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
+                        return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg3), true, claimToken);
                       case 42:
                         return _context15.a(2, 0);
                       case 43:
-                        _msg3 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
+                        _msg4 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
-                        if (!isNonRetryableUploadFailure(_msg3)) {
+                        if (!isNonRetryableUploadFailure(_msg4)) {
                           _context15.n = 45;
                           break;
                         }
                         _context15.n = 44;
-                        return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
+                        return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg4), false, claimToken);
                       case 44:
                         _context15.n = 46;
                         break;
                       case 45:
                         nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
                         _context15.n = 46;
-                        return _this15._updateRetry(id, nextRetryCount, _msg3, claimToken);
+                        return _this15._updateRetry(id, nextRetryCount, _msg4, claimToken);
                       case 46:
                         return _context15.a(2, 0);
                       case 47:
@@ -16913,73 +16972,73 @@
                       case 49:
                         _context15.p = 49;
                         _t5 = _context15.v;
-                        _msg4 = _t5 && _t5.message ? _t5.message : String(_t5);
-                        console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
+                        _msg5 = _t5 && _t5.message ? _t5.message : String(_t5);
+                        console.error("[Offline] Uploaded but could not clear the entry:", id, _msg5);
                         _context15.n = 50;
-                        return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
+                        return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg5), true, claimToken);
                       case 50:
                         return _context15.a(2);
                     }
                   }, _loop, null, [[47, 49], [32, 34], [30, 41], [21, 27], [8, 10]]);
                 });
                 _iterator.s();
-              case 7:
+              case 10:
                 if ((_step = _iterator.n()).done) {
-                  _context16.n = 10;
+                  _context16.n = 13;
                   break;
                 }
-                return _context16.d(_regeneratorValues(_loop()), 8);
-              case 8:
+                return _context16.d(_regeneratorValues(_loop()), 11);
+              case 11:
                 _ret = _context16.v;
                 if (!(_ret === 0)) {
-                  _context16.n = 9;
+                  _context16.n = 12;
                   break;
                 }
-                return _context16.a(3, 9);
-              case 9:
-                _context16.n = 7;
-                break;
-              case 10:
-                _context16.n = 12;
-                break;
-              case 11:
-                _context16.p = 11;
-                _t6 = _context16.v;
-                _iterator.e(_t6);
+                return _context16.a(3, 12);
               case 12:
-                _context16.p = 12;
-                _iterator.f();
-                return _context16.f(12);
+                _context16.n = 10;
+                break;
               case 13:
                 _context16.n = 15;
                 break;
               case 14:
                 _context16.p = 14;
                 _t7 = _context16.v;
-                console.error("[Offline] Queue fatal:", _t7);
+                _iterator.e(_t7);
               case 15:
                 _context16.p = 15;
-                this.isProcessing = false;
-                _context16.p = 16;
-                _context16.n = 17;
-                return this._getNextProcessDelay();
+                _iterator.f();
+                return _context16.f(15);
+              case 16:
+                _context16.n = 18;
+                break;
               case 17:
+                _context16.p = 17;
+                _t8 = _context16.v;
+                console.error("[Offline] Queue fatal:", _t8);
+              case 18:
+                _context16.p = 18;
+                this.isProcessing = false;
+                _context16.p = 19;
+                _context16.n = 20;
+                return this._getNextProcessDelay();
+              case 20:
                 nextDelay = _context16.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context16.n = 19;
+                _context16.n = 22;
                 break;
-              case 18:
-                _context16.p = 18;
-                _t8 = _context16.v;
-                console.error("[Offline] Failed to schedule next queue processing:", _t8);
-              case 19:
-                return _context16.f(15);
-              case 20:
+              case 21:
+                _context16.p = 21;
+                _t9 = _context16.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t9);
+              case 22:
+                return _context16.f(18);
+              case 23:
                 return _context16.a(2);
             }
-          }, _callee15, this, [[16, 18], [6, 11, 12, 13], [5, 14, 15, 20]]);
+          }, _callee15, this, [[19, 21], [9, 14, 15, 16], [8, 17, 18, 23], [2, 4]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -17261,7 +17320,7 @@
       key: "_getNextProcessDelay",
       value: (function () {
         var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
-          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t9;
+          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t0;
           return _regenerator().w(function (_context20) {
             while (1) switch (_context20.p = _context20.n) {
               case 0:
@@ -17318,8 +17377,8 @@
                 break;
               case 7:
                 _context20.p = 7;
-                _t9 = _context20.v;
-                _iterator2.e(_t9);
+                _t0 = _context20.v;
+                _iterator2.e(_t0);
               case 8:
                 _context20.p = 8;
                 _iterator2.f();
@@ -18043,7 +18102,12 @@
               // final and returned the UI to submittable while the queue was
               // still retrying the same recording. A retry from the button
               // then queued it a second time.
-              /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(message) || /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message);
+              /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(message) || /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message) ||
+              // The transient 4xx the queue also retries. Disagreeing here
+              // told the contributor a failure was final while the queue went
+              // on retrying the same recording — and 429 is a server asking
+              // for exactly the retry this would have called hopeless.
+              /(?:response code|status|HTTP)\D{0,3}4(?:08|25|29)\b/i.test(message);
               if (!transferred) {
                 _context.n = 6;
                 break;
@@ -18085,9 +18149,16 @@
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
             case 7:
               submissionId = _context.v;
+              // Two identifiers, because they are two different things. The
+              // queue row id is what queue operations address; the upload id
+              // is what says *which submission* this result belongs to. The
+              // store matches on the second — matching on the first would
+              // compare a queue row id against the TUS uuid held as
+              // `activeId` and reject every ordinary queue transition.
               store.dispatch({
                 type: "starmus/submit-queued",
-                submissionId: submissionId
+                submissionId: submissionId,
+                uploadId: metadata.uploadId
               });
               _context.n = 8;
               return getPendingCount();

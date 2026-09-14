@@ -180,16 +180,27 @@
                 // uploaded, which is the same defect the superseded state was
                 // added to prevent, arriving through the error path instead of
                 // the completion path.
+                // Matched against the submission in flight, not merely
+                // "carries some id". An older upload reporting a
+                // completion-handling failure after a new `submit-start` would
+                // otherwise mark the new source complete — the same stale-event
+                // hole `submit-complete` is guarded against, through the error
+                // path.
+                const failedUploadIsCurrent =
+                    Boolean(errObj.uploadId) &&
+                    ((state.submission?.activeId ?? null) === null ||
+                        errObj.uploadId === state.submission.activeId);
+
                 const deliveredThenFailed =
                     state.status === "submitting" &&
-                    Boolean(errObj.uploadId) &&
+                    failedUploadIsCurrent &&
                     state.submission?.superseded !== true;
 
                 // The replaced source goes back to submittable, exactly as it
                 // does when a superseded upload completes normally.
                 const supersededThenFailed =
                     state.status === "submitting" &&
-                    Boolean(errObj.uploadId) &&
+                    failedUploadIsCurrent &&
                     state.submission?.superseded === true;
                 // A submission that has ended leaves no record of itself.
                 //
@@ -521,7 +532,18 @@
                 });
             }
 
-            case "starmus/submit-queued":
+            case "starmus/submit-queued": {
+                // Ignored when it does not belong to the submission in flight.
+                // `queueSubmission()` is asynchronous, so a slow result from an
+                // earlier attempt could otherwise mark whatever is on screen as
+                // queued. Matched on `uploadId` — the same identifier
+                // `submit-start` records — and not on `submissionId`, which is
+                // the queue's own row id and would never match it.
+                const inFlight = state.submission?.activeId ?? null;
+                const queuedUpload = action.uploadId ?? null;
+                if (inFlight !== null && queuedUpload !== null && inFlight !== queuedUpload) {
+                    return state;
+                }
                 // The recording that was queued is the one that was in flight,
                 // which is not what is on screen when the source has been
                 // replaced. Reporting "Queued" over the new attachment claimed
@@ -538,6 +560,7 @@
                     status: "complete",
                     submission: { progress: 0, isQueued: true },
                 });
+            }
 
             case "starmus/reset":
                 return merge(shallowClone(DEFAULT_INITIAL_STATE), {

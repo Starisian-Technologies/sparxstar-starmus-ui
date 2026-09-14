@@ -601,3 +601,47 @@ test("a drain does not load every recording before claiming one", async () => {
 
     assert.equal((await tab.queue.getAll()).length, 3, "and every recording is still here");
 });
+
+test("releasing a recording that is not there is refused, not waved through", async () => {
+    // Resolving quietly let a host believe it had made a recording retryable
+    // when the row was already gone, and scheduled a drain on the strength of
+    // it. `discardHeld()` refuses an unknown id; this is the same state machine.
+    freshEnvironment();
+    const tab = await openTab();
+    await seed(tab.queue);
+
+    await assert.rejects(
+        () => tab.module.releaseHeldSubmission("starmus-offline-does-not-exist"),
+        /ReleaseRefused/,
+        "an unknown id is refused",
+    );
+});
+
+test("a drain whose listing fails reschedules instead of stranding the queue", async () => {
+    // `processQueue()` is invoked as `void this.processQueue()` from a timer, so
+    // a storage failure in the preflight became an unhandled rejection and left
+    // no wake scheduled — every queued recording stranded until a reload.
+    freshEnvironment();
+    const tab = await openTab();
+    await seed(tab.queue);
+
+    const realList = tab.queue._pendingSummaries.bind(tab.queue);
+    const realSchedule = tab.queue._scheduleProcessQueue.bind(tab.queue);
+    let rescheduled = null;
+    tab.queue._pendingSummaries = () => Promise.reject(new Error("storage is gone"));
+    tab.queue._scheduleProcessQueue = (delay) => {
+        rescheduled = delay;
+    };
+    try {
+        navigator.onLine = true;
+        await tab.queue.processQueue();
+    } finally {
+        navigator.onLine = false;
+        tab.queue._pendingSummaries = realList;
+        tab.queue._scheduleProcessQueue = realSchedule;
+    }
+
+    assert.equal(typeof rescheduled, "number", "a wake is scheduled rather than none");
+    assert.ok(rescheduled > 0, "and it is not an immediate spin");
+    assert.equal((await tab.queue.getAll()).length, 1, "the recording is still here");
+});

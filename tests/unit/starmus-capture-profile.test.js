@@ -1282,3 +1282,82 @@ test("tus fingerprint stays a Promise, because the client requires one", async (
         "and the installed client is what requires it",
     );
 });
+
+test("a queue result from an older submission does not mark the current one queued", () => {
+    // `queueSubmission()` is asynchronous. A slow result from an earlier
+    // attempt could mark whatever is on screen as queued — and the match has to
+    // be on the upload id, because the queue's own row id is a different
+    // identifier and would never equal the one `submit-start` recorded.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-current" });
+
+    store.dispatch({
+        type: "starmus/submit-queued",
+        submissionId: "starmus-offline-row-1",
+        uploadId: "upload-earlier",
+    });
+    assert.equal(store.getState().status, "submitting", "a foreign upload id is ignored");
+
+    store.dispatch({
+        type: "starmus/submit-queued",
+        submissionId: "starmus-offline-row-2",
+        uploadId: "upload-current",
+    });
+    const state = store.getState();
+    assert.equal(state.status, "complete", "the submission in flight queues normally");
+    assert.equal(state.submission.isQueued, true);
+});
+
+test("a post-transfer failure from an older upload does not complete the current one", () => {
+    // The error carries the old upload id. Checking only that *some* id exists
+    // let it mark a newer submission delivered.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-new" });
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect failed", retryable: false, uploadId: "upload-old" },
+    });
+    assert.equal(store.getState().status, "submitting", "the stale delivery is not applied");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect failed", retryable: false, uploadId: "upload-new" },
+    });
+    assert.equal(store.getState().status, "complete", "the current one still settles");
+});
+
+test("both submission paths treat a transient 4xx the same way", async () => {
+    // The queue retries 408, 425 and 429; core called them final, so the UI
+    // reported a hard failure while the queue went on retrying the recording.
+    const { readFileSync } = await import("node:fs");
+    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
+    const core = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const classifier = core.slice(
+        core.indexOf("const retryableUploadError ="),
+        core.indexOf("if (transferred) {"),
+    );
+    assert.match(classifier, /4\(\?:08\|25\|29\)/, "core recognises the transient 4xx");
+
+    for (const msg of ["HTTP 429 Too Many Requests", "response code 408", "status: 425"]) {
+        assert.equal(isNonRetryableUploadFailure(msg), false, `the queue retries: ${msg}`);
+    }
+});
+
+test("Opus is named only when Opus is named", async () => {
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+
+    assert.notEqual(resolveUploadFormat("audio/ogg; codecs=notopus", ""), "opus");
+    assert.equal(resolveUploadFormat("audio/ogg", "take.ogg"), "ogg", "the container names itself");
+    assert.equal(resolveUploadFormat('audio/ogg; codecs="opus"', ""), "opus");
+    assert.equal(resolveUploadFormat("audio/opus", ""), "opus");
+});

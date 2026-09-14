@@ -69,7 +69,15 @@ export function resolveUploadFormat(mimeType, fileName) {
     // *container*, which may hold Vorbis, FLAC or Speex. This is the same
     // container-for-codec substitution the mp4 branch above was corrected for,
     // and imported material is exactly where it would misdescribe an asset.
-    if (type.includes("audio/opus") || type.includes("opus") || ext === "opus") {
+    // Token-matched, like the AAC branch above. `includes("opus")` is also true
+    // of `audio/ogg; codecs=notopus` and of any future parameter containing the
+    // word, so the substring test could name a codec the value explicitly is
+    // not.
+    if (
+        /\baudio\/opus(?![\w+.-])/.test(type) ||
+        /\bopus\b/.test(type) ||
+        ext === "opus"
+    ) {
         return "opus";
     }
 

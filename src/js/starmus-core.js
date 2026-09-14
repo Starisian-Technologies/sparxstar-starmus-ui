@@ -405,7 +405,12 @@ export function initCore(store, instanceId, env) {
                 /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(
                     message,
                 ) ||
-                /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message);
+                /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message) ||
+                // The transient 4xx the queue also retries. Disagreeing here
+                // told the contributor a failure was final while the queue went
+                // on retrying the same recording — and 429 is a server asking
+                // for exactly the retry this would have called hopeless.
+                /(?:response code|status|HTTP)\D{0,3}4(?:08|25|29)\b/i.test(message);
 
             if (transferred) {
                 // The upload succeeded and something after it did not — the
@@ -454,7 +459,17 @@ export function initCore(store, instanceId, env) {
                     formFields,
                     metadata,
                 );
-                store.dispatch({ type: "starmus/submit-queued", submissionId });
+                // Two identifiers, because they are two different things. The
+                // queue row id is what queue operations address; the upload id
+                // is what says *which submission* this result belongs to. The
+                // store matches on the second — matching on the first would
+                // compare a queue row id against the TUS uuid held as
+                // `activeId` and reject every ordinary queue transition.
+                store.dispatch({
+                    type: "starmus/submit-queued",
+                    submissionId,
+                    uploadId: metadata.uploadId,
+                });
                 const pending = await getPendingCount();
                 if (window.CommandBus) {
                     window.CommandBus.dispatch("starmus/offline/queue_updated", {

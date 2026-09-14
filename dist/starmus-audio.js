@@ -2847,7 +2847,7 @@
           }
         case "starmus/error":
           {
-            var _state$submission$act, _state$submission, _state$submission2, _state$submission3;
+            var _errObj$attemptId, _state$submission$act, _state$submission, _state$submission2, _state$submission3;
             var errObj = action.error || action.payload;
             var currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
             currentErrors.push({
@@ -2869,7 +2869,19 @@
             // Not when the bytes already landed. A post-transfer failure
             // carries `uploadId`, and returning that to a submittable state
             // would invite a second upload of an asset the server has.
-            var submissionFailed = state.status === "submitting" && errObj.retryable === false && !errObj.uploadId;
+            // Whose failure this is.
+            //
+            // An error with no attempt named is a general one — a denied
+            // microphone, a recorder that would not start — and applies to
+            // whatever is happening. One that names an attempt applies only
+            // to that attempt: a held transfer reporting terminally after
+            // its source was replaced and a new submit began would
+            // otherwise have reset the *new* submission to submittable,
+            // because nothing tied the error to the attempt that raised it.
+            var attempt = (_errObj$attemptId = errObj.attemptId) !== null && _errObj$attemptId !== void 0 ? _errObj$attemptId : null;
+            var inFlight = (_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
+            var errorIsCurrent = attempt === null || inFlight === null || attempt === inFlight;
+            var submissionFailed = state.status === "submitting" && errorIsCurrent && errObj.retryable === false && !errObj.uploadId;
 
             // The transfer succeeded and the handling after it did not.
             //
@@ -2894,7 +2906,7 @@
             // otherwise mark the new source complete — the same stale-event
             // hole `submit-complete` is guarded against, through the error
             // path.
-            var failedUploadIsCurrent = Boolean(errObj.uploadId) && (((_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null) === null || errObj.uploadId === state.submission.activeId);
+            var failedUploadIsCurrent = Boolean(errObj.uploadId) && errorIsCurrent && (inFlight === null || errObj.uploadId === inFlight);
             var deliveredThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) !== true;
 
             // The replaced source goes back to submittable, exactly as it
@@ -3247,9 +3259,14 @@
             // queued. Matched on `uploadId` — the same identifier
             // `submit-start` records — and not on `submissionId`, which is
             // the queue's own row id and would never match it.
-            var inFlight = (_state$submission$act3 = (_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
+            var _inFlight = (_state$submission$act3 = (_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
             var queuedUpload = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
-            if (inFlight !== null && queuedUpload !== null && inFlight !== queuedUpload) {
+            // An unnamed result is refused too, when something else is in
+            // flight. Requiring the id to be non-null before comparing let
+            // an older queue result with no id mark the current submission
+            // queued — the same hole the id check was added to close, left
+            // open for exactly the callers least likely to be current.
+            if (_inFlight !== null && _inFlight !== queuedUpload) {
               return state;
             }
             // The recording that was queued is the one that was in flight,
@@ -14585,7 +14602,11 @@
     // media type is consulted. `audio/aac; codecs=mp4a.40.5` matched the
     // `audio/aac` branch and returned `aac-lc`, so the parameter that says
     // HE-AAC was read as confirmation of the thing it rules out.
-    var statesNonLcProfile = /\bmp4a\.40\.(?!2\b)\d+\b/.test(type);
+    // `audio/aacp` counts here too, not only an `mp4a.40.x` parameter. The
+    // media type names HE-AAC on its own, and an asset carrying it with a
+    // `.aac` filename reached the extension alternative below and was reported
+    // AAC-LC — the profile guard bypassed by the very branch it sits beside.
+    var statesNonLcProfile = /\bmp4a\.40\.(?!2\b)\d+\b/.test(type) || /\baudio\/aacp\b/.test(type);
     if (!statesNonLcProfile && (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac")) {
       return "aac-lc";
     }
@@ -17248,10 +17269,24 @@
               case 1:
                 return _context18.a(2, new Promise(function (resolve, reject) {
                   var tx = _this20.db.transaction([CONFIG.storeName], "readonly");
-                  var req = tx.objectStore(CONFIG.storeName).count();
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
                   var total = 0;
                   req.onsuccess = function () {
-                    total = req.result;
+                    var _cursor$value5;
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    // A row the server already has is not something the platform is
+                    // still waiting for. `transferred: true` rows are retained when
+                    // the completion handling or the local delete failed *after*
+                    // acceptance, so a bare `count()` reported an asset the platform
+                    // holds as a recording it had not received — and the host's
+                    // queue badge said so to the contributor.
+                    if (((_cursor$value5 = cursor.value) === null || _cursor$value5 === void 0 ? void 0 : _cursor$value5.transferred) !== true) {
+                      total += 1;
+                    }
+                    cursor.continue();
                   };
                   req.onerror = function (ev) {
                     return reject(ev.target.error);
@@ -17260,6 +17295,9 @@
                     return resolve(total);
                   };
                   tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
                     return reject(ev.target.error);
                   };
                 }));
@@ -18235,7 +18273,15 @@
                 error: {
                   message: message,
                   retryable: false,
-                  uploadId: metadata.uploadId
+                  // The bytes landed: this id is how the two sides
+                  // reconcile, and it is what marks the submission
+                  // delivered.
+                  uploadId: metadata.uploadId,
+                  // Which attempt this is about, carried separately
+                  // because "delivered" and "whose failure is this" are
+                  // different questions and only one of them is answered
+                  // by the presence of an upload id.
+                  attemptId: metadata.uploadId
                 }
               });
               return _context.a(2);
@@ -18271,7 +18317,8 @@
                   type: "starmus/error",
                   error: {
                     message: message,
-                    retryable: false
+                    retryable: false,
+                    attemptId: metadata.uploadId
                   }
                 });
               }
@@ -18291,7 +18338,8 @@
                 type: "starmus/error",
                 error: {
                   message: queueMessage,
-                  retryable: false
+                  retryable: false,
+                  attemptId: metadata.uploadId
                 }
               });
             case 10:

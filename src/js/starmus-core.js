@@ -437,7 +437,19 @@ export function initCore(store, instanceId, env) {
                 });
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message, retryable: false, uploadId: metadata.uploadId },
+                    error: {
+                        message,
+                        retryable: false,
+                        // The bytes landed: this id is how the two sides
+                        // reconcile, and it is what marks the submission
+                        // delivered.
+                        uploadId: metadata.uploadId,
+                        // Which attempt this is about, carried separately
+                        // because "delivered" and "whose failure is this" are
+                        // different questions and only one of them is answered
+                        // by the presence of an upload id.
+                        attemptId: metadata.uploadId,
+                    },
                 });
                 return;
             }
@@ -480,7 +492,7 @@ export function initCore(store, instanceId, env) {
                     // Held, but not something the queue will clear on its own.
                     store.dispatch({
                         type: "starmus/error",
-                        error: { message, retryable: false },
+                        error: { message, retryable: false, attemptId: metadata.uploadId },
                     });
                 }
             } catch (queueError) {
@@ -496,7 +508,7 @@ export function initCore(store, instanceId, env) {
                         : "Upload failed completely.";
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message: queueMessage, retryable: false },
+                    error: { message: queueMessage, retryable: false, attemptId: metadata.uploadId },
                 });
             }
         }

@@ -701,3 +701,23 @@ test("telling the host the queue changed does not load the queue", async () => {
         );
     }
 });
+
+test("a recording the server already has is not counted as pending", async () => {
+    // `transferred: true` rows are retained when completion handling or the
+    // local delete failed *after* acceptance. Counting them told the
+    // contributor, through the host's queue badge, that the platform had not
+    // received a recording it was already holding.
+    freshEnvironment();
+    const tab = await openTab();
+    const waiting = await seed(tab.queue, { name: "waiting.webm" });
+    const landed = await seed(tab.queue, { name: "landed.webm" });
+
+    assert.equal(await tab.module.getPendingCount(), 2, "both start out pending");
+
+    const claim = await tab.queue._claim(landed);
+    assert.equal(await tab.queue._markTransferred(landed, claim.token), true);
+
+    assert.equal(await tab.module.getPendingCount(), 1, "the accepted one drops out");
+    assert.equal((await tab.queue.getAll()).length, 2, "while both rows are still retained");
+    assert.ok(waiting, "and the one still waiting is the one counted");
+});

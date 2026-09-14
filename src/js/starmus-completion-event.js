@@ -49,7 +49,12 @@ export function resolveUploadFormat(mimeType, fileName) {
     // media type is consulted. `audio/aac; codecs=mp4a.40.5` matched the
     // `audio/aac` branch and returned `aac-lc`, so the parameter that says
     // HE-AAC was read as confirmation of the thing it rules out.
-    const statesNonLcProfile = /\bmp4a\.40\.(?!2\b)\d+\b/.test(type);
+    // `audio/aacp` counts here too, not only an `mp4a.40.x` parameter. The
+    // media type names HE-AAC on its own, and an asset carrying it with a
+    // `.aac` filename reached the extension alternative below and was reported
+    // AAC-LC — the profile guard bypassed by the very branch it sits beside.
+    const statesNonLcProfile =
+        /\bmp4a\.40\.(?!2\b)\d+\b/.test(type) || /\baudio\/aacp\b/.test(type);
 
     if (
         !statesNonLcProfile &&

@@ -158,8 +158,23 @@
                 // Not when the bytes already landed. A post-transfer failure
                 // carries `uploadId`, and returning that to a submittable state
                 // would invite a second upload of an asset the server has.
+                // Whose failure this is.
+                //
+                // An error with no attempt named is a general one — a denied
+                // microphone, a recorder that would not start — and applies to
+                // whatever is happening. One that names an attempt applies only
+                // to that attempt: a held transfer reporting terminally after
+                // its source was replaced and a new submit began would
+                // otherwise have reset the *new* submission to submittable,
+                // because nothing tied the error to the attempt that raised it.
+                const attempt = errObj.attemptId ?? null;
+                const inFlight = state.submission?.activeId ?? null;
+                const errorIsCurrent =
+                    attempt === null || inFlight === null || attempt === inFlight;
+
                 const submissionFailed =
                     state.status === "submitting" &&
+                    errorIsCurrent &&
                     errObj.retryable === false &&
                     !errObj.uploadId;
 
@@ -188,8 +203,8 @@
                 // path.
                 const failedUploadIsCurrent =
                     Boolean(errObj.uploadId) &&
-                    ((state.submission?.activeId ?? null) === null ||
-                        errObj.uploadId === state.submission.activeId);
+                    errorIsCurrent &&
+                    (inFlight === null || errObj.uploadId === inFlight);
 
                 const deliveredThenFailed =
                     state.status === "submitting" &&
@@ -550,7 +565,12 @@
                 // the queue's own row id and would never match it.
                 const inFlight = state.submission?.activeId ?? null;
                 const queuedUpload = action.uploadId ?? null;
-                if (inFlight !== null && queuedUpload !== null && inFlight !== queuedUpload) {
+                // An unnamed result is refused too, when something else is in
+                // flight. Requiring the id to be non-null before comparing let
+                // an older queue result with no id mark the current submission
+                // queued — the same hole the id check was added to close, left
+                // open for exactly the callers least likely to be current.
+                if (inFlight !== null && inFlight !== queuedUpload) {
                     return state;
                 }
                 // The recording that was queued is the one that was in flight,

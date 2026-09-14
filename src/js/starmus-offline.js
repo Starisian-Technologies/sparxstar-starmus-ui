@@ -1918,14 +1918,30 @@ class OfflineQueue {
         }
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction([CONFIG.storeName], "readonly");
-            const req = tx.objectStore(CONFIG.storeName).count();
+            const req = tx.objectStore(CONFIG.storeName).openCursor();
             let total = 0;
+
             req.onsuccess = () => {
-                total = req.result;
+                const cursor = req.result;
+                if (!cursor) {
+                    return;
+                }
+                // A row the server already has is not something the platform is
+                // still waiting for. `transferred: true` rows are retained when
+                // the completion handling or the local delete failed *after*
+                // acceptance, so a bare `count()` reported an asset the platform
+                // holds as a recording it had not received — and the host's
+                // queue badge said so to the contributor.
+                if (cursor.value?.transferred !== true) {
+                    total += 1;
+                }
+                cursor.continue();
             };
+
             req.onerror = (ev) => reject(ev.target.error);
             tx.oncomplete = () => resolve(total);
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 

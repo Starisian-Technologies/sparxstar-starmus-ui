@@ -908,7 +908,13 @@ test("queueing a superseded upload does not mark the new source queued", () => {
     store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
     store.dispatch({ type: "starmus/file-attached", file: fakeFile });
 
-    store.dispatch({ type: "starmus/submit-queued", submissionId: "queued-1" });
+    // Carries the upload id, as core does: the queue result belongs to the
+    // upload that was in flight, whose source has since been replaced.
+    store.dispatch({
+        type: "starmus/submit-queued",
+        submissionId: "queued-1",
+        uploadId: "upload-1",
+    });
 
     const state = store.getState();
     assert.equal(state.status, "ready_to_submit", "the attachment can still be sent");
@@ -1405,4 +1411,55 @@ test("host configuration cannot reopen the duplicate-upload window", async () =>
         /merged\.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;/,
         "and an over-long watchdog is clamped to what the lease covers",
     );
+});
+
+test("a terminal failure from an older attempt does not reset the current one", () => {
+    // A held transfer reporting terminally after its source was replaced and a
+    // new submit began would otherwise reset the *new* submission to
+    // submittable, because nothing tied the error to the attempt that raised
+    // it. `uploadId` could not carry that: on this path the bytes never
+    // landed, and that field means they did.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-new" });
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull", retryable: false, attemptId: "upload-old" },
+    });
+    assert.equal(store.getState().status, "submitting", "the older attempt's failure is not ours");
+
+    // A general failure, naming no attempt, still applies.
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull", retryable: false, attemptId: "upload-new" },
+    });
+    assert.equal(store.getState().status, "ready_to_submit", "the current attempt's does");
+});
+
+test("an unnamed queue result cannot claim a submission that is in flight", () => {
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-current" });
+
+    store.dispatch({ type: "starmus/submit-queued", submissionId: "row-from-an-older-attempt" });
+    assert.equal(store.getState().status, "submitting", "no id, and something else is running");
+});
+
+test("HE-AAC named by media type is not rescued by a .aac filename", async () => {
+    // `audio/aacp` names HE-AAC on its own. With a `.aac` name the extension
+    // alternative fired and reported AAC-LC — the profile guard bypassed by the
+    // branch sitting beside it.
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+
+    assert.notEqual(resolveUploadFormat("audio/aacp", "take.aac"), "aac-lc");
+    assert.notEqual(resolveUploadFormat('audio/aacp; codecs="mp4a.40.5"', "take.aac"), "aac-lc");
+    assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc", "plain AAC still is");
+    assert.equal(resolveUploadFormat("", "take.aac"), "aac-lc", "and the extension alone still is");
 });

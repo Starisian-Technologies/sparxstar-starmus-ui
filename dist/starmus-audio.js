@@ -269,6 +269,23 @@
       }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2));
     }, _regeneratorDefine(e, r, n, t);
   }
+  function _regeneratorValues(e) {
+    if (null != e) {
+      var t = e["function" == typeof Symbol && Symbol.iterator || "@@iterator"],
+        r = 0;
+      if (t) return t.call(e);
+      if ("function" == typeof e.next) return e;
+      if (!isNaN(e.length)) return {
+        next: function () {
+          return e && r >= e.length && (e = void 0), {
+            value: e && e[r++],
+            done: !e
+          };
+        }
+      };
+    }
+    throw new TypeError(typeof e + " is not iterable");
+  }
   function _slicedToArray$1(r, e) {
     return _arrayWithHoles$1(r) || _iterableToArrayLimit$1(r, e) || _unsupportedIterableToArray$1(r, e) || _nonIterableRest$1();
   }
@@ -2926,6 +2943,23 @@
               // the payload cannot disagree. See `file-attached`
               // below for what leaving the other one set costs.
               file: null,
+              // And the draft that belonged to whatever was recorded
+              // or attached before. `handleSubmit()` copies
+              // `source.transcript` into the upload metadata, so a
+              // retake carried the *previous* take's words — the same
+              // mislabelling as `file-attached`, in the direction
+              // that fix did not cover.
+              transcript: "",
+              interimTranscript: "",
+              // The capture profile is deliberately NOT cleared here.
+              // `starmus/capture-profile` is dispatched when the
+              // microphone opens and `starmus/recording-available`
+              // when it stops, so clearing at stop would destroy the
+              // profile belonging to the recording that just ended —
+              // and an asset with no profile is the exact failure
+              // ADR-035 and the build check exist to prevent. A stale
+              // `import` profile cannot survive into a recording,
+              // because opening the microphone overwrites it first.
               fileName: action.payload.fileName,
               metadata: {
                 duration: state.recorder.duration || 0,
@@ -14227,8 +14261,21 @@
     var type = String(mimeType || "").trim().toLowerCase();
     var name = String(fileName || "").trim().toLowerCase();
     var ext = name.includes(".") ? name.split(".").pop() : "";
-    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || type.includes("audio/aac") || type.includes("aac") || type.includes("mp4a") || ext === "m4a" || ext === "mp4" || ext === "aac") {
+
+    // A codec, only when the codec is actually stated. `audio/aac`, an `.aac`
+    // file and an explicit `mp4a.40.2` codec parameter each name AAC; a bare
+    // `audio/mp4` or `.m4a` names a *container*, which may hold HE-AAC, ALAC or
+    // something else. Reporting `aac-lc` for those was a codec claim this
+    // client cannot establish — the same misdescription the `webm` case was
+    // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
+    if (type.includes("audio/aac") || type.includes("mp4a") || ext === "aac") {
       return "aac-lc";
+    }
+
+    // The container, named as itself, for the Node to identify the codec from
+    // the bytes — exactly as WAV, MP3 and WebM are handled below.
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || ext === "m4a" || ext === "mp4") {
+      return "mp4";
     }
     if (type.includes("audio/ogg") || type.includes("audio/opus") || type.includes("opus") || ext === "opus" || ext === "ogg") {
       return "opus";
@@ -14473,7 +14520,7 @@
      */
     maxTotalBytes: 20 * 1024 * 1024,
     /**
-     * How long one drain may claim a row before another may take it.
+     * How long a drain's claim on a row stays valid without renewal.
      *
      * `isProcessing` is an in-memory flag, so it says nothing about the tab
      * next door: two tabs read the same rows and both start uploading. Because
@@ -14483,14 +14530,21 @@
      * bandwidth on one recording, both fire `starmus:complete`, and both race
      * to delete the row.
      *
-     * The lease is generous because the alternative failure is worse: a lease
-     * that expires under a slow upload hands the row to another tab while the
-     * first is still sending. Ten minutes is longer than the stall watchdog
-     * (two minutes of no progress ends an attempt), so a live upload always
-     * outlives its own lease renewal window, and a tab that dies mid-upload
-     * blocks the row for at most this long.
+     * A fixed lease cannot be sized out of this problem, and an earlier version
+     * of this comment claimed otherwise. The recorder permits captures of
+     * `MAX_DURATION_SECONDS` (20 minutes), and the stall watchdog deliberately
+     * lets any *continuously progressing* upload run as long as it needs — so
+     * on the links this platform exists for, a legitimate transfer outlives any
+     * lease short enough to be useful when a tab dies.
+     *
+     * So the claim is **renewed while the transfer progresses** and carries an
+     * **owner token**: every mutation checks that this drain still owns the row
+     * before writing. A lease that lapses hands the row over cleanly; it never
+     * lets a late failure from the previous owner overwrite the new one's work.
      */
-    leaseMs: 10 * 60 * 1000
+    leaseMs: 2 * 60 * 1000,
+    /** Renew no more often than this, so progress does not hammer IndexedDB. */
+    leaseRenewMs: 30 * 1000
   };
 
   /** Tracks whether the singleton queue has installed its network listener. */
@@ -14903,26 +14957,83 @@
        * @param {string} reason
        * @returns {Promise<void>}
        */
+      /**
+       * Record that `starmus:complete` has been announced for this submission.
+       *
+       * Written before the event is emitted, so a crash between the two leaves
+       * the entry marked announced rather than able to announce again. A second
+       * boundary event for one upload starts downstream processing twice.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token The claim this drain holds.
+       * @returns {Promise<void>}
+       */
       )
     }, {
-      key: "_hold",
+      key: "_markCompletionEmitted",
       value: (function () {
-        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, reason) {
+        var _markCompletionEmitted2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, token) {
           var _this5 = this;
-          var transferred,
-            _args5 = arguments;
           return _regenerator().w(function (_context5) {
             while (1) switch (_context5.n) {
               case 0:
-                transferred = _args5.length > 2 && _args5[2] !== undefined ? _args5[2] : false;
                 if (this.db) {
                   _context5.n = 1;
                   break;
                 }
                 return _context5.a(2);
               case 1:
-                return _context5.a(2, new Promise(function (resolve, reject) {
+                return _context5.a(2, new Promise(function (resolve) {
                   var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (item && item.leaseOwner === token) {
+                      item.completionEmitted = true;
+                      store.put(item);
+                    }
+                  };
+                  req.onerror = function () {
+                    return resolve();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve();
+                  };
+                  tx.onerror = function () {
+                    return resolve();
+                  };
+                }));
+            }
+          }, _callee5, this);
+        }));
+        function _markCompletionEmitted(_x5, _x6) {
+          return _markCompletionEmitted2.apply(this, arguments);
+        }
+        return _markCompletionEmitted;
+      }())
+    }, {
+      key: "_hold",
+      value: function () {
+        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6(id, reason) {
+          var _this6 = this;
+          var transferred,
+            token,
+            _args6 = arguments;
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
+              case 0:
+                transferred = _args6.length > 2 && _args6[2] !== undefined ? _args6[2] : false;
+                token = _args6.length > 3 && _args6[3] !== undefined ? _args6[3] : null;
+                if (this.db) {
+                  _context6.n = 1;
+                  break;
+                }
+                return _context6.a(2);
+              case 1:
+                return _context6.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -14944,6 +15055,14 @@
                       if (transferred) {
                         item.transferred = true;
                       }
+                      // Holding ends this drain's interest in the row, so the
+                      // claim goes with it — otherwise a held entry stays
+                      // unclaimable until the lease lapses, for no purpose. Only
+                      // this drain's own claim is cleared.
+                      if (token !== null && item.leaseOwner === token) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
+                      }
                       store.put(item);
                     }
                   };
@@ -14953,7 +15072,7 @@
                       submissionId: id,
                       reason: reason
                     });
-                    _this5._notifyQueueUpdate();
+                    _this6._notifyQueueUpdate();
                     resolve();
                   };
                   tx.onerror = function (ev) {
@@ -14961,9 +15080,9 @@
                   };
                 }));
             }
-          }, _callee5, this);
+          }, _callee6, this);
         }));
-        function _hold(_x5, _x6) {
+        function _hold(_x7, _x8) {
           return _hold2.apply(this, arguments);
         }
         return _hold;
@@ -14976,20 +15095,19 @@
        *
        * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
        */
-      )
     }, {
       key: "usage",
       value: (function () {
-        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
-          var _this6 = this;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.n) {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
+          var _this7 = this;
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
               case 0:
                 if (this.db) {
-                  _context6.n = 1;
+                  _context7.n = 1;
                   break;
                 }
-                return _context6.a(2, {
+                return _context7.a(2, {
                   totalBytes: 0,
                   count: 0,
                   heldBytes: 0,
@@ -14997,8 +15115,8 @@
                   maxTotalBytes: CONFIG.maxTotalBytes
                 });
               case 1:
-                return _context6.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this6.db.transaction([CONFIG.storeName], "readonly");
+                return _context7.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readonly");
                   var store = tx.objectStore(CONFIG.storeName);
                   var totalBytes = 0;
                   var heldBytes = 0;
@@ -15037,7 +15155,7 @@
                   };
                 }));
             }
-          }, _callee6, this);
+          }, _callee7, this);
         }));
         function usage() {
           return _usage.apply(this, arguments);
@@ -15063,20 +15181,20 @@
     }, {
       key: "releaseHold",
       value: (function () {
-        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id) {
-          var _this7 = this;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.n) {
+        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id) {
+          var _this8 = this;
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
               case 0:
                 if (this.db) {
-                  _context7.n = 1;
+                  _context8.n = 1;
                   break;
                 }
-                return _context7.a(2);
+                return _context8.a(2);
               case 1:
-                _context7.n = 2;
+                _context8.n = 2;
                 return new Promise(function (resolve, reject) {
-                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
+                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   /** @type {Error|null} */
@@ -15113,7 +15231,7 @@
                     return reject(ev.target.error);
                   };
                   tx.oncomplete = function () {
-                    _this7._notifyQueueUpdate();
+                    _this8._notifyQueueUpdate();
                     resolve();
                   };
                   tx.onabort = function (ev) {
@@ -15126,11 +15244,11 @@
               case 2:
                 this._scheduleProcessQueue(0);
               case 3:
-                return _context7.a(2);
+                return _context8.a(2);
             }
-          }, _callee7, this);
+          }, _callee8, this);
         }));
-        function releaseHold(_x7) {
+        function releaseHold(_x9) {
           return _releaseHold.apply(this, arguments);
         }
         return releaseHold;
@@ -15152,11 +15270,11 @@
     }, {
       key: "discardHeld",
       value: (function () {
-        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8(id, reason) {
-          var _this8 = this;
+        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id, reason) {
+          var _this9 = this;
           var given, heldReason;
-          return _regenerator().w(function (_context8) {
-            while (1) switch (_context8.n) {
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
               case 0:
                 // Required, not merely recorded. This is the one deletion here that is
                 // not a successful upload, and the reason is what makes it a decision
@@ -15167,20 +15285,20 @@
                 // event that needs it.
                 given = typeof reason === "string" ? reason.trim() : "";
                 if (!(given === "")) {
-                  _context8.n = 1;
+                  _context9.n = 1;
                   break;
                 }
                 throw new Error("DiscardRefused: ".concat(id, " needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one."));
               case 1:
                 if (this.db) {
-                  _context8.n = 2;
+                  _context9.n = 2;
                   break;
                 }
-                return _context8.a(2);
+                return _context9.a(2);
               case 2:
-                _context8.n = 3;
+                _context9.n = 3;
                 return new Promise(function (resolve, reject) {
-                  var tx = _this8.db.transaction([CONFIG.storeName], "readwrite");
+                  var tx = _this9.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   /** @type {Error|null} */
@@ -15213,7 +15331,7 @@
                   };
                 });
               case 3:
-                heldReason = _context8.v;
+                heldReason = _context9.v;
                 // Reported after the delete commits, not before. An audit line for a
                 // deletion that then failed to happen is a different kind of wrong
                 // record from no line at all.
@@ -15225,11 +15343,11 @@
                 });
                 this._notifyQueueUpdate();
               case 4:
-                return _context8.a(2);
+                return _context9.a(2);
             }
-          }, _callee8, this);
+          }, _callee9, this);
         }));
-        function discardHeld(_x8, _x9) {
+        function discardHeld(_x0, _x1) {
           return _discardHeld.apply(this, arguments);
         }
         return discardHeld;
@@ -15254,19 +15372,19 @@
     }, {
       key: "getHeld",
       value: (function () {
-        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9() {
-          var _this9 = this;
-          return _regenerator().w(function (_context9) {
-            while (1) switch (_context9.n) {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
+          var _this0 = this;
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
               case 0:
                 if (this.db) {
-                  _context9.n = 1;
+                  _context0.n = 1;
                   break;
                 }
-                return _context9.a(2, []);
+                return _context0.a(2, []);
               case 1:
-                return _context9.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this9.db.transaction([CONFIG.storeName], "readonly");
+                return _context0.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this0.db.transaction([CONFIG.storeName], "readonly");
                   var store = tx.objectStore(CONFIG.storeName);
                   var held = [];
                   var req = store.openCursor();
@@ -15309,7 +15427,7 @@
                   };
                 }));
             }
-          }, _callee9, this);
+          }, _callee0, this);
         }));
         function getHeld() {
           return _getHeld.apply(this, arguments);
@@ -15328,19 +15446,19 @@
     }, {
       key: "_setMetadata",
       value: (function () {
-        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, metadata) {
-          var _this0 = this;
-          return _regenerator().w(function (_context0) {
-            while (1) switch (_context0.n) {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id, metadata) {
+          var _this1 = this;
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.n) {
               case 0:
                 if (this.db) {
-                  _context0.n = 1;
+                  _context1.n = 1;
                   break;
                 }
-                return _context0.a(2);
+                return _context1.a(2);
               case 1:
-                return _context0.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this0.db.transaction([CONFIG.storeName], "readwrite");
+                return _context1.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this1.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -15361,9 +15479,9 @@
                   };
                 }));
             }
-          }, _callee0, this);
+          }, _callee1, this);
         }));
-        function _setMetadata(_x0, _x1) {
+        function _setMetadata(_x10, _x11) {
           return _setMetadata2.apply(this, arguments);
         }
         return _setMetadata;
@@ -15372,42 +15490,55 @@
       /**
        * Claim a row for this drain, or report that someone else holds it.
        *
-       * One readwrite transaction, so two tabs cannot both see the row free.
+       * One readwrite transaction, so two tabs cannot both see the row free. The
+       * returned token identifies this claim: every later mutation presents it,
+       * and a mutation from a drain that no longer owns the row does nothing.
+       *
+       * `held` is re-checked here rather than trusted from the caller's snapshot,
+       * which was taken before this transaction and may be stale — another tab
+       * can put a row on hold in that gap, and claiming it anyway would upload a
+       * submission a person had explicitly stopped.
        *
        * @private
        * @param {string} id
-       * @returns {Promise<boolean>} True when this drain may upload the row.
+       * @returns {Promise<string|null>} An owner token, or null if not claimable.
        */
       )
     }, {
       key: "_claim",
       value: (function () {
-        var _claim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1(id) {
-          var _this1 = this;
-          return _regenerator().w(function (_context1) {
-            while (1) switch (_context1.n) {
+        var _claim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(id) {
+          var _this10 = this;
+          var token;
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.n) {
               case 0:
                 if (this.db) {
-                  _context1.n = 1;
+                  _context10.n = 1;
                   break;
                 }
-                return _context1.a(2, false);
+                return _context10.a(2, null);
               case 1:
-                return _context1.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this1.db.transaction([CONFIG.storeName], "readwrite");
+                token = createOfflineSubmissionId();
+                return _context10.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this10.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   var claimed = false;
                   req.onsuccess = function () {
                     var item = req.result;
                     if (!item) {
-                      // Gone since `getAll()` — another drain finished it.
+                      // Gone since the snapshot — another drain finished it.
+                      return;
+                    }
+                    if (item.held === true) {
                       return;
                     }
                     var now = Date.now();
                     if (typeof item.leaseUntil === "number" && item.leaseUntil > now) {
                       return;
                     }
+                    item.leaseOwner = token;
                     item.leaseUntil = now + CONFIG.leaseMs;
                     store.put(item);
                     claimed = true;
@@ -15416,56 +15547,125 @@
                     return reject(ev.target.error);
                   };
                   tx.oncomplete = function () {
-                    return resolve(claimed);
+                    return resolve(claimed ? token : null);
                   };
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
                 }));
             }
-          }, _callee1, this);
+          }, _callee10, this);
         }));
-        function _claim(_x10) {
+        function _claim(_x12) {
           return _claim2.apply(this, arguments);
         }
         return _claim;
       }()
       /**
-       * Give up a claim, so the row is retryable before the lease would expire.
+       * Extend a claim this drain still owns.
+       *
+       * Called as the transfer reports progress. A transfer that is moving keeps
+       * its row; one that has stopped moving lets the lease lapse, and another
+       * tab — or this one, later — can pick it up.
        *
        * @private
        * @param {string} id
+       * @param {string} token
+       * @returns {Promise<boolean>} False when the claim has been lost.
+       */
+      )
+    }, {
+      key: "_renewClaim",
+      value: (function () {
+        var _renewClaim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11(id, token) {
+          var _this11 = this;
+          return _regenerator().w(function (_context11) {
+            while (1) switch (_context11.n) {
+              case 0:
+                if (this.db) {
+                  _context11.n = 1;
+                  break;
+                }
+                return _context11.a(2, false);
+              case 1:
+                return _context11.a(2, new Promise(function (resolve) {
+                  var tx = _this11.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  var renewed = false;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!item || item.leaseOwner !== token) {
+                      return;
+                    }
+                    item.leaseUntil = Date.now() + CONFIG.leaseMs;
+                    store.put(item);
+                    renewed = true;
+                  };
+
+                  // A renewal that cannot be written is not worth failing a transfer
+                  // over; the lease lapsing is the already-handled case.
+                  req.onerror = function () {
+                    return resolve(false);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(renewed);
+                  };
+                  tx.onerror = function () {
+                    return resolve(false);
+                  };
+                }));
+            }
+          }, _callee11, this);
+        }));
+        function _renewClaim(_x13, _x14) {
+          return _renewClaim2.apply(this, arguments);
+        }
+        return _renewClaim;
+      }()
+      /**
+       * Give up a claim, so the row is retryable before the lease would lapse.
+       *
+       * Only if this drain still owns it. Clearing unconditionally meant that a
+       * drain whose lease had already lapsed — and whose row another tab had
+       * since claimed — could release the *new* owner's claim on its way out,
+       * and then overwrite the state of an upload that was actively running.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token
        * @returns {Promise<void>}
        */
       )
     }, {
       key: "_releaseClaim",
       value: (function () {
-        var _releaseClaim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(id) {
-          var _this10 = this;
-          return _regenerator().w(function (_context10) {
-            while (1) switch (_context10.n) {
+        var _releaseClaim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12(id, token) {
+          var _this12 = this;
+          return _regenerator().w(function (_context12) {
+            while (1) switch (_context12.n) {
               case 0:
                 if (this.db) {
-                  _context10.n = 1;
+                  _context12.n = 1;
                   break;
                 }
-                return _context10.a(2);
+                return _context12.a(2);
               case 1:
-                return _context10.a(2, new Promise(function (resolve) {
-                  var tx = _this10.db.transaction([CONFIG.storeName], "readwrite");
+                return _context12.a(2, new Promise(function (resolve) {
+                  var tx = _this12.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
                     var item = req.result;
-                    if (item) {
+                    if (item && item.leaseOwner === token) {
+                      item.leaseOwner = null;
                       item.leaseUntil = null;
                       store.put(item);
                     }
                   };
 
                   // A claim that cannot be released is not an error worth failing a
-                  // drain over: the lease expires on its own.
+                  // drain over: the lease lapses on its own.
                   req.onerror = function () {
                     return resolve();
                   };
@@ -15477,9 +15677,9 @@
                   };
                 }));
             }
-          }, _callee10, this);
+          }, _callee12, this);
         }));
-        function _releaseClaim(_x11) {
+        function _releaseClaim(_x15, _x16) {
           return _releaseClaim2.apply(this, arguments);
         }
         return _releaseClaim;
@@ -15487,19 +15687,22 @@
     }, {
       key: "_updateRetry",
       value: function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11(id, retryCount, error) {
-          var _this11 = this;
-          return _regenerator().w(function (_context11) {
-            while (1) switch (_context11.n) {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13(id, retryCount, error) {
+          var _this13 = this;
+          var token,
+            _args13 = arguments;
+          return _regenerator().w(function (_context13) {
+            while (1) switch (_context13.n) {
               case 0:
+                token = _args13.length > 3 && _args13[3] !== undefined ? _args13[3] : null;
                 if (this.db) {
-                  _context11.n = 1;
+                  _context13.n = 1;
                   break;
                 }
-                return _context11.a(2);
+                return _context13.a(2);
               case 1:
-                return _context11.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this11.db.transaction([CONFIG.storeName], "readwrite");
+                return _context13.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this13.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
@@ -15508,6 +15711,15 @@
                       item.retryCount = retryCount;
                       item.lastAttempt = Date.now();
                       item.error = error || null;
+                      // The backoff state and the claim release are one write.
+                      // Releasing first left a window in which the row was
+                      // claimable while still carrying the *previous* attempt's
+                      // retryCount and lastAttempt — so another tab could take it
+                      // immediately, with no backoff, and race this update.
+                      if (token !== null && item.leaseOwner === token) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
+                      }
                       store.put(item);
                     }
                   };
@@ -15519,9 +15731,9 @@
                   };
                 }));
             }
-          }, _callee11, this);
+          }, _callee13, this);
         }));
-        function _updateRetry(_x12, _x13, _x14) {
+        function _updateRetry(_x17, _x18, _x19) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -15535,325 +15747,388 @@
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12() {
-          var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, detail, msg, delay, _metadata6, backfilled, _msg, _metadata7, _metadata$durationMs2, _metadata8, _metadata9, _metadata0, result, _detail, _metadata1, _metadata10, _msg2, _msg3, nonRetryable, nextRetryCount, _msg4, nextDelay, _t, _t2, _t3, _t4, _t5, _t6, _t7;
-          return _regenerator().w(function (_context12) {
-            while (1) switch (_context12.p = _context12.n) {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
+          var _sparxstarIntegration,
+            _this14 = this;
+          var pending, _iterator, _step, _loop, _ret, nextDelay, _t5, _t6, _t7;
+          return _regenerator().w(function (_context15) {
+            while (1) switch (_context15.p = _context15.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context12.n = 1;
+                  _context15.n = 1;
                   break;
                 }
-                return _context12.a(2);
+                return _context15.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                _context12.n = 2;
+                _context15.n = 2;
                 return this.getAll();
               case 2:
-                pending = _context12.v;
+                pending = _context15.v;
                 if (!(pending.length === 0)) {
-                  _context12.n = 3;
+                  _context15.n = 3;
                   break;
                 }
-                return _context12.a(2);
+                return _context15.a(2);
               case 3:
                 if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context12.n = 4;
+                  _context15.n = 4;
                   break;
                 }
-                return _context12.a(2);
+                return _context15.a(2);
               case 4:
                 this.isProcessing = true;
-                _context12.p = 5;
+                _context15.p = 5;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator = _createForOfIteratorHelper$1(pending);
-                _context12.p = 6;
+                _context15.p = 6;
+                _loop = /*#__PURE__*/_regenerator().m(function _loop() {
+                  var item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileToken, detail, msg, delay, claimToken, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, result, _detail, _metadata11, _metadata12, _msg2, _msg3, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
+                  return _regenerator().w(function (_context14) {
+                    while (1) switch (_context14.p = _context14.n) {
+                      case 0:
+                        item = _step.value;
+                        id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
+                        // able to replace it wholesale for a row that has no metadata
+                        // object at all.
+                        metadata = item.metadata; // Whether the bytes reached the server on this attempt.
+                        uploaded = false;
+                        if (!item.held) {
+                          _context14.n = 1;
+                          break;
+                        }
+                        return _context14.a(2, 0);
+                      case 1:
+                        if (!(item.transferred === true)) {
+                          _context14.n = 10;
+                          break;
+                        }
+                        _context14.n = 2;
+                        return _this14._claim(id);
+                      case 2:
+                        reconcileToken = _context14.v;
+                        if (reconcileToken) {
+                          _context14.n = 3;
+                          break;
+                        }
+                        return _context14.a(2, 0);
+                      case 3:
+                        // The server already has these bytes; what failed was
+                        // afterwards. Uploading again would hand the platform a
+                        // second copy of a recording it accepted — and it could not
+                        // even resume the first, because `removeFingerprintOnSuccess`
+                        // deleted the resume fingerprint when the transfer
+                        // completed. So this entry is finished rather than resent:
+                        // the completion event that never fired is emitted now, and
+                        // the entry goes.
+                        //
+                        // Reached only after a release, since holding is what put
+                        // the flag here. Before this existed, releasing such an
+                        // entry duplicated the recording.
+                        detail = buildCompletionDetail({
+                          instanceId: instanceId,
+                          result: {
+                            success: true,
+                            uploadId: (_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId
+                          },
+                          metadata: metadata,
+                          formFields: formFields,
+                          fileName: fileName,
+                          mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || audioBlob.type || "",
+                          durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                          language: ((_metadata4 = metadata) === null || _metadata4 === void 0 ? void 0 : _metadata4.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
+                          contributorId: ((_metadata5 = metadata) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.env) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.identifiers) === null || _metadata5 === void 0 ? void 0 : _metadata5.visitorId) || "",
+                          calibrationApplied: !!((_metadata6 = metadata) !== null && _metadata6 !== void 0 && _metadata6.calibration)
+                        }); // Emitted once per upload, ever. The flag is written
+                        // before the event so that a failure between the two leaves
+                        // the entry marked as announced: re-emitting `starmus:complete`
+                        // for an asset the server already has would start downstream
+                        // processing a second time.
+                        if (!(item.completionEmitted !== true)) {
+                          _context14.n = 5;
+                          break;
+                        }
+                        _context14.n = 4;
+                        return _this14._markCompletionEmitted(id, reconcileToken);
+                      case 4:
+                        emitCompletionEvent(detail);
+                        _context14.n = 6;
+                        break;
+                      case 5:
+                      case 6:
+                        _context14.p = 6;
+                        _context14.n = 7;
+                        return _this14.remove(id);
+                      case 7:
+                        _context14.n = 9;
+                        break;
+                      case 8:
+                        _context14.p = 8;
+                        _t = _context14.v;
+                        msg = _t && _t.message ? _t.message : String(_t);
+                        _context14.n = 9;
+                        return _this14._hold(id, "Reconciled; local cleanup failed: ".concat(msg), true);
+                      case 9:
+                        return _context14.a(2, 0);
+                      case 10:
+                        if (!(retryCount >= CONFIG.maxRetries)) {
+                          _context14.n = 12;
+                          break;
+                        }
+                        _context14.n = 11;
+                        return _this14._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
+                      case 11:
+                        return _context14.a(2, 0);
+                      case 12:
+                        if (!(item.lastAttempt !== null)) {
+                          _context14.n = 13;
+                          break;
+                        }
+                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
+                        if (!(Date.now() - item.lastAttempt < delay)) {
+                          _context14.n = 13;
+                          break;
+                        }
+                        return _context14.a(2, 0);
+                      case 13:
+                        _context14.n = 14;
+                        return _this14._claim(id);
+                      case 14:
+                        claimToken = _context14.v;
+                        if (claimToken) {
+                          _context14.n = 15;
+                          break;
+                        }
+                        return _context14.a(2, 0);
+                      case 15:
+                        _context14.p = 15;
+                        if (isUploadId((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId)) {
+                          _context14.n = 17;
+                          break;
+                        }
+                        backfilled = createUploadId(); // The local variable is replaced, not just the stored
+                        // row. Guarding this on `metadata` being truthy left a
+                        // row with no metadata at all still passing `undefined`
+                        // into this first attempt, which then minted a
+                        // *different* id — so the next drain, reading the
+                        // persisted one, could not resume the partial that
+                        // first attempt had left on the server.
+                        metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
+                          uploadId: backfilled
+                        });
+                        _context14.n = 16;
+                        return _this14._setMetadata(id, metadata);
+                      case 16:
+                      case 17:
+                        _context14.n = 20;
+                        break;
+                      case 18:
+                        _context14.p = 18;
+                        _t2 = _context14.v;
+                        // `createUploadId()` throws where there is no secure
+                        // randomness. Unguarded, that threw out of the whole loop:
+                        // the drain stopped, every later entry went untried, and
+                        // the `finally` below rescheduled with this item's retry
+                        // state untouched — so the next delay was zero and the
+                        // queue span the same failure for as long as the page
+                        // lived. One unusable row must cost one row.
+                        _msg = _t2 && _t2.message ? _t2.message : String(_t2);
+                        console.error("[Offline] Could not assign an upload id:", id, _msg);
+                        _context14.n = 19;
+                        return _this14._hold(id, "No upload identifier could be assigned: ".concat(_msg), false, claimToken);
+                      case 19:
+                        return _context14.a(2, 0);
+                      case 20:
+                        _context14.p = 20;
+                        // The claim is renewed as bytes move, not sized to outlast
+                        // the upload. A capture may run to MAX_DURATION_SECONDS and
+                        // a progressing transfer is deliberately unbounded, so no
+                        // fixed lease is both long enough for a real upload and
+                        // short enough to free a row from a tab that died.
+                        lastRenewal = Date.now();
+                        _context14.n = 21;
+                        return uploadWithPriority({
+                          blob: audioBlob,
+                          fileName: fileName,
+                          formFields: formFields,
+                          metadata: metadata,
+                          instanceId: instanceId,
+                          onProgress: function onProgress() {
+                            var now = Date.now();
+                            if (now - lastRenewal < CONFIG.leaseRenewMs) {
+                              return;
+                            }
+                            lastRenewal = now;
+                            void _this14._renewClaim(id, claimToken);
+                          }
+                        });
+                      case 21:
+                        result = _context14.v;
+                        // Set here, the moment the bytes are known to have landed —
+                        // not at the end of the block. Setting it last made the
+                        // `if (uploaded)` guard below unreachable: everything that
+                        // can throw between here and there threw first, so the
+                        // protection against re-uploading an accepted asset did
+                        // nothing at all.
+                        uploaded = true;
+
+                        // `starmus:complete` is the boundary before any
+                        // server-side processing (ADR-034). A queued upload that
+                        // drains is as complete as an immediate one, so it fires
+                        // here too — and it fires before `remove()`, because
+                        // removal destroys the metadata the event is built from.
+                        _detail = buildCompletionDetail({
+                          instanceId: instanceId,
+                          result: result,
+                          metadata: metadata,
+                          formFields: formFields,
+                          fileName: fileName,
+                          mimeType: ((_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.mimeType) || audioBlob.type || "",
+                          durationMs: (_metadata$durationMs2 = (_metadata9 = metadata) === null || _metadata9 === void 0 ? void 0 : _metadata9.durationMs) !== null && _metadata$durationMs2 !== void 0 ? _metadata$durationMs2 : 0,
+                          language: ((_metadata0 = metadata) === null || _metadata0 === void 0 ? void 0 : _metadata0.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
+                          contributorId: ((_metadata1 = metadata) === null || _metadata1 === void 0 || (_metadata1 = _metadata1.env) === null || _metadata1 === void 0 || (_metadata1 = _metadata1.identifiers) === null || _metadata1 === void 0 ? void 0 : _metadata1.visitorId) || "",
+                          calibrationApplied: !!((_metadata10 = metadata) !== null && _metadata10 !== void 0 && _metadata10.calibration)
+                        }); // Always emitted. A format this client cannot name is
+                        // reported as `unknown` rather than suppressing the event:
+                        // `starmus:complete` is the boundary before any server-side
+                        // processing (ADR-034), and withholding it left the asset on
+                        // the server with nobody told it existed, recoverable only
+                        // by a person noticing a held entry. The Node rules on the
+                        // format, where refusing does not cost the recording.
+                        // Marked before it fires, so a failure between the two
+                        // cannot produce a second boundary event for one upload
+                        // when the entry is later released and reconciled.
+                        _context14.n = 22;
+                        return _this14._markCompletionEmitted(id, claimToken);
+                      case 22:
+                        emitCompletionEvent(_detail);
+                        if (_detail.format === "unknown") {
+                          sparxstarIntegration.reportError("upload_format_unnamed", {
+                            submissionId: id,
+                            instanceId: instanceId,
+                            fileName: fileName,
+                            mimeType: ((_metadata11 = metadata) === null || _metadata11 === void 0 ? void 0 : _metadata11.mimeType) || audioBlob.type || "",
+                            captureProfile: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.captureProfile) || null
+                          });
+                        }
+                        _context14.n = 29;
+                        break;
+                      case 23:
+                        _context14.p = 23;
+                        _t3 = _context14.v;
+                        if (!uploaded) {
+                          _context14.n = 25;
+                          break;
+                        }
+                        // Reaching here after a successful transfer means the
+                        // completion handling threw, not the upload. Re-queuing
+                        // or retrying would send an asset the server already
+                        // has. Hold it instead, so a person can see it and the
+                        // next drain does not upload it again.
+                        _msg2 = _t3 && _t3.message ? _t3.message : String(_t3);
+                        console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
+                        _context14.n = 24;
+                        return _this14._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
+                      case 24:
+                        return _context14.a(2, 0);
+                      case 25:
+                        _msg3 = _t3 && _t3.message ? _t3.message : String(_t3); // The claim is dropped by the same write that records the
+                        // outcome, below — never before it. A separate release
+                        // first made the row claimable while it still carried the
+                        // previous attempt's backoff state.
+                        nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(_msg3);
+                        if (!nonRetryable) {
+                          _context14.n = 27;
+                          break;
+                        }
+                        _context14.n = 26;
+                        return _this14._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
+                      case 26:
+                        _context14.n = 28;
+                        break;
+                      case 27:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context14.n = 28;
+                        return _this14._updateRetry(id, nextRetryCount, _msg3, claimToken);
+                      case 28:
+                        return _context14.a(2, 0);
+                      case 29:
+                        _context14.p = 29;
+                        _context14.n = 30;
+                        return _this14.remove(id);
+                      case 30:
+                        _context14.n = 32;
+                        break;
+                      case 31:
+                        _context14.p = 31;
+                        _t4 = _context14.v;
+                        _msg4 = _t4 && _t4.message ? _t4.message : String(_t4);
+                        console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
+                        _context14.n = 32;
+                        return _this14._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
+                      case 32:
+                        return _context14.a(2);
+                    }
+                  }, _loop, null, [[29, 31], [20, 23], [15, 18], [6, 8]]);
+                });
                 _iterator.s();
               case 7:
                 if ((_step = _iterator.n()).done) {
-                  _context12.n = 36;
+                  _context15.n = 10;
                   break;
                 }
-                item = _step.value;
-                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, retryCount = item.retryCount, instanceId = item.instanceId; // Not destructured as a `const`: the backfill below has to be
-                // able to replace it wholesale for a row that has no metadata
-                // object at all.
-                metadata = item.metadata; // Whether the bytes reached the server on this attempt.
-                uploaded = false;
-                if (!item.held) {
-                  _context12.n = 8;
-                  break;
-                }
-                return _context12.a(3, 35);
+                return _context15.d(_regeneratorValues(_loop()), 8);
               case 8:
-                if (!(item.transferred === true)) {
-                  _context12.n = 13;
+                _ret = _context15.v;
+                if (!(_ret === 0)) {
+                  _context15.n = 9;
                   break;
                 }
-                // The server already has these bytes; what failed was
-                // afterwards. Uploading again would hand the platform a
-                // second copy of a recording it accepted — and it could not
-                // even resume the first, because `removeFingerprintOnSuccess`
-                // deleted the resume fingerprint when the transfer
-                // completed. So this entry is finished rather than resent:
-                // the completion event that never fired is emitted now, and
-                // the entry goes.
-                //
-                // Reached only after a release, since holding is what put
-                // the flag here. Before this existed, releasing such an
-                // entry duplicated the recording.
-                detail = buildCompletionDetail({
-                  instanceId: instanceId,
-                  result: {
-                    success: true,
-                    uploadId: (_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId
-                  },
-                  metadata: metadata,
-                  formFields: formFields,
-                  fileName: fileName,
-                  mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || audioBlob.type || "",
-                  durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
-                  language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
-                  contributorId: ((_metadata4 = metadata) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.env) === null || _metadata4 === void 0 || (_metadata4 = _metadata4.identifiers) === null || _metadata4 === void 0 ? void 0 : _metadata4.visitorId) || "",
-                  calibrationApplied: !!((_metadata5 = metadata) !== null && _metadata5 !== void 0 && _metadata5.calibration)
-                });
-                emitCompletionEvent(detail);
-                _context12.p = 9;
-                _context12.n = 10;
-                return this.remove(id);
+                return _context15.a(3, 9);
+              case 9:
+                _context15.n = 7;
+                break;
               case 10:
-                _context12.n = 12;
+                _context15.n = 12;
                 break;
               case 11:
-                _context12.p = 11;
-                _t = _context12.v;
-                msg = _t && _t.message ? _t.message : String(_t);
-                _context12.n = 12;
-                return this._hold(id, "Reconciled; local cleanup failed: ".concat(msg), true);
-              case 12:
-                return _context12.a(3, 35);
-              case 13:
-                if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context12.n = 15;
-                  break;
-                }
-                _context12.n = 14;
-                return this._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
-              case 14:
-                return _context12.a(3, 35);
-              case 15:
-                if (!(item.lastAttempt !== null)) {
-                  _context12.n = 16;
-                  break;
-                }
-                delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
-                if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context12.n = 16;
-                  break;
-                }
-                return _context12.a(3, 35);
-              case 16:
-                _context12.p = 16;
-                if (isUploadId((_metadata6 = metadata) === null || _metadata6 === void 0 ? void 0 : _metadata6.uploadId)) {
-                  _context12.n = 18;
-                  break;
-                }
-                backfilled = createUploadId(); // The local variable is replaced, not just the stored
-                // row. Guarding this on `metadata` being truthy left a
-                // row with no metadata at all still passing `undefined`
-                // into this first attempt, which then minted a
-                // *different* id — so the next drain, reading the
-                // persisted one, could not resume the partial that
-                // first attempt had left on the server.
-                metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
-                  uploadId: backfilled
-                });
-                _context12.n = 17;
-                return this._setMetadata(id, metadata);
-              case 17:
-              case 18:
-                _context12.n = 21;
-                break;
-              case 19:
-                _context12.p = 19;
-                _t2 = _context12.v;
-                // `createUploadId()` throws where there is no secure
-                // randomness. Unguarded, that threw out of the whole loop:
-                // the drain stopped, every later entry went untried, and
-                // the `finally` below rescheduled with this item's retry
-                // state untouched — so the next delay was zero and the
-                // queue span the same failure for as long as the page
-                // lived. One unusable row must cost one row.
-                _msg = _t2 && _t2.message ? _t2.message : String(_t2);
-                console.error("[Offline] Could not assign an upload id:", id, _msg);
-                _context12.n = 20;
-                return this._hold(id, "No upload identifier could be assigned: ".concat(_msg));
-              case 20:
-                return _context12.a(3, 35);
-              case 21:
-                _context12.n = 22;
-                return this._claim(id);
-              case 22:
-                if (_context12.v) {
-                  _context12.n = 23;
-                  break;
-                }
-                return _context12.a(3, 35);
-              case 23:
-                _context12.p = 23;
-                _context12.n = 24;
-                return uploadWithPriority({
-                  blob: audioBlob,
-                  fileName: fileName,
-                  formFields: formFields,
-                  metadata: metadata,
-                  instanceId: instanceId
-                });
-              case 24:
-                result = _context12.v;
-                // Set here, the moment the bytes are known to have landed —
-                // not at the end of the block. Setting it last made the
-                // `if (uploaded)` guard below unreachable: everything that
-                // can throw between here and there threw first, so the
-                // protection against re-uploading an accepted asset did
-                // nothing at all.
-                uploaded = true;
-
-                // `starmus:complete` is the boundary before any
-                // server-side processing (ADR-034). A queued upload that
-                // drains is as complete as an immediate one, so it fires
-                // here too — and it fires before `remove()`, because
-                // removal destroys the metadata the event is built from.
-                _detail = buildCompletionDetail({
-                  instanceId: instanceId,
-                  result: result,
-                  metadata: metadata,
-                  formFields: formFields,
-                  fileName: fileName,
-                  mimeType: ((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.mimeType) || audioBlob.type || "",
-                  durationMs: (_metadata$durationMs2 = (_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.durationMs) !== null && _metadata$durationMs2 !== void 0 ? _metadata$durationMs2 : 0,
-                  language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
-                  contributorId: ((_metadata9 = metadata) === null || _metadata9 === void 0 || (_metadata9 = _metadata9.env) === null || _metadata9 === void 0 || (_metadata9 = _metadata9.identifiers) === null || _metadata9 === void 0 ? void 0 : _metadata9.visitorId) || "",
-                  calibrationApplied: !!((_metadata0 = metadata) !== null && _metadata0 !== void 0 && _metadata0.calibration)
-                }); // Always emitted. A format this client cannot name is
-                // reported as `unknown` rather than suppressing the event:
-                // `starmus:complete` is the boundary before any server-side
-                // processing (ADR-034), and withholding it left the asset on
-                // the server with nobody told it existed, recoverable only
-                // by a person noticing a held entry. The Node rules on the
-                // format, where refusing does not cost the recording.
-                emitCompletionEvent(_detail);
-                if (_detail.format === "unknown") {
-                  sparxstarIntegration.reportError("upload_format_unnamed", {
-                    submissionId: id,
-                    instanceId: instanceId,
-                    fileName: fileName,
-                    mimeType: ((_metadata1 = metadata) === null || _metadata1 === void 0 ? void 0 : _metadata1.mimeType) || audioBlob.type || "",
-                    captureProfile: ((_metadata10 = metadata) === null || _metadata10 === void 0 ? void 0 : _metadata10.captureProfile) || null
-                  });
-                }
-                _context12.n = 32;
-                break;
-              case 25:
-                _context12.p = 25;
-                _t3 = _context12.v;
-                if (!uploaded) {
-                  _context12.n = 27;
-                  break;
-                }
-                // Reaching here after a successful transfer means the
-                // completion handling threw, not the upload. Re-queuing
-                // or retrying would send an asset the server already
-                // has. Hold it instead, so a person can see it and the
-                // next drain does not upload it again.
-                _msg2 = _t3 && _t3.message ? _t3.message : String(_t3);
-                console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
-                _context12.n = 26;
-                return this._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true);
-              case 26:
-                return _context12.a(3, 35);
-              case 27:
-                _msg3 = _t3 && _t3.message ? _t3.message : String(_t3); // The row stays, so the claim must not: otherwise a failed
-                // attempt locks its own recording out of the next drain for
-                // the whole lease.
-                _context12.n = 28;
-                return this._releaseClaim(id);
-              case 28:
-                nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(_msg3);
-                if (!nonRetryable) {
-                  _context12.n = 30;
-                  break;
-                }
-                _context12.n = 29;
-                return this._hold(id, "Upload rejected and not retryable: ".concat(_msg3));
-              case 29:
-                _context12.n = 31;
-                break;
-              case 30:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context12.n = 31;
-                return this._updateRetry(id, nextRetryCount, _msg3);
-              case 31:
-                return _context12.a(3, 35);
-              case 32:
-                _context12.p = 32;
-                _context12.n = 33;
-                return this.remove(id);
-              case 33:
-                _context12.n = 35;
-                break;
-              case 34:
-                _context12.p = 34;
-                _t4 = _context12.v;
-                _msg4 = _t4 && _t4.message ? _t4.message : String(_t4);
-                console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
-                _context12.n = 35;
-                return this._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true);
-              case 35:
-                _context12.n = 7;
-                break;
-              case 36:
-                _context12.n = 38;
-                break;
-              case 37:
-                _context12.p = 37;
-                _t5 = _context12.v;
+                _context15.p = 11;
+                _t5 = _context15.v;
                 _iterator.e(_t5);
-              case 38:
-                _context12.p = 38;
+              case 12:
+                _context15.p = 12;
                 _iterator.f();
-                return _context12.f(38);
-              case 39:
-                _context12.n = 41;
+                return _context15.f(12);
+              case 13:
+                _context15.n = 15;
                 break;
-              case 40:
-                _context12.p = 40;
-                _t6 = _context12.v;
+              case 14:
+                _context15.p = 14;
+                _t6 = _context15.v;
                 console.error("[Offline] Queue fatal:", _t6);
-              case 41:
-                _context12.p = 41;
+              case 15:
+                _context15.p = 15;
                 this.isProcessing = false;
-                _context12.p = 42;
-                _context12.n = 43;
+                _context15.p = 16;
+                _context15.n = 17;
                 return this._getNextProcessDelay();
-              case 43:
-                nextDelay = _context12.v;
+              case 17:
+                nextDelay = _context15.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context12.n = 45;
+                _context15.n = 19;
                 break;
-              case 44:
-                _context12.p = 44;
-                _t7 = _context12.v;
+              case 18:
+                _context15.p = 18;
+                _t7 = _context15.v;
                 console.error("[Offline] Failed to schedule next queue processing:", _t7);
-              case 45:
-                return _context12.f(41);
-              case 46:
-                return _context12.a(2);
+              case 19:
+                return _context15.f(15);
+              case 20:
+                return _context15.a(2);
             }
-          }, _callee12, this, [[42, 44], [32, 34], [23, 25], [16, 19], [9, 11], [6, 37, 38, 39], [5, 40, 41, 46]]);
+          }, _callee14, this, [[16, 18], [6, 11, 12, 13], [5, 14, 15, 20]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -15869,13 +16144,13 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this12 = this;
+        var _this15 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this12._scheduleProcessQueue(0);
+          _this15._scheduleProcessQueue(0);
         });
         this._setupBatteryListeners();
 
@@ -15888,7 +16163,7 @@
     }, {
       key: "_setupBatteryListeners",
       value: function _setupBatteryListeners() {
-        var _this13 = this;
+        var _this16 = this;
         if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
           return;
         }
@@ -15897,7 +16172,7 @@
           var handleBatteryChange = function handleBatteryChange() {
             var _sparxstarIntegration2;
             if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
-              _this13._scheduleProcessQueue(0);
+              _this16._scheduleProcessQueue(0);
             }
           };
           battery.addEventListener("levelchange", handleBatteryChange);
@@ -15918,7 +16193,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this14 = this;
+        var _this17 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -15930,48 +16205,60 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this14.processQueueTimeoutId = null;
-          _this14.processQueueDueAt = null;
-          void _this14.processQueue();
+          _this17.processQueueTimeoutId = null;
+          _this17.processQueueDueAt = null;
+          void _this17.processQueue();
         }, safeDelay);
       }
       /** @private */
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13() {
-          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t8;
-          return _regenerator().w(function (_context13) {
-            while (1) switch (_context13.p = _context13.n) {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
+          var now, pending, nextDelay, _iterator2, _step2, item, retryDelay, remainingDelay, _t8;
+          return _regenerator().w(function (_context16) {
+            while (1) switch (_context16.p = _context16.n) {
               case 0:
-                _context13.n = 1;
+                // Held entries are excluded. `_hold()` leaves `retryCount` at the
+                // limit, and the branch below returns 0 for anything at the limit — so
+                // a single held recording made the queue reschedule itself immediately,
+                // forever, waking the device to look at an item it will never retry.
+                // On a phone with a failing upload and a low battery that is the worst
+                // possible loop to leave running.
+                now = Date.now();
+                _context16.n = 1;
                 return this.getAll();
               case 1:
-                pending = _context13.v.filter(function (item) {
-                  return item.held !== true;
+                pending = _context16.v.filter(function (item) {
+                  return item.held !== true &&
+                  // Leased elsewhere. Including these meant a tab that had just
+                  // failed to claim a row still read its untouched retryCount and
+                  // lastAttempt, computed a zero delay, and rescheduled
+                  // immediately — a tight drain loop for as long as the other tab
+                  // held the lease. Held entries caused the same spin before.
+                  !(typeof item.leaseUntil === "number" && item.leaseUntil > now);
                 });
                 if (!(pending.length === 0)) {
-                  _context13.n = 2;
+                  _context16.n = 2;
                   break;
                 }
-                return _context13.a(2, null);
+                return _context16.a(2, null);
               case 2:
                 nextDelay = null;
-                now = Date.now();
                 _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context13.p = 3;
+                _context16.p = 3;
                 _iterator2.s();
               case 4:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context13.n = 7;
+                  _context16.n = 7;
                   break;
                 }
                 item = _step2.value;
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context13.n = 5;
+                  _context16.n = 5;
                   break;
                 }
-                return _context13.a(2, 0);
+                return _context16.a(2, 0);
               case 5:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -15979,23 +16266,23 @@
                   nextDelay = remainingDelay;
                 }
               case 6:
-                _context13.n = 4;
+                _context16.n = 4;
                 break;
               case 7:
-                _context13.n = 9;
+                _context16.n = 9;
                 break;
               case 8:
-                _context13.p = 8;
-                _t8 = _context13.v;
+                _context16.p = 8;
+                _t8 = _context16.v;
                 _iterator2.e(_t8);
               case 9:
-                _context13.p = 9;
+                _context16.p = 9;
                 _iterator2.f();
-                return _context13.f(9);
+                return _context16.f(9);
               case 10:
-                return _context13.a(2, nextDelay);
+                return _context16.a(2, nextDelay);
             }
-          }, _callee13, this, [[3, 8, 9, 10]]);
+          }, _callee15, this, [[3, 8, 9, 10]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -16093,26 +16380,26 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14() {
-      return _regenerator().w(function (_context14) {
-        while (1) switch (_context14.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+      return _regenerator().w(function (_context17) {
+        while (1) switch (_context17.n) {
           case 0:
             if (offlineQueue.db) {
-              _context14.n = 2;
+              _context17.n = 2;
               break;
             }
-            _context14.n = 1;
+            _context17.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context14.a(2, offlineQueue);
+            return _context17.a(2, offlineQueue);
         }
-      }, _callee14);
+      }, _callee16);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x15, _x16, _x17, _x18, _x19) {
+  function queueSubmission(_x20, _x21, _x22, _x23, _x24) {
     return _queueSubmission.apply(this, arguments);
   }
 
@@ -16125,18 +16412,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context15) {
-        while (1) switch (_context15.n) {
+      return _regenerator().w(function (_context18) {
+        while (1) switch (_context18.n) {
           case 0:
-            _context15.n = 1;
+            _context18.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context15.v;
-            return _context15.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context18.v;
+            return _context18.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee15);
+      }, _callee17);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -16157,22 +16444,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
       var q, list;
-      return _regenerator().w(function (_context16) {
-        while (1) switch (_context16.n) {
+      return _regenerator().w(function (_context19) {
+        while (1) switch (_context19.n) {
           case 0:
-            _context16.n = 1;
+            _context19.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context16.v;
-            _context16.n = 2;
+            q = _context19.v;
+            _context19.n = 2;
             return q.getAll();
           case 2:
-            list = _context16.v;
-            return _context16.a(2, list.length);
+            list = _context19.v;
+            return _context19.a(2, list.length);
         }
-      }, _callee16);
+      }, _callee18);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -16189,18 +16476,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
       var q;
-      return _regenerator().w(function (_context17) {
-        while (1) switch (_context17.n) {
+      return _regenerator().w(function (_context20) {
+        while (1) switch (_context20.n) {
           case 0:
-            _context17.n = 1;
+            _context20.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context17.v;
-            return _context17.a(2, q.getHeld());
+            q = _context20.v;
+            return _context20.a(2, q.getHeld());
         }
-      }, _callee17);
+      }, _callee19);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -16215,22 +16502,22 @@
    * @returns {Promise<void>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
       var q;
-      return _regenerator().w(function (_context18) {
-        while (1) switch (_context18.n) {
+      return _regenerator().w(function (_context21) {
+        while (1) switch (_context21.n) {
           case 0:
-            _context18.n = 1;
+            _context21.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context18.v;
-            return _context18.a(2, q.usage());
+            q = _context21.v;
+            return _context21.a(2, q.usage());
         }
-      }, _callee18);
+      }, _callee20);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
-  function releaseHeldSubmission(_x20) {
+  function releaseHeldSubmission(_x25) {
     return _releaseHeldSubmission.apply(this, arguments);
   }
 
@@ -16245,22 +16532,22 @@
    * @returns {Promise<void>}
    */
   function _releaseHeldSubmission() {
-    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19(id) {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21(id) {
       var q;
-      return _regenerator().w(function (_context19) {
-        while (1) switch (_context19.n) {
+      return _regenerator().w(function (_context22) {
+        while (1) switch (_context22.n) {
           case 0:
-            _context19.n = 1;
+            _context22.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context19.v;
-            return _context19.a(2, q.releaseHold(id));
+            q = _context22.v;
+            return _context22.a(2, q.releaseHold(id));
         }
-      }, _callee19);
+      }, _callee21);
     }));
     return _releaseHeldSubmission.apply(this, arguments);
   }
-  function discardHeldSubmission(_x21, _x22) {
+  function discardHeldSubmission(_x26, _x27) {
     return _discardHeldSubmission.apply(this, arguments);
   }
 
@@ -16270,18 +16557,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _discardHeldSubmission() {
-    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20(id, reason) {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22(id, reason) {
       var q;
-      return _regenerator().w(function (_context20) {
-        while (1) switch (_context20.n) {
+      return _regenerator().w(function (_context23) {
+        while (1) switch (_context23.n) {
           case 0:
-            _context20.n = 1;
+            _context23.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context20.v;
-            return _context20.a(2, q.discardHeld(id, reason));
+            q = _context23.v;
+            return _context23.a(2, q.discardHeld(id, reason));
         }
-      }, _callee20);
+      }, _callee22);
     }));
     return _discardHeldSubmission.apply(this, arguments);
   }
@@ -16503,6 +16790,13 @@
                 // whatever else breaks, so the record the queue needs is built
                 // first and the part that can fail happens where it is caught.
                 uploadId: null,
+                // Persisted, because the queue describes the asset hours later from
+                // metadata alone. The immediate path snapshots `source.language`;
+                // the drained path was reading `formFields.language`, so a host that
+                // supplies the language through source state produced a completion
+                // event with an empty language after an offline drain and a correct
+                // one when the upload happened to succeed first.
+                language: submittedLanguage || "",
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
                 // Calibration describes a microphone session, so it is reported
                 // only for audio this device actually captured. An attached file's

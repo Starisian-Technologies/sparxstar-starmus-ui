@@ -227,6 +227,23 @@
                         // the payload cannot disagree. See `file-attached`
                         // below for what leaving the other one set costs.
                         file: null,
+                        // And the draft that belonged to whatever was recorded
+                        // or attached before. `handleSubmit()` copies
+                        // `source.transcript` into the upload metadata, so a
+                        // retake carried the *previous* take's words — the same
+                        // mislabelling as `file-attached`, in the direction
+                        // that fix did not cover.
+                        transcript: "",
+                        interimTranscript: "",
+                        // The capture profile is deliberately NOT cleared here.
+                        // `starmus/capture-profile` is dispatched when the
+                        // microphone opens and `starmus/recording-available`
+                        // when it stops, so clearing at stop would destroy the
+                        // profile belonging to the recording that just ended —
+                        // and an asset with no profile is the exact failure
+                        // ADR-035 and the build check exist to prevent. A stale
+                        // `import` profile cannot survive into a recording,
+                        // because opening the microphone overwrites it first.
                         fileName: action.payload.fileName,
                         metadata: {
                             duration: state.recorder.duration || 0,

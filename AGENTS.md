@@ -160,7 +160,11 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // `unknown` when this client cannot name what it has. The event still
     // fires: it is the boundary below, and withholding it for an asset the
     // server already holds is worse than reporting the gap.
-    format: 'opus' | 'aac-lc' | 'wav' | 'mp3' | 'webm' | 'unknown',
+    // `aac-lc` only when a codec is stated (`audio/aac`, `.aac`, an explicit
+    // `mp4a…` parameter). A bare `audio/mp4` or `.m4a` is the container `mp4`:
+    // it may hold HE-AAC or ALAC, and naming a codec the client cannot
+    // establish misdescribes the asset.
+    format: 'opus' | 'aac-lc' | 'mp4' | 'wav' | 'mp3' | 'webm' | 'unknown',
     language: string,               // BCP-47 e.g. 'mnk' for Mandinka
     contributorId: string,
     consentGranted: boolean,

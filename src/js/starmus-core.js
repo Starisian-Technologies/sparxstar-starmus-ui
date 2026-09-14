@@ -215,6 +215,13 @@ export function initCore(store, instanceId, env) {
             // whatever else breaks, so the record the queue needs is built
             // first and the part that can fail happens where it is caught.
             uploadId: null,
+            // Persisted, because the queue describes the asset hours later from
+            // metadata alone. The immediate path snapshots `source.language`;
+            // the drained path was reading `formFields.language`, so a host that
+            // supplies the language through source state produced a completion
+            // event with an empty language after an offline drain and a correct
+            // one when the upload happened to succeed first.
+            language: submittedLanguage || "",
             transcript: source.transcript?.trim() || null,
             // Calibration describes a microphone session, so it is reported
             // only for audio this device actually captured. An attached file's

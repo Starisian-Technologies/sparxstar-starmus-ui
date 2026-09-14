@@ -182,8 +182,10 @@ test("an accepted upload always gets its boundary event, even unnameable", async
     assert.equal(detail.durationMs, 9000);
 });
 
-test("a nameable format is still named", async () => {
-    const { buildCompletionDetail } = await import("../../src/js/starmus-completion-event.js");
+test("a container is named as a container, and a codec only when stated", async () => {
+    const { buildCompletionDetail, resolveUploadFormat } = await import(
+        "../../src/js/starmus-completion-event.js"
+    );
     const detail = buildCompletionDetail({
         instanceId: "session-2",
         result: { success: true },
@@ -192,7 +194,19 @@ test("a nameable format is still named", async () => {
         fileName: "take.m4a",
         mimeType: "audio/mp4",
     });
-    assert.equal(detail.format, "aac-lc", "`unknown` is a fallback, not the default");
+    assert.equal(
+        detail.format,
+        "mp4",
+        "a bare mp4 container may hold HE-AAC or ALAC; claiming aac-lc would misdescribe it",
+    );
+
+    assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc", "a stated codec is named");
+    assert.equal(
+        resolveUploadFormat('audio/mp4; codecs="mp4a.40.2"', "take.m4a"),
+        "aac-lc",
+        "and so is an explicit codec parameter",
+    );
+    assert.equal(resolveUploadFormat("audio/webm", "take.webm"), "webm", "webm stays the container");
 });
 
 test("a host still passing the retired nonce is told, not silently unauthorized", async () => {
@@ -284,12 +298,19 @@ test("discarding a held recording requires a stated reason", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-offline.js", "utf8");
 
-    const body = source.slice(source.indexOf("async discardHeld(id, reason)"));
+    // Bounded to the method. Slicing to end-of-file let `firstRead` match an
+    // unrelated `getAll()` further down the file, so the test would have passed
+    // even if the discard had touched IndexedDB before validating the reason.
+    const from = source.indexOf("async discardHeld(id, reason)");
+    const to = source.indexOf("\n    async ", from + 10);
+    assert.ok(from > -1 && to > from, "the method body is locatable");
+    const body = source.slice(from, to);
+
     const guard = body.indexOf("needs a reason");
-    const firstRead = body.indexOf("await this.getAll()");
+    const firstRead = body.search(/this\.db\.transaction|await this\.getAll\(\)/);
 
     assert.ok(guard > -1, "a blank reason is refused");
-    assert.ok(firstRead > -1, "and the method does go on to read the store");
+    assert.ok(firstRead > -1, "and the method does go on to touch the store");
     assert.ok(
         guard < firstRead,
         "the refusal comes before the store is touched, so no reasonless discard can begin",
@@ -433,11 +454,17 @@ test("an entry whose bytes already landed is reconciled, never re-uploaded", asy
     const upload = branch.indexOf("uploadWithPriority");
     assert.ok(emit > -1, "it emits the completion that never fired");
     assert.ok(emit < upload, "and reaches that before any upload call");
-    assert.match(
-        source,
-        /await this\._hold\(id, `Uploaded; completion handling failed: \$\{msg\}`, true\)/,
-        "post-transfer holds record that the bytes landed",
-    );
+    // Both post-transfer holds pass the `transferred` flag. Matched on the
+    // argument rather than the whole call, so threading a claim token through
+    // later does not break a test that is about something else.
+    for (const reason of ["completion handling failed", "local cleanup failed"]) {
+        const call = source.slice(source.indexOf(`Uploaded; ${reason}`));
+        assert.match(
+            call.slice(0, 200),
+            /`,\s*true[,)]/,
+            `the hold for "${reason}" records that the bytes landed`,
+        );
+    }
 });
 
 test("a drain claims a row before uploading it", async () => {
@@ -445,11 +472,31 @@ test("a drain claims a row before uploading it", async () => {
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-offline.js", "utf8");
 
-    const claim = source.indexOf("if (!(await this._claim(id)))");
+    const claim = source.indexOf("const claimToken = await this._claim(id);");
     const upload = source.indexOf("await uploadWithPriority({");
+    const backfill = source.indexOf("const backfilled = createUploadId();");
+
     assert.ok(claim > -1, "rows are claimed");
-    assert.ok(claim < upload, "and claimed before the transfer starts");
-    assert.match(source, /await this\._releaseClaim\(id\);/, "and released when an attempt fails");
+    assert.ok(claim < upload, "claimed before the transfer starts");
+    assert.ok(
+        claim < backfill,
+        "and before the id backfill, so two tabs cannot mint competing identifiers",
+    );
+
+    // The claim carries an owner token and is renewed while bytes move. A fixed
+    // lease cannot be sized correctly here: a capture may run to
+    // MAX_DURATION_SECONDS and a progressing upload is deliberately unbounded.
+    assert.match(source, /_renewClaim\(id, claimToken\)/, "the claim is renewed on progress");
+    assert.match(
+        source,
+        /item\.leaseOwner !== token/,
+        "renewal only extends a claim this drain still owns",
+    );
+    assert.match(
+        source,
+        /if \(item && item\.leaseOwner === token\)/,
+        "and release only clears a claim this drain still owns",
+    );
 });
 
 test("listing held recordings does not load their audio", async () => {
@@ -461,4 +508,33 @@ test("listing held recordings does not load their audio", async () => {
     assert.doesNotMatch(body, /this\.getAll\(\)/, "rather than materialising every record");
     assert.doesNotMatch(body, /audioBlob: /, "and no Blob travels in the summary");
     assert.match(body, /sizeBytes: item\.audioBlob\?\.size/, "only its size does");
+});
+
+test("a recording keeps the profile set when its microphone opened", () => {
+    // The recorder dispatches `capture-profile` when the mic opens and
+    // `recording-available` when it stops. Clearing the profile on
+    // `recording-available` — to defend against a stale `import` profile from
+    // an earlier file attachment — would destroy the profile belonging to the
+    // recording that just ended, which is the failure ADR-035 and the build
+    // check exist to prevent. The attachment case is already covered: opening
+    // the microphone overwrites `import` before any recording exists.
+    const store = createStore();
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    assert.equal(store.getState().source.captureProfile, "import");
+
+    store.dispatch({
+        type: "starmus/capture-profile",
+        attainment: { profile: "conversation", attained: true, exceeded: [], unverified: [] },
+    });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+
+    const source = store.getState().source;
+    assert.equal(source.captureProfile, "conversation", "the recording's own profile survives");
+    assert.equal(source.captureAttainment.profile, "conversation");
+    assert.equal(source.file, null, "while the stale file does not");
+    assert.equal(source.transcript, "", "nor the stale draft");
 });

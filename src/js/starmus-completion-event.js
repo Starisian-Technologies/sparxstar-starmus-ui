@@ -26,17 +26,20 @@ export function resolveUploadFormat(mimeType, fileName) {
     const name = String(fileName || "").trim().toLowerCase();
     const ext = name.includes(".") ? name.split(".").pop() : "";
 
-    if (
-        type.includes("audio/mp4") ||
-        type.includes("audio/x-m4a") ||
-        type.includes("audio/aac") ||
-        type.includes("aac") ||
-        type.includes("mp4a") ||
-        ext === "m4a" ||
-        ext === "mp4" ||
-        ext === "aac"
-    ) {
+    // A codec, only when the codec is actually stated. `audio/aac`, an `.aac`
+    // file and an explicit `mp4a.40.2` codec parameter each name AAC; a bare
+    // `audio/mp4` or `.m4a` names a *container*, which may hold HE-AAC, ALAC or
+    // something else. Reporting `aac-lc` for those was a codec claim this
+    // client cannot establish — the same misdescription the `webm` case was
+    // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
+    if (type.includes("audio/aac") || type.includes("mp4a") || ext === "aac") {
         return "aac-lc";
+    }
+
+    // The container, named as itself, for the Node to identify the codec from
+    // the bytes — exactly as WAV, MP3 and WebM are handled below.
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || ext === "m4a" || ext === "mp4") {
+        return "mp4";
     }
 
     if (

@@ -360,11 +360,16 @@ if (fs.existsSync(tusFile)) {
     const stale = manifest.symbols
         .filter((entry) => {
             const content = sourceByPath.get(entry.path);
-            // An entry whose file this scan did not read is left alone rather
-            // than called stale: being unable to see a file is not evidence
-            // that its symbol is gone.
+            // A manifest entry whose file is not there at all is stale — that
+            // is the deletion case this check exists to catch, and suppressing
+            // it meant the "both directions" claim held only for renames within
+            // a surviving file. A path outside the scanned set (not under
+            // `src/js/`) is still left alone: not seeing a file is only
+            // evidence when the file was supposed to be in the set.
             if (content === undefined) {
-                return false;
+                const abs = path.join(ROOT_DIR, entry.path);
+                const scanned = entry.path.startsWith("src/js/");
+                return scanned && !fs.existsSync(abs);
             }
             // Declared, not exported. AGENTS.md says the manifest tracks *any*
             // symbol added, removed or renamed, and it deliberately inventories

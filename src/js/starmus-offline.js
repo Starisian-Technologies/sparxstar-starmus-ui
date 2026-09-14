@@ -60,7 +60,7 @@ const CONFIG = {
      */
     maxTotalBytes: 20 * 1024 * 1024,
     /**
-     * How long one drain may claim a row before another may take it.
+     * How long a drain's claim on a row stays valid without renewal.
      *
      * `isProcessing` is an in-memory flag, so it says nothing about the tab
      * next door: two tabs read the same rows and both start uploading. Because
@@ -70,14 +70,21 @@ const CONFIG = {
      * bandwidth on one recording, both fire `starmus:complete`, and both race
      * to delete the row.
      *
-     * The lease is generous because the alternative failure is worse: a lease
-     * that expires under a slow upload hands the row to another tab while the
-     * first is still sending. Ten minutes is longer than the stall watchdog
-     * (two minutes of no progress ends an attempt), so a live upload always
-     * outlives its own lease renewal window, and a tab that dies mid-upload
-     * blocks the row for at most this long.
+     * A fixed lease cannot be sized out of this problem, and an earlier version
+     * of this comment claimed otherwise. The recorder permits captures of
+     * `MAX_DURATION_SECONDS` (20 minutes), and the stall watchdog deliberately
+     * lets any *continuously progressing* upload run as long as it needs — so
+     * on the links this platform exists for, a legitimate transfer outlives any
+     * lease short enough to be useful when a tab dies.
+     *
+     * So the claim is **renewed while the transfer progresses** and carries an
+     * **owner token**: every mutation checks that this drain still owns the row
+     * before writing. A lease that lapses hands the row over cleanly; it never
+     * lets a late failure from the previous owner overwrite the new one's work.
      */
-    leaseMs: 10 * 60 * 1000,
+    leaseMs: 2 * 60 * 1000,
+    /** Renew no more often than this, so progress does not hammer IndexedDB. */
+    leaseRenewMs: 30 * 1000,
 };
 
 /** Tracks whether the singleton queue has installed its network listener. */
@@ -427,7 +434,42 @@ class OfflineQueue {
      * @param {string} reason
      * @returns {Promise<void>}
      */
-    async _hold(id, reason, transferred = false) {
+    /**
+     * Record that `starmus:complete` has been announced for this submission.
+     *
+     * Written before the event is emitted, so a crash between the two leaves
+     * the entry marked announced rather than able to announce again. A second
+     * boundary event for one upload starts downstream processing twice.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} token The claim this drain holds.
+     * @returns {Promise<void>}
+     */
+    async _markCompletionEmitted(id, token) {
+        if (!this.db) {
+            return;
+        }
+        return new Promise((resolve) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (item && item.leaseOwner === token) {
+                    item.completionEmitted = true;
+                    store.put(item);
+                }
+            };
+
+            req.onerror = () => resolve();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+        });
+    }
+
+    async _hold(id, reason, transferred = false, token = null) {
         if (!this.db) {
             return;
         }
@@ -454,6 +496,14 @@ class OfflineQueue {
                     // drain can finish the job instead of redoing it.
                     if (transferred) {
                         item.transferred = true;
+                    }
+                    // Holding ends this drain's interest in the row, so the
+                    // claim goes with it — otherwise a held entry stays
+                    // unclaimable until the lease lapses, for no purpose. Only
+                    // this drain's own claim is cleared.
+                    if (token !== null && item.leaseOwner === token) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
                     }
                     store.put(item);
                 }
@@ -779,16 +829,24 @@ class OfflineQueue {
     /**
      * Claim a row for this drain, or report that someone else holds it.
      *
-     * One readwrite transaction, so two tabs cannot both see the row free.
+     * One readwrite transaction, so two tabs cannot both see the row free. The
+     * returned token identifies this claim: every later mutation presents it,
+     * and a mutation from a drain that no longer owns the row does nothing.
+     *
+     * `held` is re-checked here rather than trusted from the caller's snapshot,
+     * which was taken before this transaction and may be stale — another tab
+     * can put a row on hold in that gap, and claiming it anyway would upload a
+     * submission a person had explicitly stopped.
      *
      * @private
      * @param {string} id
-     * @returns {Promise<boolean>} True when this drain may upload the row.
+     * @returns {Promise<string|null>} An owner token, or null if not claimable.
      */
     async _claim(id) {
         if (!this.db) {
-            return false;
+            return null;
         }
+        const token = createOfflineSubmissionId();
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction([CONFIG.storeName], "readwrite");
             const store = tx.objectStore(CONFIG.storeName);
@@ -798,32 +856,82 @@ class OfflineQueue {
             req.onsuccess = () => {
                 const item = req.result;
                 if (!item) {
-                    // Gone since `getAll()` — another drain finished it.
+                    // Gone since the snapshot — another drain finished it.
+                    return;
+                }
+                if (item.held === true) {
                     return;
                 }
                 const now = Date.now();
                 if (typeof item.leaseUntil === "number" && item.leaseUntil > now) {
                     return;
                 }
+                item.leaseOwner = token;
                 item.leaseUntil = now + CONFIG.leaseMs;
                 store.put(item);
                 claimed = true;
             };
 
             req.onerror = (ev) => reject(ev.target.error);
-            tx.oncomplete = () => resolve(claimed);
+            tx.oncomplete = () => resolve(claimed ? token : null);
             tx.onerror = (ev) => reject(ev.target.error);
         });
     }
 
     /**
-     * Give up a claim, so the row is retryable before the lease would expire.
+     * Extend a claim this drain still owns.
+     *
+     * Called as the transfer reports progress. A transfer that is moving keeps
+     * its row; one that has stopped moving lets the lease lapse, and another
+     * tab — or this one, later — can pick it up.
      *
      * @private
      * @param {string} id
+     * @param {string} token
+     * @returns {Promise<boolean>} False when the claim has been lost.
+     */
+    async _renewClaim(id, token) {
+        if (!this.db) {
+            return false;
+        }
+        return new Promise((resolve) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.get(id);
+            let renewed = false;
+
+            req.onsuccess = () => {
+                const item = req.result;
+                if (!item || item.leaseOwner !== token) {
+                    return;
+                }
+                item.leaseUntil = Date.now() + CONFIG.leaseMs;
+                store.put(item);
+                renewed = true;
+            };
+
+            // A renewal that cannot be written is not worth failing a transfer
+            // over; the lease lapsing is the already-handled case.
+            req.onerror = () => resolve(false);
+            tx.oncomplete = () => resolve(renewed);
+            tx.onerror = () => resolve(false);
+        });
+    }
+
+    /**
+     * Give up a claim, so the row is retryable before the lease would lapse.
+     *
+     * Only if this drain still owns it. Clearing unconditionally meant that a
+     * drain whose lease had already lapsed — and whose row another tab had
+     * since claimed — could release the *new* owner's claim on its way out,
+     * and then overwrite the state of an upload that was actively running.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} token
      * @returns {Promise<void>}
      */
-    async _releaseClaim(id) {
+    async _releaseClaim(id, token) {
         if (!this.db) {
             return;
         }
@@ -834,21 +942,22 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (item) {
+                if (item && item.leaseOwner === token) {
+                    item.leaseOwner = null;
                     item.leaseUntil = null;
                     store.put(item);
                 }
             };
 
             // A claim that cannot be released is not an error worth failing a
-            // drain over: the lease expires on its own.
+            // drain over: the lease lapses on its own.
             req.onerror = () => resolve();
             tx.oncomplete = () => resolve();
             tx.onerror = () => resolve();
         });
     }
 
-    async _updateRetry(id, retryCount, error) {
+    async _updateRetry(id, retryCount, error, token = null) {
         if (!this.db) {
             return;
         }
@@ -863,6 +972,15 @@ class OfflineQueue {
                     item.retryCount = retryCount;
                     item.lastAttempt = Date.now();
                     item.error = error || null;
+                    // The backoff state and the claim release are one write.
+                    // Releasing first left a window in which the row was
+                    // claimable while still carrying the *previous* attempt's
+                    // retryCount and lastAttempt — so another tab could take it
+                    // immediately, with no backoff, and race this update.
+                    if (token !== null && item.leaseOwner === token) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
+                    }
                     store.put(item);
                 }
             };
@@ -920,6 +1038,13 @@ class OfflineQueue {
                 }
 
                 if (item.transferred === true) {
+                    // Claimed like any other row. Two tabs both seeing
+                    // `transferred` and racing to finish it would emit the
+                    // boundary event twice for one upload.
+                    const reconcileToken = await this._claim(id);
+                    if (!reconcileToken) {
+                        continue;
+                    }
                     // The server already has these bytes; what failed was
                     // afterwards. Uploading again would hand the platform a
                     // second copy of a recording it accepted — and it could not
@@ -940,11 +1065,21 @@ class OfflineQueue {
                         fileName,
                         mimeType: metadata?.mimeType || audioBlob.type || "",
                         durationMs: metadata?.durationMs ?? 0,
-                        language: formFields?.language,
+                        language: metadata?.language || formFields?.language,
                         contributorId: metadata?.env?.identifiers?.visitorId || "",
                         calibrationApplied: !!metadata?.calibration,
                     });
-                    emitCompletionEvent(detail);
+                    // Emitted once per upload, ever. The flag is written
+                    // before the event so that a failure between the two leaves
+                    // the entry marked as announced: re-emitting `starmus:complete`
+                    // for an asset the server already has would start downstream
+                    // processing a second time.
+                    if (item.completionEmitted !== true) {
+                        await this._markCompletionEmitted(id, reconcileToken);
+                        emitCompletionEvent(detail);
+                    } else {
+                        debugLog("[Offline] Completion already announced; not re-emitting:", id);
+                    }
                     try {
                         await this.remove(id);
                         debugLog("[Offline] Reconciled an already-transferred entry:", id);
@@ -975,6 +1110,25 @@ class OfflineQueue {
                     if (Date.now() - item.lastAttempt < delay) {
                         continue;
                     }
+                }
+
+                // Claimed before anything is written for this attempt, and
+                // released on every exit from it.
+                //
+                // Without this, a second tab — with its own `isProcessing` flag
+                // and its own view of the same store — uploaded the same row in
+                // parallel, spending a contributor's bandwidth twice on one
+                // recording and firing `starmus:complete` twice for it.
+                //
+                // Before the backfill below, not after: two tabs reaching an
+                // id-less row together would each mint a *different* UUID and
+                // one would persist over the other, leaving the tab that
+                // uploaded with a fingerprint the stored row no longer matches
+                // — unable to resume its own partial.
+                const claimToken = await this._claim(id);
+                if (!claimToken) {
+                    debugLog("[Offline] Another drain holds this entry; skipping:", id);
+                    continue;
                 }
 
                 // Entries queued before the submission id existed have no
@@ -1014,27 +1168,31 @@ class OfflineQueue {
                     // lived. One unusable row must cost one row.
                     const msg = err && err.message ? err.message : String(err);
                     console.error("[Offline] Could not assign an upload id:", id, msg);
-                    await this._hold(id, `No upload identifier could be assigned: ${msg}`);
-                    continue;
-                }
-
-                // Claimed before the transfer, released on every exit from it.
-                // Without this, a second tab — with its own `isProcessing` flag
-                // and its own view of the same store — uploaded the same row in
-                // parallel, spending a contributor's bandwidth twice on one
-                // recording and firing `starmus:complete` twice for it.
-                if (!(await this._claim(id))) {
-                    debugLog("[Offline] Another drain holds this entry; skipping:", id);
+                    await this._hold(id, `No upload identifier could be assigned: ${msg}`, false, claimToken);
                     continue;
                 }
 
                 try {
+                    // The claim is renewed as bytes move, not sized to outlast
+                    // the upload. A capture may run to MAX_DURATION_SECONDS and
+                    // a progressing transfer is deliberately unbounded, so no
+                    // fixed lease is both long enough for a real upload and
+                    // short enough to free a row from a tab that died.
+                    let lastRenewal = Date.now();
                     const result = await uploadWithPriority({
                         blob: audioBlob,
                         fileName,
                         formFields,
                         metadata,
                         instanceId,
+                        onProgress: () => {
+                            const now = Date.now();
+                            if (now - lastRenewal < CONFIG.leaseRenewMs) {
+                                return;
+                            }
+                            lastRenewal = now;
+                            void this._renewClaim(id, claimToken);
+                        },
                     });
 
                     // Set here, the moment the bytes are known to have landed —
@@ -1058,7 +1216,7 @@ class OfflineQueue {
                         fileName,
                         mimeType: metadata?.mimeType || audioBlob.type || "",
                         durationMs: metadata?.durationMs ?? 0,
-                        language: formFields?.language,
+                        language: metadata?.language || formFields?.language,
                         contributorId: metadata?.env?.identifiers?.visitorId || "",
                         calibrationApplied: !!metadata?.calibration,
                     });
@@ -1070,6 +1228,10 @@ class OfflineQueue {
                     // the server with nobody told it existed, recoverable only
                     // by a person noticing a held entry. The Node rules on the
                     // format, where refusing does not cost the recording.
+                    // Marked before it fires, so a failure between the two
+                    // cannot produce a second boundary event for one upload
+                    // when the entry is later released and reconciled.
+                    await this._markCompletionEmitted(id, claimToken);
                     emitCompletionEvent(detail);
                     if (detail.format === "unknown") {
                         sparxstarIntegration.reportError("upload_format_unnamed", {
@@ -1089,24 +1251,24 @@ class OfflineQueue {
                         // next drain does not upload it again.
                         const msg = err && err.message ? err.message : String(err);
                         console.error("[Offline] Uploaded, but completion failed:", id, msg);
-                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`, true);
+                        await this._hold(id, `Uploaded; completion handling failed: ${msg}`, true, claimToken);
                         continue;
                     }
                     const msg = err && err.message ? err.message : String(err);
-                    // The row stays, so the claim must not: otherwise a failed
-                    // attempt locks its own recording out of the next drain for
-                    // the whole lease.
-                    await this._releaseClaim(id);
+                    // The claim is dropped by the same write that records the
+                    // outcome, below — never before it. A separate release
+                    // first made the row claimable while it still carried the
+                    // previous attempt's backoff state.
                     const nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
                     if (nonRetryable) {
                         // Retrying will not help, so stop retrying — and keep
                         // the recording. Deleting it here was the queue
                         // quietly deciding a contributor's material was
                         // disposable because a server rejected its shape.
-                        await this._hold(id, `Upload rejected and not retryable: ${msg}`);
+                        await this._hold(id, `Upload rejected and not retryable: ${msg}`, false, claimToken);
                     } else {
                         const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        await this._updateRetry(id, nextRetryCount, msg);
+                        await this._updateRetry(id, nextRetryCount, msg, claimToken);
                     }
                     continue;
                 }
@@ -1123,7 +1285,7 @@ class OfflineQueue {
                             ? cleanupError.message
                             : String(cleanupError);
                     console.error("[Offline] Uploaded but could not clear the entry:", id, msg);
-                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`, true);
+                    await this._hold(id, `Uploaded; local cleanup failed: ${msg}`, true, claimToken);
                 }
             }
         } catch (fatal) {
@@ -1224,13 +1386,22 @@ class OfflineQueue {
         // forever, waking the device to look at an item it will never retry.
         // On a phone with a failing upload and a low battery that is the worst
         // possible loop to leave running.
-        const pending = (await this.getAll()).filter((item) => item.held !== true);
+        const now = Date.now();
+        const pending = (await this.getAll()).filter(
+            (item) =>
+                item.held !== true &&
+                // Leased elsewhere. Including these meant a tab that had just
+                // failed to claim a row still read its untouched retryCount and
+                // lastAttempt, computed a zero delay, and rescheduled
+                // immediately — a tight drain loop for as long as the other tab
+                // held the lease. Held entries caused the same spin before.
+                !(typeof item.leaseUntil === "number" && item.leaseUntil > now),
+        );
         if (pending.length === 0) {
             return null;
         }
 
         let nextDelay = null;
-        const now = Date.now();
 
         for (const item of pending) {
             if (item.retryCount >= CONFIG.maxRetries) {

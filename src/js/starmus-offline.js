@@ -494,26 +494,6 @@ class OfflineQueue {
     }
 
     /**
-     * Mark a submission as held: kept, no longer retried, needing a person.
-     *
-     * @private
-     * @param {string} id
-     * @param {string} reason
-     * @returns {Promise<void>}
-     */
-    /**
-     * Record that `starmus:complete` has been announced for this submission.
-     *
-     * Written before the event is emitted, so a crash between the two leaves
-     * the entry marked announced rather than able to announce again. A second
-     * boundary event for one upload starts downstream processing twice.
-     *
-     * @private
-     * @param {string} id
-     * @param {string} token The claim this drain holds.
-     * @returns {Promise<void>}
-     */
-    /**
      * Record that the server has accepted these bytes.
      *
      * Written under the claim, before any completion handling, so that a tab
@@ -523,7 +503,9 @@ class OfflineQueue {
      * @private
      * @param {string} id
      * @param {string} token The claim this drain holds.
-     * @returns {Promise<void>}
+     * @returns {Promise<boolean>} Whether the marker was actually written. False
+     *   means the row is no longer this drain's, and nothing after the transfer
+     *   belongs to it.
      */
     async _markTransferred(id, token) {
         if (!this.db) {
@@ -558,6 +540,27 @@ class OfflineQueue {
         });
     }
 
+    /**
+     * Record that `starmus:complete` has been announced for this submission.
+     *
+     * Written *after* the event is emitted, and the ordering is deliberate. The
+     * marker is what stops a second boundary event for one upload; writing it
+     * first traded a duplicate event for a lost one, because a page that died
+     * between the write and the dispatch left the row recorded as announced and
+     * the next drain removed it without ever emitting the event — an asset on
+     * the server that nothing downstream was told about. A duplicate carries the
+     * same `uploadId` and is dedupable by the consumer; a missing one is not.
+     *
+     * The JSDoc here used to describe the opposite order. That is worth saying
+     * plainly: a future change made against the comment rather than the code
+     * would reintroduce exactly the lost-event window the code is arranged to
+     * avoid.
+     *
+     * @private
+     * @param {string} id
+     * @param {string} token The claim this drain holds.
+     * @returns {Promise<void>}
+     */
     async _markCompletionEmitted(id, token) {
         if (!this.db) {
             return;
@@ -1043,17 +1046,40 @@ class OfflineQueue {
      * tab — or this one, later — can pick it up.
      *
      * @private
+     * Three outcomes, not two. A storage failure is not evidence that the row
+     * changed hands, and reporting it as such was how a *successful* upload got
+     * abandoned: the drain saw `false`, stood down, and left the row
+     * `transferred: false` — while `removeFingerprintOnSuccess` had already
+     * dropped the resume fingerprint, so the next drain started a second TUS
+     * resource instead of reconciling the one the server had accepted. That is
+     * the duplicate this whole mechanism exists to prevent, produced by the
+     * mechanism itself.
+     *
+     * Nothing here is authoritative about ownership. `_markTransferred()` runs a
+     * claim-checked write after the transfer and reports what actually landed,
+     * so an unknown answer costs a renewal, not a recording.
+     *
+     * @private
      * @param {string} id
      * @param {string} token
-     * @returns {Promise<boolean>} False when the claim has been lost.
+     * @returns {Promise<boolean|null>} True renewed, false the row is no longer
+     *   this drain's, null when storage could not answer.
      */
     async _renewClaim(id, token) {
         if (!this.db) {
-            return false;
+            return null;
         }
         return new Promise((resolve) => {
-            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
-            const store = tx.objectStore(CONFIG.storeName);
+            let tx;
+            let store;
+            try {
+                tx = this.db.transaction([CONFIG.storeName], "readwrite");
+                store = tx.objectStore(CONFIG.storeName);
+            } catch {
+                // A closed or unusable connection. Unknown, not lost.
+                resolve(null);
+                return;
+            }
             const req = store.get(id);
             let renewed = false;
 
@@ -1067,11 +1093,10 @@ class OfflineQueue {
                 renewed = true;
             };
 
-            // A renewal that cannot be written is not worth failing a transfer
-            // over; the lease lapsing is the already-handled case.
-            req.onerror = () => resolve(false);
+            // Storage could not answer. Distinct from an answer of "not yours".
+            req.onerror = () => resolve(null);
             tx.oncomplete = () => resolve(renewed);
-            tx.onerror = () => resolve(false);
+            tx.onerror = () => resolve(null);
         });
     }
 
@@ -1449,7 +1474,13 @@ class OfflineQueue {
                             }
                             lastRenewal = now;
                             renewalInFlight = this._renewClaim(id, claimToken).then((ok) => {
-                                if (!ok) {
+                                // Only an actual "not yours" stands the drain
+                                // down. A null — storage could not answer — is
+                                // left to `_markTransferred()`, which checks the
+                                // claim as it writes and cannot be wrong about
+                                // it. Treating the two alike abandoned uploads
+                                // that had already succeeded.
+                                if (ok === false) {
                                     claimLost = true;
                                 }
                                 return ok;
@@ -1476,9 +1507,11 @@ class OfflineQueue {
                         try {
                             await renewalInFlight;
                         } catch {
-                            // A renewal that could not be read is treated as
-                            // lost, below.
-                            claimLost = true;
+                            // A renewal that could not be read says nothing
+                            // about who owns the row. `_markTransferred()`
+                            // below is claim-checked and authoritative; standing
+                            // down here instead would discard a transfer that
+                            // may already have landed.
                         }
                     }
 
@@ -1696,6 +1729,59 @@ class OfflineQueue {
             void this.processQueue();
         }, safeDelay);
     }
+    /**
+     * The scheduling fields of every row that is still retryable.
+     *
+     * A cursor, and four scalars per row, because deciding *when* to wake needs
+     * no audio. `getAll()` deserialises whole rows — every queued recording —
+     * to read a retry count and a timestamp, and this runs on every scheduled
+     * wake rather than once per drain. On the devices this package is built
+     * for, spending the queue's entire retained size to compute a delay is the
+     * wrong trade at the worst moment: a phone low enough on memory to care is
+     * exactly the one with recordings still waiting to go.
+     *
+     * Held rows are dropped here, where the cursor already has them. `_hold()`
+     * leaves `retryCount` at the limit and the caller returns 0 for anything at
+     * the limit, so a single held recording rescheduled the queue immediately,
+     * forever, waking the device to look at something it will never retry.
+     *
+     * @private
+     * @returns {Promise<Array<{leaseUntil: number|null, retryCount: number,
+     *   lastAttempt: number|null}>>}
+     */
+    async _scheduleSnapshot() {
+        if (!this.db) {
+            return [];
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const store = tx.objectStore(CONFIG.storeName);
+            const req = store.openCursor();
+            /** @type {Array<Object>} */
+            const rows = [];
+
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor) {
+                    return;
+                }
+                const value = cursor.value;
+                if (value && value.held !== true) {
+                    rows.push({
+                        leaseUntil: typeof value.leaseUntil === "number" ? value.leaseUntil : null,
+                        retryCount: typeof value.retryCount === "number" ? value.retryCount : 0,
+                        lastAttempt: typeof value.lastAttempt === "number" ? value.lastAttempt : null,
+                    });
+                }
+                cursor.continue();
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(rows);
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
     /** @private */
     async _getNextProcessDelay() {
         // Held entries are excluded. `_hold()` leaves `retryCount` at the
@@ -1705,7 +1791,7 @@ class OfflineQueue {
         // On a phone with a failing upload and a low battery that is the worst
         // possible loop to leave running.
         const now = Date.now();
-        const live = (await this.getAll()).filter((item) => item.held !== true);
+        const live = await this._scheduleSnapshot();
 
         // Leased rows are excluded from the immediate work, but their expiry
         // still has to wake somebody.

@@ -347,3 +347,96 @@ test("a server asking for a retry gets one", async () => {
         assert.equal(isNonRetryableUploadFailure(msg), true, `not retryable: ${msg}`);
     }
 });
+
+test("a renewal distinguishes losing the row from storage not answering", async () => {
+    // Reported alike, a storage failure abandoned uploads that had already
+    // succeeded: the drain stood down, the row stayed `transferred: false`, and
+    // because the resume fingerprint is dropped on success the next drain
+    // started a second TUS resource rather than reconciling the accepted one.
+    freshEnvironment();
+    const a = await openTab();
+    const b = await openTab();
+    const id = await seed(a.queue);
+
+    const mine = await a.queue._claim(id);
+    assert.equal(await a.queue._renewClaim(id, mine.token), true, "the owner renews");
+
+    // Genuinely no longer ours: a definite answer, and the drain must stand down.
+    const taken = await atTimeOffset(LEASE_MS + 1000, () => b.queue._claim(id));
+    assert.ok(taken.token);
+    assert.equal(
+        await a.queue._renewClaim(id, mine.token),
+        false,
+        "a row owned by another tab reports lost",
+    );
+    assert.equal(await b.queue._renewClaim("no-such-row", taken.token), false, "as does a gone row");
+
+    // Storage cannot answer. Unknown — never reported as lost.
+    b.queue.db.close();
+    assert.equal(
+        await b.queue._renewClaim(id, taken.token),
+        null,
+        "a closed connection is unknown, not lost",
+    );
+});
+
+test("only a definite loss stands the drain down", async () => {
+    // The distinction is only worth having if the caller honours it.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    assert.match(
+        source,
+        /if \(ok === false\) \{/,
+        "the renewal result is compared to false, not merely falsy",
+    );
+    assert.doesNotMatch(
+        source.slice(source.indexOf("renewalInFlight = this._renewClaim")),
+        /if \(!ok\) \{\n\s+claimLost = true;/,
+        "an unknown renewal does not set claimLost",
+    );
+});
+
+test("deciding when to wake does not load the recordings", async () => {
+    // The scheduler needs a retry count and two timestamps. Reading them via
+    // `getAll()` deserialised every queued row — the whole retained queue — on
+    // every scheduled wake, on the devices least able to spare it.
+    freshEnvironment();
+    const tab = await openTab();
+    const MB = 1024 * 1024;
+    await seed(tab.queue, { size: 4 * MB, name: "a.webm" });
+    await seed(tab.queue, { size: 4 * MB, name: "b.webm" });
+
+    const rows = await tab.queue._scheduleSnapshot();
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+        assert.deepEqual(
+            Object.keys(row).sort(),
+            ["lastAttempt", "leaseUntil", "retryCount"],
+            "only the scheduling fields travel",
+        );
+    }
+
+    // Held rows are dropped, so one held recording cannot reschedule the queue
+    // immediately and forever over something it will never retry.
+    const stuck = await seed(tab.queue, { size: 1024, name: "stuck.webm" });
+    await tab.queue._hold(stuck, "needs attention", false, null);
+    assert.equal((await tab.queue._scheduleSnapshot()).length, 2, "held rows are excluded");
+
+    // And the scheduler actually goes through it. Asserting only that the
+    // snapshot exists left the test passing with the scheduler still calling
+    // `getAll()` — it proved the helper worked, not that anything used it.
+    const id = (await tab.queue.getAll()).find((r) => r.fileName === "a.webm").id;
+    const claim = await tab.queue._claim(id);
+    assert.ok(claim.token);
+
+    const realGetAll = tab.queue.getAll.bind(tab.queue);
+    tab.queue.getAll = () => {
+        throw new Error("the scheduler must not materialise the queue");
+    };
+    try {
+        assert.equal(typeof (await tab.queue._getNextProcessDelay()), "number");
+    } finally {
+        tab.queue.getAll = realGetAll;
+    }
+});

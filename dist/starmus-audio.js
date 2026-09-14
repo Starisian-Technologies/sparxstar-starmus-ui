@@ -14620,32 +14620,6 @@
     return true;
   }
 
-  var es_array_filter = {};
-
-  var hasRequiredEs_array_filter;
-
-  function requireEs_array_filter () {
-  	if (hasRequiredEs_array_filter) return es_array_filter;
-  	hasRequiredEs_array_filter = 1;
-  	var $ = require_export();
-  	var $filter = requireArrayIteration().filter;
-  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
-
-  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
-
-  	// `Array.prototype.filter` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.filter
-  	// with adding support of @@species
-  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
-  	  filter: function filter(callbackfn /* , thisArg */) {
-  	    return $filter(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-  	return es_array_filter;
-  }
-
-  requireEs_array_filter();
-
   var es_array_map = {};
 
   var hasRequiredEs_array_map;
@@ -15359,26 +15333,6 @@
         return remove;
       }()
       /**
-       * Mark a submission as held: kept, no longer retried, needing a person.
-       *
-       * @private
-       * @param {string} id
-       * @param {string} reason
-       * @returns {Promise<void>}
-       */
-      /**
-       * Record that `starmus:complete` has been announced for this submission.
-       *
-       * Written before the event is emitted, so a crash between the two leaves
-       * the entry marked announced rather than able to announce again. A second
-       * boundary event for one upload starts downstream processing twice.
-       *
-       * @private
-       * @param {string} id
-       * @param {string} token The claim this drain holds.
-       * @returns {Promise<void>}
-       */
-      /**
        * Record that the server has accepted these bytes.
        *
        * Written under the claim, before any completion handling, so that a tab
@@ -15388,7 +15342,9 @@
        * @private
        * @param {string} id
        * @param {string} token The claim this drain holds.
-       * @returns {Promise<void>}
+       * @returns {Promise<boolean>} Whether the marker was actually written. False
+       *   means the row is no longer this drain's, and nothing after the transfer
+       *   belongs to it.
        */
       )
     }, {
@@ -15443,10 +15399,32 @@
           return _markTransferred2.apply(this, arguments);
         }
         return _markTransferred;
-      }())
+      }()
+      /**
+       * Record that `starmus:complete` has been announced for this submission.
+       *
+       * Written *after* the event is emitted, and the ordering is deliberate. The
+       * marker is what stops a second boundary event for one upload; writing it
+       * first traded a duplicate event for a lost one, because a page that died
+       * between the write and the dispatch left the row recorded as announced and
+       * the next drain removed it without ever emitting the event — an asset on
+       * the server that nothing downstream was told about. A duplicate carries the
+       * same `uploadId` and is dedupable by the consumer; a missing one is not.
+       *
+       * The JSDoc here used to describe the opposite order. That is worth saying
+       * plainly: a future change made against the comment rather than the code
+       * would reintroduce exactly the lost-event window the code is arranged to
+       * avoid.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token The claim this drain holds.
+       * @returns {Promise<void>}
+       */
+      )
     }, {
       key: "_markCompletionEmitted",
-      value: function () {
+      value: (function () {
         var _markCompletionEmitted2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6(id, token) {
           var _this6 = this;
           return _regenerator().w(function (_context6) {
@@ -15486,7 +15464,7 @@
           return _markCompletionEmitted2.apply(this, arguments);
         }
         return _markCompletionEmitted;
-      }()
+      }())
     }, {
       key: "_hold",
       value: function () {
@@ -16091,9 +16069,24 @@
        * tab — or this one, later — can pick it up.
        *
        * @private
+       * Three outcomes, not two. A storage failure is not evidence that the row
+       * changed hands, and reporting it as such was how a *successful* upload got
+       * abandoned: the drain saw `false`, stood down, and left the row
+       * `transferred: false` — while `removeFingerprintOnSuccess` had already
+       * dropped the resume fingerprint, so the next drain started a second TUS
+       * resource instead of reconciling the one the server had accepted. That is
+       * the duplicate this whole mechanism exists to prevent, produced by the
+       * mechanism itself.
+       *
+       * Nothing here is authoritative about ownership. `_markTransferred()` runs a
+       * claim-checked write after the transfer and reports what actually landed,
+       * so an unknown answer costs a renewal, not a recording.
+       *
+       * @private
        * @param {string} id
        * @param {string} token
-       * @returns {Promise<boolean>} False when the claim has been lost.
+       * @returns {Promise<boolean|null>} True renewed, false the row is no longer
+       *   this drain's, null when storage could not answer.
        */
       )
     }, {
@@ -16108,11 +16101,19 @@
                   _context12.n = 1;
                   break;
                 }
-                return _context12.a(2, false);
+                return _context12.a(2, null);
               case 1:
                 return _context12.a(2, new Promise(function (resolve) {
-                  var tx = _this12.db.transaction([CONFIG.storeName], "readwrite");
-                  var store = tx.objectStore(CONFIG.storeName);
+                  var tx;
+                  var store;
+                  try {
+                    tx = _this12.db.transaction([CONFIG.storeName], "readwrite");
+                    store = tx.objectStore(CONFIG.storeName);
+                  } catch (_unused) {
+                    // A closed or unusable connection. Unknown, not lost.
+                    resolve(null);
+                    return;
+                  }
                   var req = store.get(id);
                   var renewed = false;
                   req.onsuccess = function () {
@@ -16125,16 +16126,15 @@
                     renewed = true;
                   };
 
-                  // A renewal that cannot be written is not worth failing a transfer
-                  // over; the lease lapsing is the already-handled case.
+                  // Storage could not answer. Distinct from an answer of "not yours".
                   req.onerror = function () {
-                    return resolve(false);
+                    return resolve(null);
                   };
                   tx.oncomplete = function () {
                     return resolve(renewed);
                   };
                   tx.onerror = function () {
-                    return resolve(false);
+                    return resolve(null);
                   };
                 }));
             }
@@ -16592,7 +16592,13 @@
                             }
                             lastRenewal = now;
                             renewalInFlight = _this15._renewClaim(id, claimToken).then(function (ok) {
-                              if (!ok) {
+                              // Only an actual "not yours" stands the drain
+                              // down. A null — storage could not answer — is
+                              // left to `_markTransferred()`, which checks the
+                              // claim as it writes and cannot be wrong about
+                              // it. Treating the two alike abandoned uploads
+                              // that had already succeeded.
+                              if (ok === false) {
                                 claimLost = true;
                               }
                               return ok;
@@ -16628,9 +16634,6 @@
                       case 34:
                         _context15.p = 34;
                         _context15.v;
-                        // A renewal that could not be read is treated as
-                        // lost, below.
-                        claimLost = true;
                       case 35:
                         if (!claimLost) {
                           _context15.n = 36;
@@ -16903,14 +16906,86 @@
           void _this18.processQueue();
         }, safeDelay);
       }
-      /** @private */
+      /**
+       * The scheduling fields of every row that is still retryable.
+       *
+       * A cursor, and four scalars per row, because deciding *when* to wake needs
+       * no audio. `getAll()` deserialises whole rows — every queued recording —
+       * to read a retry count and a timestamp, and this runs on every scheduled
+       * wake rather than once per drain. On the devices this package is built
+       * for, spending the queue's entire retained size to compute a delay is the
+       * wrong trade at the worst moment: a phone low enough on memory to care is
+       * exactly the one with recordings still waiting to go.
+       *
+       * Held rows are dropped here, where the cursor already has them. `_hold()`
+       * leaves `retryCount` at the limit and the caller returns 0 for anything at
+       * the limit, so a single held recording rescheduled the queue immediately,
+       * forever, waking the device to look at something it will never retry.
+       *
+       * @private
+       * @returns {Promise<Array<{leaseUntil: number|null, retryCount: number,
+       *   lastAttempt: number|null}>>}
+       */
+    }, {
+      key: "_scheduleSnapshot",
+      value: (function () {
+        var _scheduleSnapshot2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+          var _this19 = this;
+          return _regenerator().w(function (_context17) {
+            while (1) switch (_context17.n) {
+              case 0:
+                if (this.db) {
+                  _context17.n = 1;
+                  break;
+                }
+                return _context17.a(2, []);
+              case 1:
+                return _context17.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this19.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value && value.held !== true) {
+                      rows.push({
+                        leaseUntil: typeof value.leaseUntil === "number" ? value.leaseUntil : null,
+                        retryCount: typeof value.retryCount === "number" ? value.retryCount : 0,
+                        lastAttempt: typeof value.lastAttempt === "number" ? value.lastAttempt : null
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee16, this);
+        }));
+        function _scheduleSnapshot() {
+          return _scheduleSnapshot2.apply(this, arguments);
+        }
+        return _scheduleSnapshot;
+      }() /** @private */)
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
           var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t9;
-          return _regenerator().w(function (_context17) {
-            while (1) switch (_context17.p = _context17.n) {
+          return _regenerator().w(function (_context18) {
+            while (1) switch (_context18.p = _context18.n) {
               case 0:
                 // Held entries are excluded. `_hold()` leaves `retryCount` at the
                 // limit, and the branch below returns 0 for anything at the limit — so
@@ -16919,12 +16994,10 @@
                 // On a phone with a failing upload and a low battery that is the worst
                 // possible loop to leave running.
                 now = Date.now();
-                _context17.n = 1;
-                return this.getAll();
+                _context18.n = 1;
+                return this._scheduleSnapshot();
               case 1:
-                live = _context17.v.filter(function (item) {
-                  return item.held !== true;
-                });
+                live = _context18.v;
                 // Leased rows are excluded from the immediate work, but their expiry
                 // still has to wake somebody.
                 //
@@ -16940,59 +17013,59 @@
                 /** @type {Array<Object>} */
                 pending = [];
                 _iterator2 = _createForOfIteratorHelper$1(live);
-                _context17.p = 2;
+                _context18.p = 2;
                 _iterator2.s();
               case 3:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context17.n = 6;
+                  _context18.n = 6;
                   break;
                 }
                 _item = _step2.value;
                 if (!(typeof _item.leaseUntil === "number" && _item.leaseUntil > now)) {
-                  _context17.n = 4;
+                  _context18.n = 4;
                   break;
                 }
                 untilExpiry = _item.leaseUntil - now;
                 if (earliestLease === null || untilExpiry < earliestLease) {
                   earliestLease = untilExpiry;
                 }
-                return _context17.a(3, 5);
+                return _context18.a(3, 5);
               case 4:
                 pending.push(_item);
               case 5:
-                _context17.n = 3;
+                _context18.n = 3;
                 break;
               case 6:
-                _context17.n = 8;
+                _context18.n = 8;
                 break;
               case 7:
-                _context17.p = 7;
-                _t9 = _context17.v;
+                _context18.p = 7;
+                _t9 = _context18.v;
                 _iterator2.e(_t9);
               case 8:
-                _context17.p = 8;
+                _context18.p = 8;
                 _iterator2.f();
-                return _context17.f(8);
+                return _context18.f(8);
               case 9:
                 if (!(pending.length === 0)) {
-                  _context17.n = 10;
+                  _context18.n = 10;
                   break;
                 }
-                return _context17.a(2, earliestLease);
+                return _context18.a(2, earliestLease);
               case 10:
                 nextDelay = null;
                 _i = 0, _pending = pending;
               case 11:
                 if (!(_i < _pending.length)) {
-                  _context17.n = 14;
+                  _context18.n = 14;
                   break;
                 }
                 item = _pending[_i];
                 if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context17.n = 12;
+                  _context18.n = 12;
                   break;
                 }
-                return _context17.a(2, 0);
+                return _context18.a(2, 0);
               case 12:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
@@ -17001,12 +17074,12 @@
                 }
               case 13:
                 _i++;
-                _context17.n = 11;
+                _context18.n = 11;
                 break;
               case 14:
-                return _context17.a(2, nextDelay);
+                return _context18.a(2, nextDelay);
             }
-          }, _callee16, this, [[2, 7, 8, 9]]);
+          }, _callee17, this, [[2, 7, 8, 9]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
@@ -17104,22 +17177,22 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
-      return _regenerator().w(function (_context18) {
-        while (1) switch (_context18.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
+      return _regenerator().w(function (_context19) {
+        while (1) switch (_context19.n) {
           case 0:
             if (offlineQueue.db) {
-              _context18.n = 2;
+              _context19.n = 2;
               break;
             }
-            _context18.n = 1;
+            _context19.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context18.a(2, offlineQueue);
+            return _context19.a(2, offlineQueue);
         }
-      }, _callee17);
+      }, _callee18);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
@@ -17136,18 +17209,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context19) {
-        while (1) switch (_context19.n) {
+      return _regenerator().w(function (_context20) {
+        while (1) switch (_context20.n) {
           case 0:
-            _context19.n = 1;
+            _context20.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context19.v;
-            return _context19.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context20.v;
+            return _context20.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee18);
+      }, _callee19);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -17168,22 +17241,22 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
       var q, list;
-      return _regenerator().w(function (_context20) {
-        while (1) switch (_context20.n) {
+      return _regenerator().w(function (_context21) {
+        while (1) switch (_context21.n) {
           case 0:
-            _context20.n = 1;
+            _context21.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context20.v;
-            _context20.n = 2;
+            q = _context21.v;
+            _context21.n = 2;
             return q.getAll();
           case 2:
-            list = _context20.v;
-            return _context20.a(2, list.length);
+            list = _context21.v;
+            return _context21.a(2, list.length);
         }
-      }, _callee19);
+      }, _callee20);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -17200,18 +17273,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21() {
       var q;
-      return _regenerator().w(function (_context21) {
-        while (1) switch (_context21.n) {
+      return _regenerator().w(function (_context22) {
+        while (1) switch (_context22.n) {
           case 0:
-            _context21.n = 1;
+            _context22.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context21.v;
-            return _context21.a(2, q.getHeld());
+            q = _context22.v;
+            return _context22.a(2, q.getHeld());
         }
-      }, _callee20);
+      }, _callee21);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -17226,18 +17299,18 @@
    * @returns {Promise<void>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22() {
       var q;
-      return _regenerator().w(function (_context22) {
-        while (1) switch (_context22.n) {
+      return _regenerator().w(function (_context23) {
+        while (1) switch (_context23.n) {
           case 0:
-            _context22.n = 1;
+            _context23.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context22.v;
-            return _context22.a(2, q.usage());
+            q = _context23.v;
+            return _context23.a(2, q.usage());
         }
-      }, _callee21);
+      }, _callee22);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
@@ -17256,18 +17329,18 @@
    * @returns {Promise<void>}
    */
   function _releaseHeldSubmission() {
-    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22(id) {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23(id) {
       var q;
-      return _regenerator().w(function (_context23) {
-        while (1) switch (_context23.n) {
+      return _regenerator().w(function (_context24) {
+        while (1) switch (_context24.n) {
           case 0:
-            _context23.n = 1;
+            _context24.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context23.v;
-            return _context23.a(2, q.releaseHold(id));
+            q = _context24.v;
+            return _context24.a(2, q.releaseHold(id));
         }
-      }, _callee22);
+      }, _callee23);
     }));
     return _releaseHeldSubmission.apply(this, arguments);
   }
@@ -17281,18 +17354,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _discardHeldSubmission() {
-    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23(id, reason) {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24(id, reason) {
       var q;
-      return _regenerator().w(function (_context24) {
-        while (1) switch (_context24.n) {
+      return _regenerator().w(function (_context25) {
+        while (1) switch (_context25.n) {
           case 0:
-            _context24.n = 1;
+            _context25.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context24.v;
-            return _context24.a(2, q.discardHeld(id, reason));
+            q = _context25.v;
+            return _context25.a(2, q.discardHeld(id, reason));
         }
-      }, _callee23);
+      }, _callee24);
     }));
     return _discardHeldSubmission.apply(this, arguments);
   }

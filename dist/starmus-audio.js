@@ -15038,6 +15038,14 @@
                   var req = store.get(id);
                   req.onsuccess = function () {
                     var item = req.result;
+                    // The *whole* mutation is gated on ownership, not only the
+                    // lease clear below. Guarding just the clear meant a late hold
+                    // from a drain whose lease had lapsed could still mark the new
+                    // owner's active attempt held — or mark it transferred — while
+                    // that upload was running.
+                    if (token !== null && item && item.leaseOwner !== token) {
+                      return;
+                    }
                     if (item) {
                       item.held = true;
                       item.heldReason = reason;
@@ -15707,6 +15715,12 @@
                   var req = store.get(id);
                   req.onsuccess = function () {
                     var item = req.result;
+                    // Ownership gates the whole write, as in `_hold()`: a late
+                    // failure from an expired drain must not rewrite the retry
+                    // state of an attempt another tab now owns.
+                    if (token !== null && item && item.leaseOwner !== token) {
+                      return;
+                    }
                     if (item) {
                       item.retryCount = retryCount;
                       item.lastAttempt = Date.now();
@@ -15783,7 +15797,7 @@
                 _iterator = _createForOfIteratorHelper$1(pending);
                 _context15.p = 6;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
-                  var item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileToken, detail, msg, delay, claimToken, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, result, _detail, _metadata11, _metadata12, _msg2, _msg3, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
+                  var item, id, audioBlob, fileName, formFields, retryCount, instanceId, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileToken, detail, msg, claimToken, delay, _metadata7, backfilled, _msg, _metadata8, _metadata$durationMs2, _metadata9, _metadata0, _metadata1, _metadata10, lastRenewal, result, _detail, _metadata11, _metadata12, _msg2, _msg3, nonRetryable, nextRetryCount, _msg4, _t, _t2, _t3, _t4;
                   return _regenerator().w(function (_context14) {
                     while (1) switch (_context14.p = _context14.n) {
                       case 0:
@@ -15871,39 +15885,42 @@
                       case 9:
                         return _context14.a(2, 0);
                       case 10:
-                        if (!(retryCount >= CONFIG.maxRetries)) {
+                        _context14.n = 11;
+                        return _this14._claim(id);
+                      case 11:
+                        claimToken = _context14.v;
+                        if (claimToken) {
                           _context14.n = 12;
                           break;
                         }
-                        _context14.n = 11;
-                        return _this14._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."));
-                      case 11:
                         return _context14.a(2, 0);
                       case 12:
+                        if (!(retryCount >= CONFIG.maxRetries)) {
+                          _context14.n = 14;
+                          break;
+                        }
+                        _context14.n = 13;
+                        return _this14._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
+                      case 13:
+                        return _context14.a(2, 0);
+                      case 14:
                         if (!(item.lastAttempt !== null)) {
-                          _context14.n = 13;
+                          _context14.n = 16;
                           break;
                         }
                         delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                         if (!(Date.now() - item.lastAttempt < delay)) {
-                          _context14.n = 13;
+                          _context14.n = 16;
                           break;
                         }
-                        return _context14.a(2, 0);
-                      case 13:
-                        _context14.n = 14;
-                        return _this14._claim(id);
-                      case 14:
-                        claimToken = _context14.v;
-                        if (claimToken) {
-                          _context14.n = 15;
-                          break;
-                        }
-                        return _context14.a(2, 0);
+                        _context14.n = 15;
+                        return _this14._releaseClaim(id, claimToken);
                       case 15:
-                        _context14.p = 15;
+                        return _context14.a(2, 0);
+                      case 16:
+                        _context14.p = 16;
                         if (isUploadId((_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId)) {
-                          _context14.n = 17;
+                          _context14.n = 18;
                           break;
                         }
                         backfilled = createUploadId(); // The local variable is replaced, not just the stored
@@ -15916,14 +15933,14 @@
                         metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
                           uploadId: backfilled
                         });
-                        _context14.n = 16;
+                        _context14.n = 17;
                         return _this14._setMetadata(id, metadata);
-                      case 16:
                       case 17:
-                        _context14.n = 20;
-                        break;
                       case 18:
-                        _context14.p = 18;
+                        _context14.n = 21;
+                        break;
+                      case 19:
+                        _context14.p = 19;
                         _t2 = _context14.v;
                         // `createUploadId()` throws where there is no secure
                         // randomness. Unguarded, that threw out of the whole loop:
@@ -15934,19 +15951,19 @@
                         // lived. One unusable row must cost one row.
                         _msg = _t2 && _t2.message ? _t2.message : String(_t2);
                         console.error("[Offline] Could not assign an upload id:", id, _msg);
-                        _context14.n = 19;
+                        _context14.n = 20;
                         return _this14._hold(id, "No upload identifier could be assigned: ".concat(_msg), false, claimToken);
-                      case 19:
-                        return _context14.a(2, 0);
                       case 20:
-                        _context14.p = 20;
+                        return _context14.a(2, 0);
+                      case 21:
+                        _context14.p = 21;
                         // The claim is renewed as bytes move, not sized to outlast
                         // the upload. A capture may run to MAX_DURATION_SECONDS and
                         // a progressing transfer is deliberately unbounded, so no
                         // fixed lease is both long enough for a real upload and
                         // short enough to free a row from a tab that died.
                         lastRenewal = Date.now();
-                        _context14.n = 21;
+                        _context14.n = 22;
                         return uploadWithPriority({
                           blob: audioBlob,
                           fileName: fileName,
@@ -15962,7 +15979,7 @@
                             void _this14._renewClaim(id, claimToken);
                           }
                         });
-                      case 21:
+                      case 22:
                         result = _context14.v;
                         // Set here, the moment the bytes are known to have landed —
                         // not at the end of the block. Setting it last made the
@@ -15998,9 +16015,9 @@
                         // Marked before it fires, so a failure between the two
                         // cannot produce a second boundary event for one upload
                         // when the entry is later released and reconciled.
-                        _context14.n = 22;
+                        _context14.n = 23;
                         return _this14._markCompletionEmitted(id, claimToken);
-                      case 22:
+                      case 23:
                         emitCompletionEvent(_detail);
                         if (_detail.format === "unknown") {
                           sparxstarIntegration.reportError("upload_format_unnamed", {
@@ -16011,13 +16028,13 @@
                             captureProfile: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.captureProfile) || null
                           });
                         }
-                        _context14.n = 29;
+                        _context14.n = 30;
                         break;
-                      case 23:
-                        _context14.p = 23;
+                      case 24:
+                        _context14.p = 24;
                         _t3 = _context14.v;
                         if (!uploaded) {
-                          _context14.n = 25;
+                          _context14.n = 26;
                           break;
                         }
                         // Reaching here after a successful transfer means the
@@ -16027,49 +16044,49 @@
                         // next drain does not upload it again.
                         _msg2 = _t3 && _t3.message ? _t3.message : String(_t3);
                         console.error("[Offline] Uploaded, but completion failed:", id, _msg2);
-                        _context14.n = 24;
+                        _context14.n = 25;
                         return _this14._hold(id, "Uploaded; completion handling failed: ".concat(_msg2), true, claimToken);
-                      case 24:
-                        return _context14.a(2, 0);
                       case 25:
+                        return _context14.a(2, 0);
+                      case 26:
                         _msg3 = _t3 && _t3.message ? _t3.message : String(_t3); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
                         nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(_msg3);
                         if (!nonRetryable) {
-                          _context14.n = 27;
+                          _context14.n = 28;
                           break;
                         }
-                        _context14.n = 26;
+                        _context14.n = 27;
                         return _this14._hold(id, "Upload rejected and not retryable: ".concat(_msg3), false, claimToken);
-                      case 26:
-                        _context14.n = 28;
-                        break;
                       case 27:
-                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        _context14.n = 28;
-                        return _this14._updateRetry(id, nextRetryCount, _msg3, claimToken);
-                      case 28:
-                        return _context14.a(2, 0);
-                      case 29:
-                        _context14.p = 29;
-                        _context14.n = 30;
-                        return _this14.remove(id);
-                      case 30:
-                        _context14.n = 32;
+                        _context14.n = 29;
                         break;
+                      case 28:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context14.n = 29;
+                        return _this14._updateRetry(id, nextRetryCount, _msg3, claimToken);
+                      case 29:
+                        return _context14.a(2, 0);
+                      case 30:
+                        _context14.p = 30;
+                        _context14.n = 31;
+                        return _this14.remove(id);
                       case 31:
-                        _context14.p = 31;
+                        _context14.n = 33;
+                        break;
+                      case 32:
+                        _context14.p = 32;
                         _t4 = _context14.v;
                         _msg4 = _t4 && _t4.message ? _t4.message : String(_t4);
                         console.error("[Offline] Uploaded but could not clear the entry:", id, _msg4);
-                        _context14.n = 32;
+                        _context14.n = 33;
                         return _this14._hold(id, "Uploaded; local cleanup failed: ".concat(_msg4), true, claimToken);
-                      case 32:
+                      case 33:
                         return _context14.a(2);
                     }
-                  }, _loop, null, [[29, 31], [20, 23], [15, 18], [6, 8]]);
+                  }, _loop, null, [[30, 32], [21, 24], [16, 19], [6, 8]]);
                 });
                 _iterator.s();
               case 7:
@@ -16856,13 +16873,6 @@
               if (result && result.success) {
                 transferred = true;
               }
-              store.dispatch({
-                type: "starmus/submit-complete",
-                payload: result
-              });
-
-              // Emit starmus:complete — boundary between recording and server-side processing.
-              // Nothing downstream triggers until this event fires.
               if (result && result.success) {
                 // Described from the submit-time snapshot, not from the store as
                 // it stands now.
@@ -16889,6 +16899,20 @@
                   calibrationApplied: !!metadata.calibration
                 });
                 emitCompletionEvent(detail);
+
+                // Dispatched *after* the boundary event, not before.
+                //
+                // Store listeners run without isolation, so one of them throwing
+                // aborted this function before `starmus:complete` was emitted —
+                // and by then `transferred` is true, so the catch deliberately
+                // does not queue. An accepted upload lost its boundary event and
+                // its local record together, over a UI listener's bug. The event
+                // is built entirely from the submit-time snapshot, so nothing in
+                // it depends on this dispatch having happened first.
+                store.dispatch({
+                  type: "starmus/submit-complete",
+                  payload: result
+                });
                 redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
                 if (redirect) {
                   setTimeout(function () {

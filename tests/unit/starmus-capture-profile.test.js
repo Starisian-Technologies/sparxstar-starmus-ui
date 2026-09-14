@@ -538,3 +538,49 @@ test("a recording keeps the profile set when its microphone opened", () => {
     assert.equal(source.file, null, "while the stale file does not");
     assert.equal(source.transcript, "", "nor the stale draft");
 });
+
+test("the boundary event is emitted before the store dispatch that can throw", async () => {
+    // Store listeners run without isolation. Dispatching first meant one of
+    // them throwing aborted `handleSubmit()` before `starmus:complete` fired —
+    // and by then `transferred` is true, so the catch deliberately does not
+    // queue. An accepted upload lost its boundary event and its local record
+    // together, over a UI listener's bug.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const emit = source.indexOf("emitCompletionEvent(detail);");
+    const dispatch = source.indexOf('store.dispatch({ type: "starmus/submit-complete"');
+    assert.ok(emit > -1 && dispatch > -1, "both are present");
+    assert.ok(emit < dispatch, "the boundary event does not depend on the dispatch succeeding");
+});
+
+test("every write to a queued row happens under a claim", async () => {
+    // Holding, retrying and backfilling are all mutations. An unclaimed hold
+    // could mark a row another tab was actively uploading, and a late write
+    // from a drain whose lease had lapsed could rewrite the new owner's state.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const claim = source.indexOf("const claimToken = await this._claim(id);");
+    for (const [label, needle] of [
+        ["the retry-limit hold", "`Upload failed ${retryCount} times"],
+        ["the id backfill", "const backfilled = createUploadId();"],
+        ["the transfer", "await uploadWithPriority({"],
+    ]) {
+        const at = source.indexOf(needle);
+        assert.ok(at > -1, `${label} is present`);
+        assert.ok(claim < at, `${label} happens after the claim`);
+    }
+
+    // And the mutation itself is gated on still owning the row — not merely the
+    // lease clear that follows it.
+    const holdBody = source.slice(source.indexOf("async _hold(id, reason"));
+    const gate = holdBody.indexOf("item.leaseOwner !== token");
+    const mutate = holdBody.indexOf("item.held = true;");
+    assert.ok(gate > -1 && mutate > -1 && gate < mutate, "_hold checks ownership before writing");
+
+    const retryBody = source.slice(source.indexOf("async _updateRetry(id, retryCount"));
+    const rGate = retryBody.indexOf("item.leaseOwner !== token");
+    const rMutate = retryBody.indexOf("item.retryCount = retryCount;");
+    assert.ok(rGate > -1 && rMutate > -1 && rGate < rMutate, "_updateRetry does too");
+});

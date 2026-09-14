@@ -480,6 +480,14 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
+                // The *whole* mutation is gated on ownership, not only the
+                // lease clear below. Guarding just the clear meant a late hold
+                // from a drain whose lease had lapsed could still mark the new
+                // owner's active attempt held — or mark it transferred — while
+                // that upload was running.
+                if (token !== null && item && item.leaseOwner !== token) {
+                    return;
+                }
                 if (item) {
                     item.held = true;
                     item.heldReason = reason;
@@ -968,6 +976,12 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
+                // Ownership gates the whole write, as in `_hold()`: a late
+                // failure from an expired drain must not rewrite the retry
+                // state of an attempt another tab now owns.
+                if (token !== null && item && item.leaseOwner !== token) {
+                    return;
+                }
                 if (item) {
                     item.retryCount = retryCount;
                     item.lastAttempt = Date.now();
@@ -1093,6 +1107,27 @@ class OfflineQueue {
                     continue;
                 }
 
+                // Claimed before *anything* is written for this row, and
+                // released on every exit that leaves it in the queue.
+                //
+                // Without this, a second tab — with its own `isProcessing` flag
+                // and its own view of the same store — uploaded the same row in
+                // parallel, spending a contributor's bandwidth twice on one
+                // recording and firing `starmus:complete` twice for it.
+                //
+                // Before the retry-limit hold as well as the backfill and the
+                // upload: holding is a mutation like any other, and an unclaimed
+                // hold could mark a row that another tab was actively uploading.
+                // Two tabs reaching an id-less row together would likewise each
+                // mint a different UUID, one persisting over the other, leaving
+                // the tab that uploaded with a fingerprint the stored row no
+                // longer matches — unable to resume its own partial.
+                const claimToken = await this._claim(id);
+                if (!claimToken) {
+                    debugLog("[Offline] Another drain holds this entry; skipping:", id);
+                    continue;
+                }
+
                 if (retryCount >= CONFIG.maxRetries) {
                     // Held, not removed. Exhausting the retries says the queue
                     // cannot fix this on its own; it does not say the recording
@@ -1100,6 +1135,8 @@ class OfflineQueue {
                     await this._hold(
                         id,
                         `Upload failed ${retryCount} times; the recording is held here and needs attention.`,
+                        false,
+                        claimToken,
                     );
                     continue;
                 }
@@ -1108,27 +1145,13 @@ class OfflineQueue {
                     const delay =
                         CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
                     if (Date.now() - item.lastAttempt < delay) {
+                        // Still inside its backoff. The claim goes back rather
+                        // than being held for the lease: the backoff is seconds
+                        // and the lease is minutes, so keeping it would block
+                        // the row long after it became eligible.
+                        await this._releaseClaim(id, claimToken);
                         continue;
                     }
-                }
-
-                // Claimed before anything is written for this attempt, and
-                // released on every exit from it.
-                //
-                // Without this, a second tab — with its own `isProcessing` flag
-                // and its own view of the same store — uploaded the same row in
-                // parallel, spending a contributor's bandwidth twice on one
-                // recording and firing `starmus:complete` twice for it.
-                //
-                // Before the backfill below, not after: two tabs reaching an
-                // id-less row together would each mint a *different* UUID and
-                // one would persist over the other, leaving the tab that
-                // uploaded with a fingerprint the stored row no longer matches
-                // — unable to resume its own partial.
-                const claimToken = await this._claim(id);
-                if (!claimToken) {
-                    debugLog("[Offline] Another drain holds this entry; skipping:", id);
-                    continue;
                 }
 
                 // Entries queued before the submission id existed have no

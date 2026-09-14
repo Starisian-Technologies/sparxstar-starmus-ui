@@ -278,10 +278,6 @@ export function initCore(store, instanceId, env) {
                 transferred = true;
             }
 
-            store.dispatch({ type: "starmus/submit-complete", payload: result });
-
-            // Emit starmus:complete — boundary between recording and server-side processing.
-            // Nothing downstream triggers until this event fires.
             if (result && result.success) {
                 // Described from the submit-time snapshot, not from the store as
                 // it stands now.
@@ -309,6 +305,17 @@ export function initCore(store, instanceId, env) {
                 });
 
                 emitCompletionEvent(detail);
+
+            // Dispatched *after* the boundary event, not before.
+            //
+            // Store listeners run without isolation, so one of them throwing
+            // aborted this function before `starmus:complete` was emitted —
+            // and by then `transferred` is true, so the catch deliberately
+            // does not queue. An accepted upload lost its boundary event and
+            // its local record together, over a UI listener's bug. The event
+            // is built entirely from the submit-time snapshot, so nothing in
+            // it depends on this dispatch having happened first.
+            store.dispatch({ type: "starmus/submit-complete", payload: result });
 
                 const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
                 if (redirect) {

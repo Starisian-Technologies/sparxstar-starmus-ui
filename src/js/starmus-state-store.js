@@ -191,6 +191,18 @@
                     state.status === "submitting" &&
                     Boolean(errObj.uploadId) &&
                     state.submission?.superseded === true;
+                // A submission that has ended leaves no record of itself.
+                //
+                // These branches moved `status` out of `submitting` while
+                // `submission` kept the finished attempt's `activeId`, progress
+                // and `superseded` flag. A late completion naming that id then
+                // matched and drove the UI back to `complete` over a submission
+                // that had already failed, and everything reading `submission`
+                // in between was reading a description of something that was
+                // no longer happening.
+                const submissionEnded =
+                    submissionFailed || deliveredThenFailed || supersededThenFailed;
+
                 return merge(state, {
                     status: shouldResetStatus
                         ? "ready"
@@ -201,6 +213,14 @@
                             : supersededThenFailed
                               ? "ready_to_submit"
                               : state.status,
+                    submission: submissionEnded
+                        ? {
+                              progress: deliveredThenFailed ? 1 : 0,
+                              isQueued: false,
+                              activeId: null,
+                              superseded: false,
+                          }
+                        : state.submission,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });

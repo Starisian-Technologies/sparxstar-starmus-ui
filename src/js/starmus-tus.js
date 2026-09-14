@@ -220,11 +220,6 @@ function getConfig() {
 /* ---- Helpers ---- */
 
 /**
- * Metadata this module owns. A host form field may not overwrite one.
- *
- * @type {ReadonlySet<string>}
- */
-/**
  * Metadata keys this module owns that are only set *conditionally*.
  *
  * Everything else reserved is derived from what was actually assigned (see
@@ -513,6 +508,14 @@ export async function uploadTus(
             // prompt — collide on one URL-storage key and the second resumes
             // into the first's half-finished resource. Keying on the id makes
             // that impossible.
+            //
+            // Returns a Promise, and must. tus-js-client calls this as
+            // `this.options.fingerprint(file, options).then(…)` — verified in
+            // the installed 4.3.1 — so a plain string has no `.then` and throws
+            // where the resume lookup happens. Review has suggested simplifying
+            // it to a string on the grounds that the option is "commonly
+            // synchronous"; that would break resumption, which is the property
+            // this fingerprint exists to protect.
             fingerprint: () => Promise.resolve(`starmus-upload-${uploadId}`),
 
             metadata: tusMetadata,

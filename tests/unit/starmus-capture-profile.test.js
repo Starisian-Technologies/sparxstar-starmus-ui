@@ -1226,3 +1226,59 @@ test("the resume fingerprint outlives the record of the transfer", async () => {
     // And it is still what the resume path looks for.
     assert.match(source, /findPreviousUploads\(\)/, "the next attempt resumes by it");
 });
+
+test("a submission that ended leaves no record of itself", async () => {
+    // These branches moved `status` out of `submitting` while `submission` kept
+    // the finished attempt's `activeId`. A late completion naming that id then
+    // matched and drove the UI back to `complete` over a submission that had
+    // already failed.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull", retryable: false },
+    });
+
+    const afterFailure = store.getState();
+    assert.equal(afterFailure.status, "ready_to_submit");
+    assert.equal(afterFailure.submission.activeId, null, "the failed attempt is not still in flight");
+    assert.equal(afterFailure.submission.superseded, false);
+    assert.equal(afterFailure.submission.isQueued, false);
+
+    // The late completion of that failed attempt does not resurrect it.
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-1" });
+    assert.equal(
+        store.getState().status,
+        "complete",
+        "an unidentified in-flight submission accepts it, which is the documented rule",
+    );
+});
+
+test("tus fingerprint stays a Promise, because the client requires one", async () => {
+    // tus-js-client 4.3.1 calls `options.fingerprint(file, options).then(...)`.
+    // A plain string has no `.then` and throws exactly where the resume lookup
+    // happens — so "simplifying" this breaks resumption, which is the property
+    // the custom fingerprint exists to provide.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    assert.match(
+        source,
+        /fingerprint: \(\) => Promise\.resolve\(/,
+        "the fingerprint resolves rather than returning a bare string",
+    );
+
+    const client = readFileSync(
+        "node_modules/tus-js-client/lib.es5/upload.js",
+        "utf8",
+    );
+    assert.match(
+        client,
+        /this\.options\.fingerprint\(this\.file, this\.options\)\.then\(/,
+        "and the installed client is what requires it",
+    );
+});

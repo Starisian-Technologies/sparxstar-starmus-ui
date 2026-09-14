@@ -408,7 +408,7 @@ if (fs.existsSync(tusFile)) {
     }
     if (stale.length > 0) {
         console.log(
-            `❌ ai_manifest.json lists ${stale.length} symbol(s) that are no longer exported: ${stale.join(", ")}. A manifest entry pointing at nothing is the drift AGENTS.md's rename/remove rule exists to prevent.`,
+            `❌ ai_manifest.json lists ${stale.length} symbol(s) that are no longer present in the source file it names: ${stale.join(", ")}. A manifest entry pointing at nothing is the drift AGENTS.md's rename/remove rule exists to prevent.`,
         );
         ok = false;
     }

@@ -2893,8 +2893,24 @@
             // The replaced source goes back to submittable, exactly as it
             // does when a superseded upload completes normally.
             var supersededThenFailed = state.status === "submitting" && Boolean(errObj.uploadId) && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) === true;
+            // A submission that has ended leaves no record of itself.
+            //
+            // These branches moved `status` out of `submitting` while
+            // `submission` kept the finished attempt's `activeId`, progress
+            // and `superseded` flag. A late completion naming that id then
+            // matched and drove the UI back to `complete` over a submission
+            // that had already failed, and everything reading `submission`
+            // in between was reading a description of something that was
+            // no longer happening.
+            var submissionEnded = submissionFailed || deliveredThenFailed || supersededThenFailed;
             return merge(state, {
               status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : supersededThenFailed ? "ready_to_submit" : state.status,
+              submission: submissionEnded ? {
+                progress: deliveredThenFailed ? 1 : 0,
+                isQueued: false,
+                activeId: null,
+                superseded: false
+              } : state.submission,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -13822,11 +13838,6 @@
   /* ---- Helpers ---- */
 
   /**
-   * Metadata this module owns. A host form field may not overwrite one.
-   *
-   * @type {ReadonlySet<string>}
-   */
-  /**
    * Metadata keys this module owns that are only set *conditionally*.
    *
    * Everything else reserved is derived from what was actually assigned (see
@@ -14163,6 +14174,14 @@
                 // prompt — collide on one URL-storage key and the second resumes
                 // into the first's half-finished resource. Keying on the id makes
                 // that impossible.
+                //
+                // Returns a Promise, and must. tus-js-client calls this as
+                // `this.options.fingerprint(file, options).then(…)` — verified in
+                // the installed 4.3.1 — so a plain string has no `.then` and throws
+                // where the resume lookup happens. Review has suggested simplifying
+                // it to a string on the grounds that the option is "commonly
+                // synchronous"; that would break resumption, which is the property
+                // this fingerprint exists to protect.
                 fingerprint: function fingerprint() {
                   return Promise.resolve("starmus-upload-".concat(uploadId));
                 },

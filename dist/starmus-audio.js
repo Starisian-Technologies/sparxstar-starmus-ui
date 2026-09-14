@@ -14446,6 +14446,22 @@
     var consent = readContributorConsent();
     return {
       sessionId: input.instanceId,
+      // What this event actually witnesses.
+      //
+      // `transferred` means the media ingest service acknowledged the last
+      // chunk. It does **not** mean the Spoken Audio Node accepted the asset:
+      // ADR-038 splits transport from acceptance, and no acknowledgement
+      // contract exists on that seam yet, so nothing reaching this client can
+      // observe acceptance. Consumers that need acceptance must wait for the
+      // Node's own signal once that contract is defined; reading this event
+      // as acceptance would treat "the bytes arrived" as "the platform has
+      // it", which is exactly the confusion the three-party split exists to
+      // prevent.
+      //
+      // The field is present from the start, with one value, so that adding
+      // `accepted` later is an extension rather than a breaking change to a
+      // shape consumers had to infer.
+      stage: "transferred",
       uploadId: resolveUploadId(input.result),
       durationMs: (_input$durationMs = input.durationMs) !== null && _input$durationMs !== void 0 ? _input$durationMs : 0,
       sampleRate: (_attainment$actual$sa = attainment === null || attainment === void 0 || (_attainment$actual = attainment.actual) === null || _attainment$actual === void 0 ? void 0 : _attainment$actual.sampleRate) !== null && _attainment$actual$sa !== void 0 ? _attainment$actual$sa : null,

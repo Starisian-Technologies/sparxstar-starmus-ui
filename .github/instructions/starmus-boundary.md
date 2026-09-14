@@ -38,13 +38,30 @@ any product without inheriting a CMS.
 
 | Concern | Owner |
 | --- | --- |
-| Server-side ingestion, validation, integrity, immutable storage, derivatives, processing jobs | Spoken Audio Node |
+| Chunk receipt, chunk-level validation, object storage operations (Cloudflare R2), short-lived access URLs | media ingest service (`files.sparxstar.com`) |
+| Authorization, acceptance, asset-level integrity, derivatives, processing jobs | Spoken Audio Node |
 | Acoustic measurement — pitch, formant, intensity, duration | Spoken Audio Node |
 | Canonical transcription, translation, linguistic interpretation, human correction | ESU |
 | Elicitation script presentation, pacing, reader position | elicitation pacing package |
 | Speech/silence boundaries of record (server-side VAD) | Spoken Audio Node |
 | Word-level alignment of record | ESU (Yahura) |
-| Storage, derivatives, waveform data of a stored recording, release rendering | Spoken Audio Node |
+| Derivatives, waveform data of a stored recording, release rendering | Spoken Audio Node |
+| **The accepted acoustic asset itself** — its identity, integrity and lifecycle state | Spoken Audio Node |
+
+### Why storage is not the Node's
+
+An earlier version of this table gave the Spoken Audio Node "immutable storage"
+and "storage" outright. ADR-038 moved transport and storage operations off the
+Node to the standalone media ingest service, leaving the Node authorizing and
+accepting; the backend is Cloudflare R2, recorded as an owner ruling in
+`contracts/spoken-audio-capture-to-ingestion.md`. The table above had not caught
+up, and a boundary file that names the wrong owner is worse than none — it is
+the document a contributor checks before deciding who to call.
+
+The split that matters to this repository: **chunk-level** integrity is the
+transport's, **asset-level** integrity is the Node's, and neither is the capture
+UI's. This package holds a recording on a device and is responsible for it until
+the Node accepts it. It never holds the accepted asset.
 
 ## Rules that bind this repository now
 

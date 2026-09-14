@@ -1,6 +1,7 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import babel from "@rollup/plugin-babel";
+import terser from "@rollup/plugin-terser";
 
 const sharedPlugins = [
     {
@@ -124,17 +125,45 @@ function pluginsFor(targets, polyfill = true) {
     ];
 }
 
+
+/**
+ * A second, minified render of a bundle, written only so the size budget can
+ * measure what a device actually downloads.
+ *
+ * `dist/` is emitted unminified on purpose — the consuming build minifies — so
+ * pointing `size-limit` at it measured an artifact no user receives. 28.5% of
+ * `starmus-audio.js` was explanatory comments, and holding the budget against
+ * that number meant deleting reasoning to satisfy a metric that measures
+ * reasoning. These files are the measurement target and nothing else: they are
+ * gitignored, never referenced by the package, and never shipped.
+ *
+ * @param {string} file The shipped output path, e.g. `dist/starmus-audio.js`.
+ * @returns {Object} A rollup output entry.
+ */
+function sizeProbe(file) {
+    return {
+        file: file.replace(/^dist\//, "dist/.size/").replace(/\.js$/, ".min.js"),
+        format: "iife",
+        name: "StarmusSizeProbe",
+        sourcemap: false,
+        plugins: [terser()],
+    };
+}
+
 export default [
     // Main Bundle (unminified — consuming build minifies)
     {
         input: "src/js/starmus-main.js",
 
-        output: {
-            file: "dist/starmus-audio.js",
-            format: "iife",
-            name: "StarmusAudio",
-            sourcemap: false,
-        },
+        output: [
+            {
+                file: "dist/starmus-audio.js",
+                format: "iife",
+                name: "StarmusAudio",
+                sourcemap: false,
+            },
+            sizeProbe("dist/starmus-audio.js"),
+        ],
 
         external: [],
 
@@ -147,12 +176,15 @@ export default [
     {
         input: "src/js/starmus-transcript-provider.js",
 
-        output: {
-            file: "dist/starmus-transcript.js",
-            format: "iife",
-            name: "StarmusTranscript",
-            sourcemap: false,
-        },
+        output: [
+            {
+                file: "dist/starmus-transcript.js",
+                format: "iife",
+                name: "StarmusTranscript",
+                sourcemap: false,
+            },
+            sizeProbe("dist/starmus-transcript.js"),
+        ],
 
         external: [],
 
@@ -168,11 +200,14 @@ export default [
     {
         input: "src/js/starmus-transcript-provider.js",
 
-        output: {
-            file: "dist/starmus-transcript.esm.js",
-            format: "es",
-            sourcemap: false,
-        },
+        output: [
+            {
+                file: "dist/starmus-transcript.esm.js",
+                format: "es",
+                sourcemap: false,
+            },
+            { ...sizeProbe("dist/starmus-transcript.esm.js"), format: "es", name: undefined },
+        ],
 
         external: [],
 

@@ -141,6 +141,14 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
     // client-generated UUID that was sent as TUS `upload_uuid` metadata.
     // Empty only when neither is present. Consumers cannot tell which they
     // received, so do not treat this as proof the server acknowledged.
+    // What this event witnesses. `transferred` means the media ingest service
+    // acknowledged the last chunk — NOT that the Spoken Audio Node accepted
+    // the asset. ADR-038 splits transport from acceptance and no
+    // acknowledgement contract exists on that seam yet, so nothing this client
+    // can see observes acceptance. A consumer needing acceptance waits for the
+    // Node's own signal once that contract exists. One value today; `accepted`
+    // is the extension point.
+    stage: 'transferred',
     uploadId: string,
     durationMs: number,
     // What the device actually delivered, not what the profile asked for.
@@ -175,6 +183,15 @@ document.dispatchEvent(new CustomEvent('starmus:complete', {
 
 This event is the boundary between recording and processing. Nothing downstream
 triggers until this event fires. If extraction runs before this event, it is a bug.
+
+**It is not an acceptance signal.** It fires when the transport acknowledges the
+last chunk. Whether the Spoken Audio Node accepted the asset is a separate
+question this client cannot answer: ADR-038 splits transport from acceptance and
+the capture→ingestion **acknowledgement contract is not defined yet**. Until it
+is, the local copy is removed on transfer completion, which is the only thing
+the client can observe — and that is a known gap, not a design: an asset the
+Node later rejects has already lost its only local copy. Closing it needs the
+contract, not more client code.
 
 ---
 
@@ -479,7 +496,7 @@ JavaScript and TypeScript --- CI Fail Conditions
 | FAIL | API call without timeout (`AbortSignal.timeout(5000)` minimum) |
 | FAIL | Event listener without throttle or debounce |
 | FAIL | Continuous interval without bounded execution |
-| FAIL | JS bundle exceeds 150 KB gzipped. Enforced by `pnpm run size-check` (size-limit, brotli budgets in `package.json`) — the budget that fails a build is the one there, and the two are kept consistent. **The budget is measured on the unminified `dist/` artifact, which is not what a user downloads:** `roll-up.config.mjs` emits unminified output on purpose and the consuming build minifies. Measured 2026-09-14, `starmus-audio.js` was 127.3 kB brotli as built and 91.1 kB with comments stripped — 28.5% of the measured bytes are explanatory comments that no device ever receives. The `starmus-audio.js` budget is 140 kB to leave room for that gap; the number to shrink when it binds is the shipped one, and the durable fix is to measure a minified artifact instead. Raising a budget is otherwise not the answer — the transcript bundle went over and the cause was fixed, not the limit. |
+| FAIL | JS bundle exceeds 150 KB gzipped. Enforced by `pnpm run size-check` (size-limit, brotli budgets in `package.json`) — the budget that fails a build is the one there, and the two are kept consistent. **The budget measures the minified artifact, which is what a device downloads.** `roll-up.config.mjs` emits `dist/` unminified on purpose (the consuming build minifies) and additionally renders a minified copy under `dist/.size/` for measurement only — gitignored, never referenced by the package, never shipped. Measuring `dist/` directly was measuring prose: on 2026-09-14 `starmus-audio.js` was 127.3 kB brotli as built and **61.3 kB minified**, so a budget read off the unminified file failed at 130 kB while the real payload had more than half its allowance unused. Raising a budget is not the answer when a bundle grows — the transcript bundle went over and the cause was fixed, not the limit. |
 | FAIL | Blob in memory exceeds 5 MB |
 | FAIL | Sensor active beyond 5000ms without auto-disable |
 | FAIL | Infinite retry loop --- max 3 attempts with exponential backoff |

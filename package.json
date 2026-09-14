@@ -42,19 +42,23 @@
   },
   "size-limit": [
     {
-      "path": "dist/starmus-audio.js",
-      "limit": "140 KB"
+      "name": "starmus-audio.js (minified, as shipped)",
+      "path": "dist/.size/starmus-audio.min.js",
+      "limit": "130 KB"
     },
     {
+      "name": "starmus-audio.css",
       "path": "dist/starmus-audio.css",
       "limit": "20 KB"
     },
     {
-      "path": "dist/starmus-transcript.js",
+      "name": "starmus-transcript.js (minified, as shipped)",
+      "path": "dist/.size/starmus-transcript.min.js",
       "limit": "30 KB"
     },
     {
-      "path": "dist/starmus-transcript.esm.js",
+      "name": "starmus-transcript.esm.js (minified, as shipped)",
+      "path": "dist/.size/starmus-transcript.esm.min.js",
       "limit": "30 KB"
     }
   ],

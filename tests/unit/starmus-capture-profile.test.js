@@ -1250,11 +1250,17 @@ test("a submission that ended leaves no record of itself", async () => {
     assert.equal(afterFailure.submission.isQueued, false);
 
     // The late completion of that failed attempt does not resurrect it.
+    //
+    // This assertion previously expected `complete`, on the reasoning that a
+    // cleared `activeId` means "nothing named itself, so accept". That was
+    // wrong and it was encoding the defect: after a terminal failure there is
+    // no submission in flight, and a completion arriving late for the attempt
+    // that just failed must not mark the recording delivered.
     store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-1" });
     assert.equal(
         store.getState().status,
-        "complete",
-        "an unidentified in-flight submission accepts it, which is the documented rule",
+        "ready_to_submit",
+        "a completion for a failed attempt does not resurrect it",
     );
 });
 
@@ -1376,4 +1382,27 @@ test("the transport's attempt budget is the one AGENTS.md states", async () => {
     assert.equal(entries.length + 1, 3, "initial request plus retries is three attempts");
 
     assert.match(agents, /[Mm]ax 3 attempts/, "and three is what the rule says");
+});
+
+test("host configuration cannot reopen the duplicate-upload window", async () => {
+    // `removeFingerprintOnSuccess: false` is what makes a crash between a
+    // successful transfer and the queue's durable mark recoverable, and the
+    // stall watchdog has to stay inside the claim lease derived from it. Both
+    // were merged from `window.starmusTus` like ordinary preferences, so a
+    // config key could reintroduce a second upload of an accepted recording,
+    // or let another tab claim a row whose transfer is still running.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    const afterMerge = source.slice(source.indexOf("for (const [key, val] of Object.entries(globalCfg))"));
+    assert.match(
+        afterMerge,
+        /merged\.removeFingerprintOnSuccess = false;/,
+        "the fingerprint setting is re-asserted after the host merge",
+    );
+    assert.match(
+        afterMerge,
+        /merged\.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;/,
+        "and an over-long watchdog is clamped to what the lease covers",
+    );
 });

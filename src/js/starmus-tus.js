@@ -225,6 +225,33 @@ function getConfig() {
         Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024,
         512 * 1024,
     );
+
+    // Two values a host does not get to set, because they are not preferences.
+    //
+    // `removeFingerprintOnSuccess` false is what makes a crash between a
+    // successful transfer and the queue's durable mark recoverable. A host
+    // setting it true reopens that window and the recording is uploaded a
+    // second time — a cost paid by the contributor, from a config key.
+    merged.removeFingerprintOnSuccess = false;
+
+    // The stall watchdog must stay inside the offline queue's claim lease,
+    // which is this constant plus a minute. A host raising the timeout past
+    // that lets the watchdog run after the claim has expired, so a second tab
+    // takes a row whose transfer is still alive — the exact race the lease was
+    // derived from this constant to prevent. A lower value is harmless and is
+    // left alone.
+    if (
+        !Number.isFinite(merged.stallTimeoutMs) ||
+        merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS
+    ) {
+        if (Number.isFinite(merged.stallTimeoutMs)) {
+            console.warn(
+                `[TUS] stallTimeoutMs ${merged.stallTimeoutMs}ms exceeds the ${UPLOAD_STALL_TIMEOUT_MS}ms the offline queue's claim lease covers; using ${UPLOAD_STALL_TIMEOUT_MS}ms. A longer watchdog would let another tab claim a row whose upload is still running.`,
+            );
+        }
+        merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
+    }
+
     return merged;
 }
 

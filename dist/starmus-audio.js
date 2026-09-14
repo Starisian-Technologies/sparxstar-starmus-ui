@@ -3198,6 +3198,14 @@
             // either: it is indistinguishable from the stale one this
             // guard exists to reject. A completion is only unconditional
             // when nothing named itself as being in flight.
+            // Only while something is actually being submitted. After a
+            // terminal error the reducer clears `activeId` and returns to
+            // `ready_to_submit` — at which point an id check alone let a
+            // late completion through, because `null` matches anything,
+            // and marked the failed or replacement source complete.
+            if (state.status !== "submitting") {
+              return state;
+            }
             var active = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
             var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
             if (active !== null && active !== finished) {
@@ -13864,6 +13872,27 @@
       merged[_key] = _val;
     }
     merged.chunkSize = Math.min(Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024, 512 * 1024);
+
+    // Two values a host does not get to set, because they are not preferences.
+    //
+    // `removeFingerprintOnSuccess` false is what makes a crash between a
+    // successful transfer and the queue's durable mark recoverable. A host
+    // setting it true reopens that window and the recording is uploaded a
+    // second time — a cost paid by the contributor, from a config key.
+    merged.removeFingerprintOnSuccess = false;
+
+    // The stall watchdog must stay inside the offline queue's claim lease,
+    // which is this constant plus a minute. A host raising the timeout past
+    // that lets the watchdog run after the claim has expired, so a second tab
+    // takes a row whose transfer is still alive — the exact race the lease was
+    // derived from this constant to prevent. A lower value is harmless and is
+    // left alone.
+    if (!Number.isFinite(merged.stallTimeoutMs) || merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS) {
+      if (Number.isFinite(merged.stallTimeoutMs)) {
+        console.warn("[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms exceeds the ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms the offline queue's claim lease covers; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms. A longer watchdog would let another tab claim a row whose upload is still running."));
+      }
+      merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
+    }
     return merged;
   }
 
@@ -14746,32 +14775,6 @@
     }));
     return true;
   }
-
-  var es_array_map = {};
-
-  var hasRequiredEs_array_map;
-
-  function requireEs_array_map () {
-  	if (hasRequiredEs_array_map) return es_array_map;
-  	hasRequiredEs_array_map = 1;
-  	var $ = require_export();
-  	var $map = requireArrayIteration().map;
-  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
-
-  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('map');
-
-  	// `Array.prototype.map` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.map
-  	// with adding support of @@species
-  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
-  	  map: function map(callbackfn /* , thisArg */) {
-  	    return $map(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-  	return es_array_map;
-  }
-
-  requireEs_array_map();
 
   var es_number_constructor = {};
 
@@ -16433,6 +16436,20 @@
                   tx.oncomplete = function () {
                     return resolve();
                   };
+                  // Settled on failure too. Without these the promise stayed pending
+                  // forever when the transaction aborted — a quota error, a closing
+                  // connection — and `processQueue()` awaits it with
+                  // `isProcessing = true` already set. The flag then never cleared,
+                  // so every later drain returned at its first line and every queued
+                  // recording was stranded for the life of the page. A rejection here
+                  // is caught by the drain and rescheduled; silence was the only
+                  // outcome that could not recover.
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error || new Error("OfflineQueue: the retry update was aborted."));
+                  };
                 }));
             }
           }, _callee14, this);
@@ -16632,7 +16649,8 @@
                         return _context15.a(2, 0);
                       case 14:
                         claimToken = claim.token; // From here on the row is the one the claim transaction read,
-                        // not the `getAll()` snapshot this loop is iterating. Another
+                        // not the `_pendingSummaries()` listing this loop is iterating.
+                        // Another
                         // tab can record a failed attempt and release a row between the
                         // two, and continuing from the snapshot then reused a stale
                         // `retryCount` and `lastAttempt` — skipping the backoff — and a
@@ -17433,6 +17451,72 @@
           return _getNextProcessDelay2.apply(this, arguments);
         }
         return _getNextProcessDelay;
+      }()
+      /**
+       * Id, retry count and last error for every queued row — and no recordings.
+       *
+       * The shape `starmus/offline/queue_updated` has always carried; what
+       * changed is that producing it no longer costs the memory of the queue.
+       *
+       * @private
+       * @returns {Promise<Array<{id: string, retryCount: number, error: string|null}>>}
+       */
+      )
+    }, {
+      key: "_queueSummary",
+      value: (function () {
+        var _queueSummary2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
+          var _this22 = this;
+          return _regenerator().w(function (_context21) {
+            while (1) switch (_context21.n) {
+              case 0:
+                if (this.db) {
+                  _context21.n = 1;
+                  break;
+                }
+                return _context21.a(2, []);
+              case 1:
+                return _context21.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this22.db.transaction([CONFIG.storeName], "readonly");
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value) {
+                      var _value$error;
+                      rows.push({
+                        id: value.id,
+                        retryCount: value.retryCount,
+                        error: (_value$error = value.error) !== null && _value$error !== void 0 ? _value$error : null
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee20, this);
+        }));
+        function _queueSummary() {
+          return _queueSummary2.apply(this, arguments);
+        }
+        return _queueSummary;
       }() /** @private */)
     }, {
       key: "_notifyQueueUpdate",
@@ -17441,17 +17525,18 @@
         if (!BUS || typeof BUS.dispatch !== "function") {
           return;
         }
-        this.getAll().then(function (queue) {
+        // A cursor, not `getAll()`. This fires on every add, every removal and
+        // every hold — the hottest path in the module — and it needs three
+        // scalars per row, but `getAll()` deserialised each recording to get
+        // them. On a full queue that is 20 MB against the 5 MB in-memory Blob
+        // budget AGENTS.md states as a FAIL condition, several times a
+        // submission.
+        this._queueSummary().then(function (queue) {
           BUS.dispatch("starmus/offline/queue_updated", {
             count: queue.length,
-            queue: queue.map(function (item) {
-              return {
-                id: item.id,
-                retryCount: item.retryCount,
-                error: item.error
-              };
-            })
+            queue: queue
           });
+        }).catch(function (err) {
         });
       }
 
@@ -17525,22 +17610,22 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
-      return _regenerator().w(function (_context21) {
-        while (1) switch (_context21.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21() {
+      return _regenerator().w(function (_context22) {
+        while (1) switch (_context22.n) {
           case 0:
             if (offlineQueue.db) {
-              _context21.n = 2;
+              _context22.n = 2;
               break;
             }
-            _context21.n = 1;
+            _context22.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context21.a(2, offlineQueue);
+            return _context22.a(2, offlineQueue);
         }
-      }, _callee20);
+      }, _callee21);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
@@ -17557,18 +17642,18 @@
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context22) {
-        while (1) switch (_context22.n) {
+      return _regenerator().w(function (_context23) {
+        while (1) switch (_context23.n) {
           case 0:
-            _context22.n = 1;
+            _context23.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context22.v;
-            return _context22.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context23.v;
+            return _context23.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee21);
+      }, _callee22);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -17589,18 +17674,18 @@
    * @returns {Promise<Array<Object>>}
    */
   function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23() {
       var q;
-      return _regenerator().w(function (_context23) {
-        while (1) switch (_context23.n) {
+      return _regenerator().w(function (_context24) {
+        while (1) switch (_context24.n) {
           case 0:
-            _context23.n = 1;
+            _context24.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context23.v;
-            return _context23.a(2, q._countPending());
+            q = _context24.v;
+            return _context24.a(2, q._countPending());
         }
-      }, _callee22);
+      }, _callee23);
     }));
     return _getPendingCount.apply(this, arguments);
   }
@@ -17617,18 +17702,18 @@
    * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
    */
   function _getHeldSubmissions() {
-    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24() {
       var q;
-      return _regenerator().w(function (_context24) {
-        while (1) switch (_context24.n) {
+      return _regenerator().w(function (_context25) {
+        while (1) switch (_context25.n) {
           case 0:
-            _context24.n = 1;
+            _context25.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context24.v;
-            return _context24.a(2, q.getHeld());
+            q = _context25.v;
+            return _context25.a(2, q.getHeld());
         }
-      }, _callee23);
+      }, _callee24);
     }));
     return _getHeldSubmissions.apply(this, arguments);
   }
@@ -17643,18 +17728,18 @@
    * @returns {Promise<void>}
    */
   function _getQueueUsage() {
-    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee25() {
       var q;
-      return _regenerator().w(function (_context25) {
-        while (1) switch (_context25.n) {
+      return _regenerator().w(function (_context26) {
+        while (1) switch (_context26.n) {
           case 0:
-            _context25.n = 1;
+            _context26.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context25.v;
-            return _context25.a(2, q.usage());
+            q = _context26.v;
+            return _context26.a(2, q.usage());
         }
-      }, _callee24);
+      }, _callee25);
     }));
     return _getQueueUsage.apply(this, arguments);
   }
@@ -17673,18 +17758,18 @@
    * @returns {Promise<void>}
    */
   function _releaseHeldSubmission() {
-    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee25(id) {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee26(id) {
       var q;
-      return _regenerator().w(function (_context26) {
-        while (1) switch (_context26.n) {
+      return _regenerator().w(function (_context27) {
+        while (1) switch (_context27.n) {
           case 0:
-            _context26.n = 1;
+            _context27.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context26.v;
-            return _context26.a(2, q.releaseHold(id));
+            q = _context27.v;
+            return _context27.a(2, q.releaseHold(id));
         }
-      }, _callee25);
+      }, _callee26);
     }));
     return _releaseHeldSubmission.apply(this, arguments);
   }
@@ -17698,18 +17783,18 @@
    * @returns {Promise<OfflineQueue>}
    */
   function _discardHeldSubmission() {
-    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee26(id, reason) {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee27(id, reason) {
       var q;
-      return _regenerator().w(function (_context27) {
-        while (1) switch (_context27.n) {
+      return _regenerator().w(function (_context28) {
+        while (1) switch (_context28.n) {
           case 0:
-            _context27.n = 1;
+            _context28.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context27.v;
-            return _context27.a(2, q.discardHeld(id, reason));
+            q = _context28.v;
+            return _context28.a(2, q.discardHeld(id, reason));
         }
-      }, _callee26);
+      }, _callee27);
     }));
     return _discardHeldSubmission.apply(this, arguments);
   }

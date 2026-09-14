@@ -1231,6 +1231,20 @@ class OfflineQueue {
 
             req.onerror = (ev) => reject(ev.target.error);
             tx.oncomplete = () => resolve();
+            // Settled on failure too. Without these the promise stayed pending
+            // forever when the transaction aborted — a quota error, a closing
+            // connection — and `processQueue()` awaits it with
+            // `isProcessing = true` already set. The flag then never cleared,
+            // so every later drain returned at its first line and every queued
+            // recording was stranded for the life of the page. A rejection here
+            // is caught by the drain and rescheduled; silence was the only
+            // outcome that could not recover.
+            tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) =>
+                reject(
+                    ev.target.error ||
+                        new Error("OfflineQueue: the retry update was aborted."),
+                );
         });
     }
 
@@ -1401,7 +1415,8 @@ class OfflineQueue {
                 const claimToken = claim.token;
 
                 // From here on the row is the one the claim transaction read,
-                // not the `getAll()` snapshot this loop is iterating. Another
+                // not the `_pendingSummaries()` listing this loop is iterating.
+                // Another
                 // tab can record a failed attempt and release a row between the
                 // two, and continuing from the snapshot then reused a stale
                 // `retryCount` and `lastAttempt` — skipping the backoff — and a
@@ -2028,22 +2043,70 @@ class OfflineQueue {
 
         return nextDelay;
     }
+    /**
+     * Id, retry count and last error for every queued row — and no recordings.
+     *
+     * The shape `starmus/offline/queue_updated` has always carried; what
+     * changed is that producing it no longer costs the memory of the queue.
+     *
+     * @private
+     * @returns {Promise<Array<{id: string, retryCount: number, error: string|null}>>}
+     */
+    async _queueSummary() {
+        if (!this.db) {
+            return [];
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const req = tx.objectStore(CONFIG.storeName).openCursor();
+            /** @type {Array<Object>} */
+            const rows = [];
+
+            req.onsuccess = () => {
+                const cursor = req.result;
+                if (!cursor) {
+                    return;
+                }
+                const value = cursor.value;
+                if (value) {
+                    rows.push({
+                        id: value.id,
+                        retryCount: value.retryCount,
+                        error: value.error ?? null,
+                    });
+                }
+                cursor.continue();
+            };
+
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(rows);
+            tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
+        });
+    }
+
     /** @private */
     _notifyQueueUpdate() {
         const BUS = window.CommandBus || window.StarmusHooks;
         if (!BUS || typeof BUS.dispatch !== "function") {
             return;
         }
-        this.getAll().then((queue) => {
-            BUS.dispatch("starmus/offline/queue_updated", {
-                count: queue.length,
-                queue: queue.map((item) => ({
-                    id: item.id,
-                    retryCount: item.retryCount,
-                    error: item.error,
-                })),
+        // A cursor, not `getAll()`. This fires on every add, every removal and
+        // every hold — the hottest path in the module — and it needs three
+        // scalars per row, but `getAll()` deserialised each recording to get
+        // them. On a full queue that is 20 MB against the 5 MB in-memory Blob
+        // budget AGENTS.md states as a FAIL condition, several times a
+        // submission.
+        this._queueSummary()
+            .then((queue) => {
+                BUS.dispatch("starmus/offline/queue_updated", {
+                    count: queue.length,
+                    queue,
+                });
+            })
+            .catch((err) => {
+                debugLog("[Offline] Could not summarise the queue for notification:", err);
             });
-        });
     }
 
     /** @private */

@@ -645,3 +645,59 @@ test("a drain whose listing fails reschedules instead of stranding the queue", a
     assert.ok(rescheduled > 0, "and it is not an immediate spin");
     assert.equal((await tab.queue.getAll()).length, 1, "the recording is still here");
 });
+
+test("telling the host the queue changed does not load the queue", async () => {
+    // `_notifyQueueUpdate()` fires on every add, removal and hold — the hottest
+    // path in the module — and needs three scalars per row. Reading them with
+    // `getAll()` deserialised every recording, several times per submission.
+    freshEnvironment();
+    const tab = await openTab();
+    const MB = 1024 * 1024;
+
+    const realGetAll = tab.queue.getAll.bind(tab.queue);
+    let materialised = 0;
+    tab.queue.getAll = (...args) => {
+        materialised += 1;
+        return realGetAll(...args);
+    };
+
+    // A bus has to be listening, or the notification returns before reading
+    // anything. `_notifyQueueUpdate()` is fire-and-forget from a transaction
+    // callback, so the dispatch is awaited rather than assumed to have landed —
+    // a fixed `setTimeout(0)` made this test pass about two runs in three.
+    const seen = [];
+    let announce = () => {};
+    const dispatched = new Promise((resolve) => {
+        announce = resolve;
+    });
+    globalThis.window.CommandBus = {
+        dispatch: (name, payload) => {
+            seen.push({ name, payload });
+            if (name === "starmus/offline/queue_updated" && payload.count === 2) {
+                announce();
+            }
+        },
+    };
+    try {
+        await seed(tab.queue, { size: 4 * MB, name: "a.webm" });
+        await seed(tab.queue, { size: 4 * MB, name: "b.webm" });
+        await dispatched;
+    } finally {
+        tab.queue.getAll = realGetAll;
+        delete globalThis.window.CommandBus;
+    }
+
+    assert.equal(materialised, 0, "the notification never loaded the whole queue");
+
+    const update = seen
+        .filter((e) => e.name === "starmus/offline/queue_updated")
+        .find((e) => e.payload.count === 2);
+    assert.ok(update, "the queue-changed notification carries the new count");
+    for (const row of update.payload.queue) {
+        assert.deepEqual(
+            Object.keys(row).sort(),
+            ["error", "id", "retryCount"],
+            "carrying the same three fields it always did, and no recording",
+        );
+    }
+});

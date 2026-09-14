@@ -507,6 +507,15 @@
                 // either: it is indistinguishable from the stale one this
                 // guard exists to reject. A completion is only unconditional
                 // when nothing named itself as being in flight.
+                // Only while something is actually being submitted. After a
+                // terminal error the reducer clears `activeId` and returns to
+                // `ready_to_submit` — at which point an id check alone let a
+                // late completion through, because `null` matches anything,
+                // and marked the failed or replacement source complete.
+                if (state.status !== "submitting") {
+                    return state;
+                }
+
                 const active = state.submission?.activeId ?? null;
                 const finished = action.submissionId ?? null;
                 if (active !== null && active !== finished) {

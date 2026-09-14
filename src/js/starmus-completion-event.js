@@ -45,7 +45,16 @@ export function resolveUploadFormat(mimeType, fileName) {
     // is also true of `audio/aacp` — HE-AAC, the profile this branch exists to
     // exclude — so the substring test reported the very codec the token-boundary
     // fix above was written to keep out, by the other half of the condition.
-    if (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac") {
+    // A codecs parameter naming a non-LC profile settles it before the base
+    // media type is consulted. `audio/aac; codecs=mp4a.40.5` matched the
+    // `audio/aac` branch and returned `aac-lc`, so the parameter that says
+    // HE-AAC was read as confirmation of the thing it rules out.
+    const statesNonLcProfile = /\bmp4a\.40\.(?!2\b)\d+\b/.test(type);
+
+    if (
+        !statesNonLcProfile &&
+        (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac")
+    ) {
         return "aac-lc";
     }
 

@@ -86,6 +86,17 @@ const uploadCircuitBreaker = new UploadCircuitBreaker();
 /* ---- Config ---- */
 
 /**
+ * How long a transfer may make no progress at all before it is aborted.
+ *
+ * Exported because the offline queue's claim lease has to outlast it. The lease
+ * is renewed from progress callbacks, so a stalled transfer stops renewing —
+ * and if the lease expires before this watchdog fires, another tab claims a row
+ * whose first attempt is still running. The two were both 120000 and therefore
+ * raced exactly.
+ */
+export const UPLOAD_STALL_TIMEOUT_MS = 120000;
+
+/**
  * Resolve the authorization headers the host supplies for uploads.
  *
  * `bootstrap.nonce` was retired by ADR-034: the package used to read it and set
@@ -147,7 +158,7 @@ function getConfig() {
         // bytes — the opposite of what a resumable client is for. What is
         // actually a fault is *no progress at all* for this long; a slow but
         // moving transfer is the normal case here and is left alone.
-        stallTimeoutMs: 120000,
+        stallTimeoutMs: UPLOAD_STALL_TIMEOUT_MS,
         endpoint: bootstrap.restUrl
             ? `${bootstrap.restUrl.replace(/\/$/, "")}/${bootstrap.uploadEndpoint || "tus"}`
             : "",
@@ -421,7 +432,7 @@ export async function uploadTus(
     // Host-injected only (ADR-034). A CMS nonce header used to be set here.
     const headers = Object.assign({}, cfg.headers);
 
-    const stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : 120000;
+    const stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : UPLOAD_STALL_TIMEOUT_MS;
 
     return new Promise((resolve, reject) => {
         let settled = false;

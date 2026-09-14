@@ -24,7 +24,12 @@
 
 import { debugLog } from "./starmus-hooks.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { createUploadId, isUploadId, uploadWithPriority } from "./starmus-tus.js";
+import {
+    createUploadId,
+    isUploadId,
+    uploadWithPriority,
+    UPLOAD_STALL_TIMEOUT_MS,
+} from "./starmus-tus.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /** @type {Object} Queue configuration constants */
@@ -129,7 +134,20 @@ const CONFIG = {
      * before writing. A lease that lapses hands the row over cleanly; it never
      * lets a late failure from the previous owner overwrite the new one's work.
      */
-    leaseMs: 2 * 60 * 1000,
+    // Strictly longer than the upload stall watchdog, and derived from it
+    // rather than written beside it.
+    //
+    // The lease is renewed from progress callbacks, so a transfer that stalls
+    // stops renewing. Both values were 120000, which meant the lease expired at
+    // the exact moment the watchdog would abort the attempt — a dead heat, and
+    // on the losing side of it another tab claims a row whose first transfer is
+    // still alive. Two attempts then run on one recording, spending the
+    // contributor's data twice and racing each other's completion.
+    //
+    // The margin is what makes the ordering hold rather than tie: a stalled
+    // attempt is always aborted, and its claim released, before the lease it
+    // holds can lapse.
+    leaseMs: UPLOAD_STALL_TIMEOUT_MS + 60 * 1000,
     /** Renew no more often than this, so progress does not hammer IndexedDB. */
     leaseRenewMs: 30 * 1000,
 };
@@ -503,17 +521,30 @@ class OfflineQueue {
      * @private
      * @param {string} id
      * @param {string} token The claim this drain holds.
-     * @returns {Promise<boolean>} Whether the marker was actually written. False
-     *   means the row is no longer this drain's, and nothing after the transfer
-     *   belongs to it.
+     * @returns {Promise<boolean|null>} True written, false the row is no longer
+     *   this drain's and nothing after the transfer belongs to it, null when
+     *   storage could not say — which is not permission to upload again.
      */
     async _markTransferred(id, token) {
         if (!this.db) {
             return;
         }
         return new Promise((resolve) => {
-            const tx = this.db.transaction([CONFIG.storeName], "readwrite");
-            const store = tx.objectStore(CONFIG.storeName);
+            let tx;
+            let store;
+            try {
+                tx = this.db.transaction([CONFIG.storeName], "readwrite");
+                store = tx.objectStore(CONFIG.storeName);
+            } catch {
+                // A closed or unusable connection answers "unknown" like every
+                // other storage failure here. Throwing instead would reject
+                // into the drain's catch, where `uploaded` is already true and
+                // the row would be held as a completion failure rather than as
+                // a transfer that could not be recorded — the same outcome by
+                // accident, but with a reason that misdescribes what happened.
+                resolve(null);
+                return;
+            }
             const req = store.get(id);
 
             let committed = false;
@@ -534,9 +565,16 @@ class OfflineQueue {
             // `transferred: false` row behind after `removeFingerprintOnSuccess`
             // had already dropped the resume key, so the next drain uploaded
             // the same accepted recording again.
-            req.onerror = () => resolve(false);
+            // Storage could not answer, which is not the same as the row
+            // belonging to someone else — the distinction `_renewClaim()` also
+            // draws, and it matters more here. This runs *after* the bytes
+            // landed and after `removeFingerprintOnSuccess` dropped the resume
+            // key, so reading a failed write as "not ours" left the row
+            // `transferred: false` and let a later drain start a second TUS
+            // resource for a recording the server had already accepted.
+            req.onerror = () => resolve(null);
             tx.oncomplete = () => resolve(committed);
-            tx.onerror = () => resolve(false);
+            tx.onerror = () => resolve(null);
         });
     }
 
@@ -1537,7 +1575,8 @@ class OfflineQueue {
                     // already dropped the resume fingerprint, the next drain
                     // started a *second* upload instead of reconciling the one
                     // the server had accepted.
-                    if (!(await this._markTransferred(id, claimToken))) {
+                    const recorded = await this._markTransferred(id, claimToken);
+                    if (recorded === false) {
                         // The row is not ours any more. Everything after a
                         // transfer belongs to whoever holds the claim.
                         console.warn(
@@ -1545,6 +1584,31 @@ class OfflineQueue {
                             id,
                         );
                         continue;
+                    }
+                    if (recorded === null) {
+                        // Storage could not record the transfer, and the bytes
+                        // are on the server. Treated as neither success nor
+                        // loss of the row, because it is neither.
+                        //
+                        // The boundary event still fires below: it is the only
+                        // thing that tells anything downstream this asset
+                        // exists, it carries the upload id so a duplicate is
+                        // dedupable, and a missing one is not recoverable. What
+                        // does *not* happen is the removal — a row deleted here
+                        // would take the only local record with it — and the
+                        // entry is held instead, so no later drain reads
+                        // `transferred: false` and uploads an accepted
+                        // recording a second time.
+                        console.error(
+                            "[Offline] Transfer succeeded but could not be recorded; holding:",
+                            id,
+                        );
+                        await this._hold(
+                            id,
+                            "Uploaded; the transfer could not be recorded locally. Do not re-upload — reconcile by upload id.",
+                            true,
+                            claimToken,
+                        );
                     }
 
                     // `starmus:complete` is the boundary before any
@@ -1729,6 +1793,34 @@ class OfflineQueue {
             void this.processQueue();
         }, safeDelay);
     }
+    /**
+     * How many recordings the queue is holding.
+     *
+     * Counted by the store rather than by reading it. `getAll()` deserialises
+     * every row, and the caller only wants a number — core asks for it right
+     * after queueing, which is precisely when the queue is at its fullest, so
+     * the count cost the memory of everything in it.
+     *
+     * @private
+     * @returns {Promise<number>}
+     */
+    async _countPending() {
+        if (!this.db) {
+            return 0;
+        }
+        return new Promise((resolve, reject) => {
+            const tx = this.db.transaction([CONFIG.storeName], "readonly");
+            const req = tx.objectStore(CONFIG.storeName).count();
+            let total = 0;
+            req.onsuccess = () => {
+                total = req.result;
+            };
+            req.onerror = (ev) => reject(ev.target.error);
+            tx.oncomplete = () => resolve(total);
+            tx.onerror = (ev) => reject(ev.target.error);
+        });
+    }
+
     /**
      * The scheduling fields of every row that is still retryable.
      *
@@ -1944,8 +2036,7 @@ export async function queueSubmission(instanceId, audioBlob, fileName, formField
  */
 export async function getPendingCount() {
     const q = await getOfflineQueue();
-    const list = await q.getAll();
-    return list.length;
+    return q._countPending();
 }
 
 /**

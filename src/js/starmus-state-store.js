@@ -383,14 +383,20 @@
                         // would give. The Spoken Audio Node probes the file
                         // itself and records what it actually is.
                         captureAttainment: {
+                            // Kept identical to `describeAttainment("import",
+                            // …)`, field for field. This module is an IIFE
+                            // rather than an ES module, so it cannot call that
+                            // helper; a test compares the two records instead,
+                            // and fails if either moves.
+                            //
+                            // They had disagreed: this listed sampleRate and
+                            // channelCount as unverified, while the helper
+                            // reports neither — the import profile constrains
+                            // neither, so there is nothing about it that went
+                            // unchecked. A consumer read an unconstrained
+                            // import as one whose constraints could not be
+                            // verified, which is a different claim.
                             profile: "import",
-                            // The same shape `describeAttainment()` produces.
-                            // Omitting the bitrate here gave imported assets a
-                            // different `CaptureAttainment` from recorded ones,
-                            // so a consumer could not read one contract across
-                            // both — and an import could not say that the
-                            // bitrate was explicitly unconstrained rather than
-                            // simply missing from the record.
                             requested: {
                                 sampleRate: null,
                                 channelCount: null,
@@ -399,7 +405,7 @@
                             actual: {},
                             attained: null,
                             exceeded: [],
-                            unverified: ["sampleRate", "channelCount"],
+                            unverified: [],
                             source: "file-attachment",
                         },
                         metadata: {

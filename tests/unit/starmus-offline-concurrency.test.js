@@ -20,7 +20,10 @@ import {
     META,
 } from "./offline-harness.mjs";
 
-const LEASE_MS = 2 * 60 * 1000;
+// Derived, not copied. A test that hardcodes the lease keeps passing when the
+// constant moves and silently stops testing the boundary it names.
+const { UPLOAD_STALL_TIMEOUT_MS } = await import("../../src/js/starmus-tus.js");
+const LEASE_MS = UPLOAD_STALL_TIMEOUT_MS + 60 * 1000;
 
 /** Queues one recording and returns its id, from a single tab. */
 async function seed(queue, { size = 2048, name = "take.webm" } = {}) {
@@ -439,4 +442,113 @@ test("deciding when to wake does not load the recordings", async () => {
     } finally {
         tab.queue.getAll = realGetAll;
     }
+});
+
+test("the claim lease outlives the stall watchdog", async () => {
+    // Renewal happens on progress, so a stalled transfer stops renewing. If the
+    // lease could lapse before the watchdog aborts the attempt, another tab
+    // would claim a row whose first transfer is still running: two uploads of
+    // one recording, the contributor's data spent twice, and the two racing
+    // each other's completion. Both constants were 120000 — an exact tie, and
+    // losing it costs a contributor their bandwidth.
+    const offline = await import("../../src/js/starmus-offline.js?ordering");
+    const tus = await import("../../src/js/starmus-tus.js");
+
+    // Read from the queue's own configuration rather than recomputed here.
+    freshEnvironment();
+    const tab = await openTab();
+    const id = await seed(tab.queue);
+    const before = Date.now();
+    const claim = await tab.queue._claim(id);
+    const [row] = await tab.queue.getAll();
+    const grantedFor = row.leaseUntil - before;
+
+    assert.ok(claim.token);
+    assert.ok(
+        grantedFor > tus.UPLOAD_STALL_TIMEOUT_MS,
+        `lease ${grantedFor}ms must exceed the ${tus.UPLOAD_STALL_TIMEOUT_MS}ms stall watchdog`,
+    );
+    assert.ok(
+        grantedFor - tus.UPLOAD_STALL_TIMEOUT_MS >= 30 * 1000,
+        "with margin, so the ordering holds rather than ties",
+    );
+    assert.equal(typeof offline.isNonRetryableUploadFailure, "function");
+});
+
+test("a transfer that could not be recorded is held, never re-uploaded", async () => {
+    // `_markTransferred()` runs after the bytes landed and after the resume
+    // fingerprint was dropped. Reading a storage failure as "the row is not
+    // ours" left it `transferred: false`, and the next drain created a second
+    // TUS resource for a recording the server had already accepted.
+    freshEnvironment();
+    const a = await openTab();
+    const b = await openTab();
+    const id = await seed(a.queue);
+
+    const mine = await a.queue._claim(id);
+    assert.equal(await a.queue._markTransferred(id, mine.token), true, "the owner's mark lands");
+
+    // A definite loss is still a definite loss.
+    const taken = await atTimeOffset(LEASE_MS + 1000, () => b.queue._claim(id));
+    assert.ok(taken.token);
+    assert.equal(
+        await atTimeOffset(LEASE_MS + 1000, () => a.queue._markTransferred(id, mine.token)),
+        false,
+        "a row owned by another tab reports lost, not unknown",
+    );
+
+    // Storage unable to answer is neither success nor loss.
+    b.queue.db.close();
+    assert.equal(
+        await b.queue._markTransferred(id, taken.token),
+        null,
+        "a closed connection is unknown",
+    );
+});
+
+test("counting the queue does not load the queue", async () => {
+    // Core asks for the pending count immediately after queueing — when the
+    // queue is at its fullest — and `getAll()` deserialised every row to
+    // produce a number.
+    freshEnvironment();
+    const tab = await openTab();
+    const MB = 1024 * 1024;
+    await seed(tab.queue, { size: 4 * MB, name: "a.webm" });
+    await seed(tab.queue, { size: 4 * MB, name: "b.webm" });
+
+    // Through the exported entry point, which is what core actually calls —
+    // asserting on `_countPending()` alone passed while `getPendingCount()`
+    // still loaded every row.
+    const realGetAll = tab.queue.getAll.bind(tab.queue);
+    tab.queue.getAll = () => {
+        throw new Error("counting must not materialise the queue");
+    };
+    try {
+        assert.equal(await tab.module.getPendingCount(), 2);
+    } finally {
+        tab.queue.getAll = realGetAll;
+    }
+});
+
+test("every storage failure in the transfer marker answers unknown", async () => {
+    // The closed-connection case above covers the synchronous throw. The
+    // request- and transaction-level error handlers are the other two ways
+    // storage declines to answer, and they are not reachable from
+    // fake-indexeddb — but reading either as `false` is the defect this whole
+    // distinction exists to prevent, so they are pinned here.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const body = source.slice(
+        source.indexOf("async _markTransferred(id, token) {"),
+        source.indexOf("async _markCompletionEmitted("),
+    );
+    assert.match(body, /req\.onerror = \(\) => resolve\(null\);/, "request errors are unknown");
+    assert.match(body, /tx\.onerror = \(\) => resolve\(null\);/, "transaction errors are unknown");
+    assert.doesNotMatch(body, /resolve\(false\)/, "no storage failure reports loss of the row");
+
+    // And the drain acts on the three answers distinctly.
+    const drain = source.slice(source.indexOf("const recorded = await this._markTransferred("));
+    assert.match(drain.slice(0, 2000), /recorded === false/, "a definite loss stands it down");
+    assert.match(drain.slice(0, 2000), /recorded === null/, "an unknown holds the row instead");
 });

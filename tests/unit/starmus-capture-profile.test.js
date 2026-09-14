@@ -57,10 +57,12 @@ test("an attached file reports that nothing was measured, rather than claiming a
         // contract whether the asset was recorded or attached.
         audioBitsPerSecond: null,
     });
-    assert.ok(
-        attainment.unverified.includes("sampleRate"),
-        "nothing was measured, and the record says so",
-    );
+    // `unverified` names constrained values the device did not report — not
+    // values nobody asked for. The import profile constrains nothing, so there
+    // is nothing unverified about it; `attained: null` above is what says
+    // nothing was measured. Listing sampleRate here described an unconstrained
+    // import as one whose constraints could not be checked.
+    assert.deepEqual(attainment.unverified, [], "nothing was constrained, so nothing is unverified");
 });
 
 test("the import profile preserves material rather than reshaping it", () => {
@@ -1045,6 +1047,22 @@ test("both producers of an attainment record emit the same shape", async () => {
         "the requested record has the same fields either way",
     );
     assert.equal(imported.requested.audioBitsPerSecond, null, "unconstrained, and said so");
+
+    // And field for field against the helper's own output for the same
+    // profile. The state store is an IIFE and cannot call `describeAttainment()`,
+    // so this comparison is what keeps the hand-written record honest. They had
+    // disagreed on `unverified`: the literal listed sampleRate and channelCount
+    // while the helper lists neither, because the import profile constrains
+    // neither — "not constrained" and "constrained but unverifiable" are
+    // different claims about an asset, and only one of them was true.
+    const fromHelper = describeAttainment("import", null);
+    const { source, ...importedWithoutSource } = imported;
+    assert.equal(source, "file-attachment", "the literal adds only its provenance");
+    assert.deepEqual(
+        importedWithoutSource,
+        fromHelper,
+        "the file-attachment record matches describeAttainment('import') exactly",
+    );
 });
 
 test("a capture profile the wire omits is not announced by the event", async () => {
@@ -1073,4 +1091,47 @@ test("a capture profile the wire omits is not announced by the event", async () 
         metadata: { captureProfile: "  conversation  " },
     });
     assert.equal(real.captureProfile, "conversation", "a real one is announced, trimmed");
+});
+
+test("a stated HE-AAC profile is not reported as AAC-LC", async () => {
+    // `audio/aac; codecs=mp4a.40.5` matched the base `audio/aac` branch and
+    // returned `aac-lc` — so the parameter that identifies HE-AAC was read as
+    // confirmation of the profile it rules out.
+    const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
+
+    for (const type of [
+        'audio/aac; codecs="mp4a.40.5"',
+        'audio/aac; codecs="mp4a.40.29"',
+        'audio/mp4; codecs="mp4a.40.5"',
+    ]) {
+        assert.notEqual(resolveUploadFormat(type, ""), "aac-lc", type);
+    }
+
+    // An explicitly stated AAC-LC profile still is one.
+    assert.equal(resolveUploadFormat('audio/aac; codecs="mp4a.40.2"', ""), "aac-lc");
+    assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
+});
+
+test("both submission paths agree about a server error", async () => {
+    // tus-js-client reports `response code: 503`. Core recognised only
+    // `HTTP 5xx`, so it told the contributor the failure was final and returned
+    // the UI to submittable while the queue was still retrying the same
+    // recording — and a retry from the button queued it a second time.
+    const { readFileSync } = await import("node:fs");
+    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
+    const core = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const retryableInCore = core.slice(
+        core.indexOf("const retryableUploadError ="),
+        core.indexOf("if (transferred) {"),
+    );
+    assert.match(
+        retryableInCore,
+        /response code\|status\|HTTP/,
+        "core recognises the structured server-error forms the queue does",
+    );
+
+    for (const msg of ["tus: response code: 503", "HTTP 500", "status: 502"]) {
+        assert.equal(isNonRetryableUploadFailure(msg), false, `the queue retries: ${msg}`);
+    }
 });

@@ -377,9 +377,16 @@ export function initCore(store, instanceId, env) {
             const message = error && error.message ? error.message : String(error);
             const retryableUploadError =
                 !navigator.onLine ||
-                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
+                // The server-error forms the queue recognises, not just
+                // `HTTP 5xx`. tus-js-client reports `response code: 503`, which
+                // this missed — so core told the contributor the failure was
+                // final and returned the UI to submittable while the queue was
+                // still retrying the same recording. A retry from the button
+                // then queued it a second time.
+                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(
                     message,
-                );
+                ) ||
+                /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message);
 
             if (transferred) {
                 // The upload succeeded and something after it did not — the

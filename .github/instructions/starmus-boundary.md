@@ -101,12 +101,15 @@ repository already had:
 - The paced reader and its stylesheet moved out to the elicitation pacing
   package (ADR-036); the transcript-sync controller went with them, since the
   reviewed transcript is ESU's.
-- The four audio CI failure conditions — sample rate above 16 kHz, more than
-  one channel, bitrate above 32 kbps, WAV or uncompressed PCM — are re-expressed
-  in `AGENTS.md`. The three numeric conditions now bind the `conversation`
-  profile only. **The format condition binds no profile** until OQ-021 is ruled
-  on; re-scoping it to `conversation` would smuggle in an answer to the open
-  question (ADR-035).
+- The four audio limits that *used to be* CI failure conditions — sample rate
+  above 16 kHz, more than one channel, bitrate above 32 kbps, WAV or
+  uncompressed PCM — are re-expressed in `AGENTS.md`, and only three of them
+  survive as failures. The three numeric conditions now bind the `conversation`
+  profile only. **The format condition binds no profile and fails no build**
+  until OQ-021 is ruled on; re-scoping it to `conversation` would smuggle in an
+  answer to the open question (ADR-035). `AGENTS.md` marks that row *(held)*
+  rather than FAIL, and listing all four together as "CI failure conditions"
+  read as though the format rule were enforced.
 - `src/js/starmus-capture-profiles.js` is the one home for capture constraints.
   No other module may hold an audio limit.
 

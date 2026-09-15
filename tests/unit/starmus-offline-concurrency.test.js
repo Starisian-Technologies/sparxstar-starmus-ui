@@ -766,22 +766,39 @@ test("every queue transaction settles when it aborts", async () => {
     const source = readFileSync("src/js/starmus-offline.js", "utf8");
     const lines = source.split("\n");
 
-    const unguarded = [];
+    // Each transaction's block ends where the next one begins, not 75 lines
+    // later. The fixed window was the defect: a short transaction's block ran
+    // on into the *next* transaction's body, so it was credited with that
+    // one's `tx.onabort` and reported as covered. Three were — `getAll()`,
+    // `_releaseClaim()` and `_pendingSummaries()` — and two of those are
+    // awaited by the drain, so an abort left it stopped with recordings still
+    // queued and nothing armed to come back for them. A coverage test that
+    // borrows the neighbour's guard certifies the gap it was written to find.
+    const starts = [];
     lines.forEach((line, index) => {
-        if (!line.includes("this.db.transaction(")) {
-            return;
-        }
-        const block = lines.slice(index, index + 75).join("\n");
-        if (!block.includes("tx.onabort")) {
-            unguarded.push(index + 1);
+        if (line.includes("this.db.transaction(")) {
+            starts.push(index);
         }
     });
 
-    assert.deepEqual(unguarded, [], "every transaction has an abort path");
+    const unguarded = starts.filter((start, n) => {
+        const end = n + 1 < starts.length ? starts[n + 1] : lines.length;
+        return !lines.slice(start, end).join("\n").includes("tx.onabort");
+    });
+
+    assert.deepEqual(
+        unguarded.map((i) => i + 1),
+        [],
+        "every transaction has an abort path within its own body",
+    );
 
     // And every abort handler settles rather than merely logging.
     const aborts = source.match(/tx\.onabort\s*=[^;]*;/g) || [];
-    assert.ok(aborts.length >= 11, `expected an abort handler per transaction, found ${aborts.length}`);
+    assert.equal(
+        aborts.length,
+        starts.length,
+        `one abort handler per transaction: ${starts.length} transactions, ${aborts.length} handlers`,
+    );
     for (const handler of aborts) {
         assert.match(
             handler,

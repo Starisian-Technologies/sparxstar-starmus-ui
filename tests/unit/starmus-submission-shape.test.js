@@ -212,3 +212,28 @@ test("an error naming no attempt still applies to whatever is running", () => {
     });
     assert.equal(store.getState().status, "ready_to_submit", "the UI is given back");
 });
+
+test("a delivery failure does not settle an unidentified submission", () => {
+    // The post-transfer branch carried the same null-wildcard as
+    // `errorIsCurrent`: with nothing named in flight, any error carrying an
+    // upload id read as this submission's delivery and marked the source
+    // `complete` — disabling submit for bytes nothing had uploaded.
+    const store = createStore({ instanceId: "t" });
+    store.dispatch({ type: "starmus/init", payload: { instanceId: "t", tier: "A" } });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { instanceId: "t", blob: { size: 1 } },
+    });
+    store.dispatch({ type: "starmus/submit-start" });
+    assert.equal(store.getState().submission.activeId, null, "precondition: unidentified");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "redirect failed", retryable: false, uploadId: UPLOAD_A },
+    });
+    assert.notEqual(
+        store.getState().status,
+        "complete",
+        "someone else's delivery does not settle this submission",
+    );
+});

@@ -510,6 +510,11 @@ class OfflineQueue {
             const req = tx.objectStore(CONFIG.storeName).getAll();
             req.onsuccess = () => resolve(req.result || []);
             req.onerror = () => reject(req.error);
+            // The transaction can end without the request ever failing — a
+            // quota abort, a version change, a close under it — and with only
+            // the request handlers above this promise then never settled at
+            // all. A caller awaiting it waits for the life of the page.
+            tx.onabort = () => reject(tx.error || new Error("QueueReadAborted"));
         });
     }
 
@@ -551,7 +556,6 @@ class OfflineQueue {
                 resolve();
             };
             tx.onerror = (ev) => reject(ev.target.error);
-            tx.onabort = (ev) => reject(ev.target.error);
             tx.onabort = (ev) => reject(ev.target.error);
         });
     }
@@ -1253,10 +1257,15 @@ class OfflineQueue {
             };
 
             // A claim that cannot be released is not an error worth failing a
-            // drain over: the lease lapses on its own.
+            // drain over: the lease lapses on its own. That is why every
+            // ending here resolves — including the abort, which was the one
+            // ending with no handler. `processQueue()` awaits this, so an
+            // abort stopped the drain where it stood rather than letting it
+            // move to the next row.
             req.onerror = () => resolve();
             tx.oncomplete = () => resolve();
             tx.onerror = () => resolve();
+            tx.onabort = () => resolve();
         });
     }
 
@@ -1988,6 +1997,13 @@ class OfflineQueue {
             req.onerror = (ev) => reject(ev.target.error);
             tx.oncomplete = () => resolve(rows);
             tx.onerror = (ev) => reject(ev.target.error);
+            // Rejects rather than resolving empty. `processQueue()` awaits this
+            // before it installs the retry schedule and catches a rejection to
+            // reschedule; a promise that never settles skips both, so the drain
+            // stops with queued recordings still in the store and nothing armed
+            // to come back for them. An empty resolve would be worse still —
+            // indistinguishable from a queue that really is empty.
+            tx.onabort = () => reject(tx.error || new Error("QueueListingAborted"));
         });
     }
 

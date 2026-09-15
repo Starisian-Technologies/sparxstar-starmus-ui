@@ -252,10 +252,16 @@
                 // otherwise mark the new source complete — the same stale-event
                 // hole `submit-complete` is guarded against, through the error
                 // path.
+                // The same rule as `errorIsCurrent` above, and it had the same
+                // hole one line further down: `inFlight === null` counted as a
+                // match, so any error carrying an upload id could be read as
+                // *this* submission's delivery. With an unidentified
+                // submission in flight that marked the current source
+                // `complete` — disabling submit for bytes nothing had
+                // uploaded, which is precisely the harm the superseded
+                // handling exists to prevent, arriving through the error path.
                 const failedUploadIsCurrent =
-                    Boolean(errObj.uploadId) &&
-                    errorIsCurrent &&
-                    (inFlight === null || errObj.uploadId === inFlight);
+                    Boolean(errObj.uploadId) && errorIsCurrent && errObj.uploadId === inFlight;
 
                 const deliveredThenFailed =
                     state.status === "submitting" &&

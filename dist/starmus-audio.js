@@ -2954,7 +2954,15 @@
             // otherwise mark the new source complete — the same stale-event
             // hole `submit-complete` is guarded against, through the error
             // path.
-            var failedUploadIsCurrent = Boolean(errObj.uploadId) && errorIsCurrent && (inFlight === null || errObj.uploadId === inFlight);
+            // The same rule as `errorIsCurrent` above, and it had the same
+            // hole one line further down: `inFlight === null` counted as a
+            // match, so any error carrying an upload id could be read as
+            // *this* submission's delivery. With an unidentified
+            // submission in flight that marked the current source
+            // `complete` — disabling submit for bytes nothing had
+            // uploaded, which is precisely the harm the superseded
+            // handling exists to prevent, arriving through the error path.
+            var failedUploadIsCurrent = Boolean(errObj.uploadId) && errorIsCurrent && errObj.uploadId === inFlight;
             var deliveredThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) !== true;
 
             // The replaced source goes back to submittable, exactly as it
@@ -15654,6 +15662,13 @@
                   req.onerror = function () {
                     return reject(req.error);
                   };
+                  // The transaction can end without the request ever failing — a
+                  // quota abort, a version change, a close under it — and with only
+                  // the request handlers above this promise then never settled at
+                  // all. A caller awaiting it waits for the life of the page.
+                  tx.onabort = function () {
+                    return reject(tx.error || new Error("QueueReadAborted"));
+                  };
                 }));
             }
           }, _callee3, this);
@@ -15715,9 +15730,6 @@
                     resolve();
                   };
                   tx.onerror = function (ev) {
-                    return reject(ev.target.error);
-                  };
-                  tx.onabort = function (ev) {
                     return reject(ev.target.error);
                   };
                   tx.onabort = function (ev) {
@@ -16657,7 +16669,11 @@
                   };
 
                   // A claim that cannot be released is not an error worth failing a
-                  // drain over: the lease lapses on its own.
+                  // drain over: the lease lapses on its own. That is why every
+                  // ending here resolves — including the abort, which was the one
+                  // ending with no handler. `processQueue()` awaits this, so an
+                  // abort stopped the drain where it stood rather than letting it
+                  // move to the next row.
                   req.onerror = function () {
                     return resolve();
                   };
@@ -16665,6 +16681,9 @@
                     return resolve();
                   };
                   tx.onerror = function () {
+                    return resolve();
+                  };
+                  tx.onabort = function () {
                     return resolve();
                   };
                 }));
@@ -17517,6 +17536,15 @@
                   };
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
+                  };
+                  // Rejects rather than resolving empty. `processQueue()` awaits this
+                  // before it installs the retry schedule and catches a rejection to
+                  // reschedule; a promise that never settles skips both, so the drain
+                  // stops with queued recordings still in the store and nothing armed
+                  // to come back for them. An empty resolve would be worse still —
+                  // indistinguishable from a queue that really is empty.
+                  tx.onabort = function () {
+                    return reject(tx.error || new Error("QueueListingAborted"));
                   };
                 }));
             }

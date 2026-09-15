@@ -63,5 +63,21 @@ jobs:
       # unminified bundle — roughly a third of which was comments — so the
       # number it reported described nothing anybody downloads, and the response
       # to it approaching the limit was to raise the limit.
+      # Measured once, on the newest Node in the matrix, not on every entry.
+      #
+      # The budget is a property of the artifact, not of the runtime that
+      # weighs it: the same bytes ship to the same devices whichever Node ran
+      # `size-limit`. Running it on every matrix entry bought no extra
+      # assurance and coupled the budget to the tool's own engine support —
+      # size-limit 14 imports `glob` from `node:fs/promises`, which exists on
+      # Node 22 and not on Node 20, so a dependency bump failed the build on
+      # the very version `engines.node` declares as this package's floor while
+      # all 165 tests passed there.
+      #
+      # Node 20 keeps running everything that says something about the package
+      # on Node 20 — lint, build validation and the full suite. Dropping it
+      # from the matrix to satisfy a dev tool would have stopped testing the
+      # stated floor, which is the opposite of what the floor is for.
       - name: Bundle size budget
+        if: matrix.node-version == '22'
         run: pnpm run size-check

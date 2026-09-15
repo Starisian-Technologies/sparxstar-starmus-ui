@@ -112,11 +112,81 @@ export const UPLOAD_STALL_TIMEOUT_MS = 120000;
  * @param {Object} bootstrap The host bootstrap object.
  * @returns {Object} Headers to send, possibly empty.
  */
+/**
+ * RFC 7230 field-name token. Anything outside it is not a header name, and a
+ * value with CR or LF is a request-splitting attempt rather than a header.
+ */
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Names refused outright. All three are valid field-name tokens, so the
+ * pattern above admits them, and no real header is called any of them. They
+ * are refused because the bag does not stay null-prototype forever: anything
+ * downstream that does `Object.assign({}, headers)` — tus-js-client's own
+ * option merging included — restores `Object.prototype`, and there
+ * `__proto__` is an accessor again and `constructor` shadows a property the
+ * copy is expected to have.
+ */
+const FORBIDDEN_HEADER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Reduce a host-supplied object to headers that are safe to send.
+ *
+ * The result has a null prototype and only own, string-valued properties whose
+ * names are field-name tokens. Three things this rules out, in the order they
+ * bite:
+ *
+ * 1. `__proto__`. `Object.assign({}, src)` copies with [[Set]], so that key
+ *    hits the accessor on `Object.prototype` instead of landing as an own
+ *    property: the header is silently dropped and the *copy* gets a different
+ *    prototype. (It does not pollute `Object.prototype` itself — the mutation
+ *    is confined to the copy — but a headers bag that quietly loses an entry
+ *    and gains a prototype is not one to hand to a transport.) A null
+ *    prototype removes the accessor, so the key is just a key, and the filter
+ *    below then drops it by name anyway.
+ * 2. Non-string values. An array or object reaches `setRequestHeader()` as
+ *    whatever `String()` makes of it — `[object Object]` for the auth header
+ *    is a request that fails at ingestion with nothing in it to explain why.
+ * 3. CR/LF in a value. Refused here rather than stripped: a value that has to
+ *    be rewritten to be sendable is not the value the host meant.
+ *
+ * A host that sets `window.STARMUS_BOOTSTRAP` already controls the page, so
+ * this is not a trust boundary — it is a guard against a host passing through
+ * unvalidated input of its own, and against failures that would otherwise show
+ * up as an unexplained rejection at ingestion.
+ *
+ * @param {*} source
+ * @returns {Object} Null-prototype object of string headers.
+ */
+export function sanitizeHeaders(source) {
+    const safe = Object.create(null);
+    if (!source || typeof source !== "object") {
+        return safe;
+    }
+
+    for (const [name, value] of Object.entries(source)) {
+        if (!HEADER_NAME_PATTERN.test(name) || FORBIDDEN_HEADER_NAMES.has(name)) {
+            console.warn(`[TUS] Ignoring upload header '${name}': not a valid header name.`);
+            continue;
+        }
+        if (typeof value !== "string") {
+            console.warn(
+                `[TUS] Ignoring upload header '${name}': its value is ${typeof value}, not a string.`,
+            );
+            continue;
+        }
+        if (/[\r\n]/.test(value)) {
+            console.warn(`[TUS] Ignoring upload header '${name}': its value contains CR or LF.`);
+            continue;
+        }
+        safe[name] = value;
+    }
+
+    return safe;
+}
+
 export function resolveUploadHeaders(bootstrap) {
-    const headers =
-        bootstrap && bootstrap.uploadHeaders && typeof bootstrap.uploadHeaders === "object"
-            ? bootstrap.uploadHeaders
-            : {};
+    const headers = sanitizeHeaders(bootstrap && bootstrap.uploadHeaders);
 
     if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
         // The remedy names no header: which one carries the nonce is the
@@ -271,6 +341,12 @@ function getConfig() {
         }
         merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
     }
+
+    // `globalCfg` can replace `headers` wholesale, so the bag that reaches the
+    // transport is not necessarily the one `resolveUploadHeaders()` built.
+    // Re-reduced here, where every other host-settable value is clamped, so
+    // there is one place that decides what a header is.
+    merged.headers = sanitizeHeaders(merged.headers);
 
     return merged;
 }
@@ -506,7 +582,9 @@ export async function uploadTus(
     }
 
     // Host-injected only (ADR-034). A CMS nonce header used to be set here.
-    const headers = Object.assign({}, cfg.headers);
+    // Reduced again at the use site: `uploadTus()` is exported, so a caller can
+    // reach here with a `cfg` that never passed through `getConfig()`.
+    const headers = sanitizeHeaders(cfg.headers);
 
     const stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : UPLOAD_STALL_TIMEOUT_MS;
 

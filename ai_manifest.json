@@ -57,6 +57,7 @@
         { "symbol": "createUploadId",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "UPLOAD_STALL_TIMEOUT_MS", "type": "constant", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "resolveUploadHeaders",  "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
+        { "symbol": "sanitizeHeaders",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "isUploadId",            "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "reservedMetadataKeys",  "type": "function", "owner": "Starisian", "path": "src/js/starmus-tus.js" },
         { "symbol": "DEFAULT_CAPTURE_PROFILE",   "type": "constant", "owner": "Starisian", "path": "src/js/starmus-capture-profiles.js" },

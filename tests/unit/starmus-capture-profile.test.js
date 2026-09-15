@@ -229,20 +229,23 @@ test("a host still passing the retired nonce is told, not silently unauthorized"
     const realWarn = console.warn;
     console.warn = (...args) => warnings.push(args.join(" "));
     try {
-        assert.deepEqual(resolveUploadHeaders({ nonce: "abc123" }), {});
+        // Compared by entries, not identity: the bag is null-prototype by
+        // design (see sanitizeHeaders), which `deepEqual` counts as a
+        // difference from a plain `{}`.
+        assert.deepEqual({ ...resolveUploadHeaders({ nonce: "abc123" }) }, {});
         assert.equal(warnings.length, 1, "the misconfiguration is named where it happens");
         assert.match(warnings[0], /uploadHeaders/, "and it says what to do instead");
 
         warnings.length = 0;
         assert.deepEqual(
-            resolveUploadHeaders({ nonce: "abc123", uploadHeaders: { "X-Host-Auth": "abc123" } }),
+            { ...resolveUploadHeaders({ nonce: "abc123", uploadHeaders: { "X-Host-Auth": "abc123" } }) },
             { "X-Host-Auth": "abc123" },
             "a migrated host passes it itself",
         );
         assert.equal(warnings.length, 0, "and is not scolded for it");
 
         warnings.length = 0;
-        assert.deepEqual(resolveUploadHeaders({}), {}, "no auth at all is a legitimate host");
+        assert.deepEqual({ ...resolveUploadHeaders({}) }, {}, "no auth at all is a legitimate host");
         assert.equal(warnings.length, 0);
     } finally {
         console.warn = realWarn;

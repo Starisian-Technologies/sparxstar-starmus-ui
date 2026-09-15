@@ -2796,9 +2796,16 @@
         isPlaying: false,
         isPaused: false
       },
+      // Same key set the terminal transitions write (see
+      // `settledSubmission()`), so a fresh store and a settled one answer
+      // `activeId` and `superseded` the same way instead of one returning
+      // `undefined` and the other `null`.
       submission: {
         progress: 0,
-        isQueued: false
+        isQueued: false,
+        activeId: null,
+        superseded: false,
+        completedId: null
       }
     };
     function shallowClone(obj) {
@@ -2818,6 +2825,32 @@
         }
       }
       return out;
+    }
+
+    /**
+     * The `submission` shape every transition that ends an attempt writes.
+     *
+     * `submission` is replaced wholesale rather than merged, so any key a
+     * branch leaves out becomes `undefined` instead of keeping its previous
+     * value. That has been benign only because each consumer happened to use
+     * `?? null` or a truthiness test: `activeId` was `null` after a completion
+     * and `undefined` after a queue, and `superseded` was cleared on the
+     * superseded branches by being omitted rather than by being set false.
+     * Behaviour that survives on the reader's defensiveness is a bug waiting
+     * for the next reader, so the full set is stated in one place here and
+     * every terminal branch goes through it.
+     *
+     * @param {Object} [overrides] Fields this particular ending sets.
+     * @returns {Object}
+     */
+    function settledSubmission(overrides) {
+      return merge({
+        progress: 0,
+        isQueued: false,
+        activeId: null,
+        superseded: false,
+        completedId: null
+      }, overrides || {});
     }
     function reducer(state, action) {
       var _action$attainment$pr, _action$attainment, _action$attainment2;
@@ -2931,12 +2964,9 @@
             var submissionEnded = submissionFailed || deliveredThenFailed || supersededThenFailed;
             return merge(state, {
               status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : supersededThenFailed ? "ready_to_submit" : state.status,
-              submission: submissionEnded ? {
-                progress: deliveredThenFailed ? 1 : 0,
-                isQueued: false,
-                activeId: null,
-                superseded: false
-              } : state.submission,
+              submission: submissionEnded ? settledSubmission({
+                progress: deliveredThenFailed ? 1 : 0
+              }) : state.submission,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -3189,12 +3219,9 @@
             // and submitted it successfully, was told it was still
             // waiting to be sent. The progress and queued markers belong
             // to the finished attempt for the same reason.
-            submission: {
-              progress: 0,
-              isQueued: false,
-              activeId: action.submissionId || null,
-              superseded: false
-            }
+            submission: settledSubmission({
+              activeId: action.submissionId || null
+            })
           });
         case "starmus/submit-progress":
           {
@@ -3267,26 +3294,20 @@
             if (((_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
-                submission: {
-                  progress: 0,
-                  isQueued: false,
-                  activeId: null
-                }
+                submission: settledSubmission()
               });
             }
             return merge(state, {
               status: "complete",
-              submission: {
+              // `completedId` records which submission this completion
+              // settled. `activeId` is cleared by this same transition, so
+              // anything asking afterwards which upload finished had
+              // nothing to read — and a delayed redirect from an older
+              // upload could not be told from the current one.
+              submission: settledSubmission({
                 progress: 1,
-                isQueued: false,
-                activeId: null,
-                // Which submission this completion settled. `activeId`
-                // is cleared by this same transition, so anything
-                // asking afterwards which upload finished had nothing
-                // to read — and a delayed redirect from an older upload
-                // could not be told from the current one.
                 completedId: finished
-              }
+              })
             });
           }
         case "starmus/submit-queued":
@@ -3325,19 +3346,14 @@
             if (((_state$submission8 = state.submission) === null || _state$submission8 === void 0 ? void 0 : _state$submission8.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
-                submission: {
-                  progress: 0,
-                  isQueued: false,
-                  activeId: null
-                }
+                submission: settledSubmission()
               });
             }
             return merge(state, {
               status: "complete",
-              submission: {
-                progress: 0,
+              submission: settledSubmission({
                 isQueued: true
-              }
+              })
             });
           }
         case "starmus/reset":
@@ -7632,27 +7648,6 @@
   }
 
   requireEs_arrayBuffer_slice();
-
-  var es_object_assign = {};
-
-  var hasRequiredEs_object_assign;
-
-  function requireEs_object_assign () {
-  	if (hasRequiredEs_object_assign) return es_object_assign;
-  	hasRequiredEs_object_assign = 1;
-  	var $ = require_export();
-  	var assign = requireObjectAssign();
-
-  	// `Object.assign` method
-  	// https://tc39.es/ecma262/#sec-object.assign
-  	// eslint-disable-next-line es/no-object-assign -- required for testing
-  	$({ target: 'Object', stat: true, arity: 2, forced: Object.assign !== assign }, {
-  	  assign: assign
-  	});
-  	return es_object_assign;
-  }
-
-  requireEs_object_assign();
 
   var es_object_entries = {};
 
@@ -13867,8 +13862,79 @@
    * @param {Object} bootstrap The host bootstrap object.
    * @returns {Object} Headers to send, possibly empty.
    */
+  /**
+   * RFC 7230 field-name token. Anything outside it is not a header name, and a
+   * value with CR or LF is a request-splitting attempt rather than a header.
+   */
+  var HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+  /**
+   * Names refused outright. All three are valid field-name tokens, so the
+   * pattern above admits them, and no real header is called any of them. They
+   * are refused because the bag does not stay null-prototype forever: anything
+   * downstream that does `Object.assign({}, headers)` — tus-js-client's own
+   * option merging included — restores `Object.prototype`, and there
+   * `__proto__` is an accessor again and `constructor` shadows a property the
+   * copy is expected to have.
+   */
+  var FORBIDDEN_HEADER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+  /**
+   * Reduce a host-supplied object to headers that are safe to send.
+   *
+   * The result has a null prototype and only own, string-valued properties whose
+   * names are field-name tokens. Three things this rules out, in the order they
+   * bite:
+   *
+   * 1. `__proto__`. `Object.assign({}, src)` copies with [[Set]], so that key
+   *    hits the accessor on `Object.prototype` instead of landing as an own
+   *    property: the header is silently dropped and the *copy* gets a different
+   *    prototype. (It does not pollute `Object.prototype` itself — the mutation
+   *    is confined to the copy — but a headers bag that quietly loses an entry
+   *    and gains a prototype is not one to hand to a transport.) A null
+   *    prototype removes the accessor, so the key is just a key, and the filter
+   *    below then drops it by name anyway.
+   * 2. Non-string values. An array or object reaches `setRequestHeader()` as
+   *    whatever `String()` makes of it — `[object Object]` for the auth header
+   *    is a request that fails at ingestion with nothing in it to explain why.
+   * 3. CR/LF in a value. Refused here rather than stripped: a value that has to
+   *    be rewritten to be sendable is not the value the host meant.
+   *
+   * A host that sets `window.STARMUS_BOOTSTRAP` already controls the page, so
+   * this is not a trust boundary — it is a guard against a host passing through
+   * unvalidated input of its own, and against failures that would otherwise show
+   * up as an unexplained rejection at ingestion.
+   *
+   * @param {*} source
+   * @returns {Object} Null-prototype object of string headers.
+   */
+  function sanitizeHeaders(source) {
+    var safe = Object.create(null);
+    if (!source || _typeof$9(source) !== "object") {
+      return safe;
+    }
+    for (var _i = 0, _Object$entries = Object.entries(source); _i < _Object$entries.length; _i++) {
+      var _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2),
+        name = _Object$entries$_i[0],
+        value = _Object$entries$_i[1];
+      if (!HEADER_NAME_PATTERN.test(name) || FORBIDDEN_HEADER_NAMES.has(name)) {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': not a valid header name."));
+        continue;
+      }
+      if (typeof value !== "string") {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': its value is ").concat(_typeof$9(value), ", not a string."));
+        continue;
+      }
+      if (/[\r\n]/.test(value)) {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': its value contains CR or LF."));
+        continue;
+      }
+      safe[name] = value;
+    }
+    return safe;
+  }
   function resolveUploadHeaders(bootstrap) {
-    var headers = bootstrap && bootstrap.uploadHeaders && _typeof$9(bootstrap.uploadHeaders) === "object" ? bootstrap.uploadHeaders : {};
+    var headers = sanitizeHeaders(bootstrap && bootstrap.uploadHeaders);
     if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
       // The remedy names no header: which one carries the nonce is the
       // host's to know and ADR-034 keeps it out of this package entirely —
@@ -13946,16 +14012,16 @@
     };
     var globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
     var merged = {};
-    for (var _i = 0, _Object$entries = Object.entries(defaults); _i < _Object$entries.length; _i++) {
-      var _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2),
-        key = _Object$entries$_i[0],
-        val = _Object$entries$_i[1];
+    for (var _i2 = 0, _Object$entries2 = Object.entries(defaults); _i2 < _Object$entries2.length; _i2++) {
+      var _Object$entries2$_i = _slicedToArray$1(_Object$entries2[_i2], 2),
+        key = _Object$entries2$_i[0],
+        val = _Object$entries2$_i[1];
       merged[key] = val;
     }
-    for (var _i2 = 0, _Object$entries2 = Object.entries(globalCfg); _i2 < _Object$entries2.length; _i2++) {
-      var _Object$entries2$_i = _slicedToArray$1(_Object$entries2[_i2], 2),
-        _key = _Object$entries2$_i[0],
-        _val = _Object$entries2$_i[1];
+    for (var _i3 = 0, _Object$entries3 = Object.entries(globalCfg); _i3 < _Object$entries3.length; _i3++) {
+      var _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2),
+        _key = _Object$entries3$_i[0],
+        _val = _Object$entries3$_i[1];
       if (_key === "__proto__" || _key === "constructor" || _key === "prototype") {
         continue;
       }
@@ -14002,6 +14068,12 @@
       }
       merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
     }
+
+    // `globalCfg` can replace `headers` wholesale, so the bag that reaches the
+    // transport is not necessarily the one `resolveUploadHeaders()` built.
+    // Re-reduced here, where every other host-settable value is clamped, so
+    // there is one place that decides what a header is.
+    merged.headers = sanitizeHeaders(merged.headers);
     return merged;
   }
 
@@ -14162,9 +14234,9 @@
         rawProfile,
         captureProfile,
         reserved,
-        _i3,
-        _Object$entries3,
-        _Object$entries3$_i,
+        _i4,
+        _Object$entries4,
+        _Object$entries4$_i,
         key,
         val,
         headers,
@@ -14272,13 +14344,13 @@
             // The reserved set is computed here, after every module-owned key has been
             // assigned, so it covers them all by construction.
             reserved = reservedMetadataKeys(tusMetadata);
-            _i3 = 0, _Object$entries3 = Object.entries(fields);
+            _i4 = 0, _Object$entries4 = Object.entries(fields);
           case 3:
-            if (!(_i3 < _Object$entries3.length)) {
+            if (!(_i4 < _Object$entries4.length)) {
               _context2.n = 6;
               break;
             }
-            _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
+            _Object$entries4$_i = _slicedToArray$1(_Object$entries4[_i4], 2), key = _Object$entries4$_i[0], val = _Object$entries4$_i[1];
             if (!reserved.has(key)) {
               _context2.n = 4;
               break;
@@ -14288,12 +14360,14 @@
           case 4:
             tusMetadata[key] = sanitizeMetadata(val);
           case 5:
-            _i3++;
+            _i4++;
             _context2.n = 3;
             break;
           case 6:
             // Host-injected only (ADR-034). A CMS nonce header used to be set here.
-            headers = Object.assign({}, cfg.headers);
+            // Reduced again at the use site: `uploadTus()` is exported, so a caller can
+            // reach here with a `cfg` that never passed through `getConfig()`.
+            headers = sanitizeHeaders(cfg.headers);
             stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : UPLOAD_STALL_TIMEOUT_MS;
             return _context2.a(2, new Promise(function (resolve, reject) {
               var settled = false;

@@ -179,6 +179,15 @@ if (fs.existsSync(tusFile)) {
     // POST, so the check is on the *capability*: this module transfers through
     // tus and nothing else. A whole-blob send needs one of these three, and
     // none of them has a legitimate use here.
+    // Comments stripped once, here, for every check below that asks what the
+    // module *does*. Both directions need it. A positive check passes on its
+    // own documentation; a negative one like the full-file scan fails on it —
+    // writing down why this module must not use `fetch` would break the build
+    // and teach the next author to delete the explanation rather than keep it.
+    const tusCode = tusContent
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+
     const fullFileMechanisms = [
         [/\bfunction\s+uploadDirect\b|\buploadDirect\s*=|directUpload/, "the former direct-upload path"],
         [/\bnew\s+FormData\b/, "a FormData body"],
@@ -187,7 +196,7 @@ if (fs.existsSync(tusFile)) {
     ];
     let chunkedOnly = true;
     for (const [pattern, label] of fullFileMechanisms) {
-        if (pattern.test(tusContent)) {
+        if (pattern.test(tusCode)) {
             console.log(
                 `❌ starmus-tus.js: ${label} can send a whole recording in one request. Chunked, resumable transfer is the only path — capture-to-ingestion contract and ADR-038.`,
             );
@@ -208,9 +217,6 @@ if (fs.existsSync(tusFile)) {
     // deleting the actual calls and leaving the paragraph that describes them
     // would have kept the build green while every retry restarted from byte
     // zero. A guard that its own documentation satisfies is not a guard.
-    const tusCode = tusContent
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/^\s*\/\/.*$/gm, "");
     // Positions, not mere presence. Testing that the names occur somewhere let
     // a regression that called `start()` first — or that left the resume calls
     // stranded after it — keep the build green while every retry restarted from

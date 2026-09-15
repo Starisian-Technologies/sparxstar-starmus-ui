@@ -76,9 +76,16 @@
             isPlaying: false,
             isPaused: false,
         },
+        // Same key set the terminal transitions write (see
+        // `settledSubmission()`), so a fresh store and a settled one answer
+        // `activeId` and `superseded` the same way instead of one returning
+        // `undefined` and the other `null`.
         submission: {
             progress: 0,
             isQueued: false,
+            activeId: null,
+            superseded: false,
+            completedId: null,
         },
     };
 
@@ -110,6 +117,35 @@
             }
         }
         return out;
+    }
+
+    /**
+     * The `submission` shape every transition that ends an attempt writes.
+     *
+     * `submission` is replaced wholesale rather than merged, so any key a
+     * branch leaves out becomes `undefined` instead of keeping its previous
+     * value. That has been benign only because each consumer happened to use
+     * `?? null` or a truthiness test: `activeId` was `null` after a completion
+     * and `undefined` after a queue, and `superseded` was cleared on the
+     * superseded branches by being omitted rather than by being set false.
+     * Behaviour that survives on the reader's defensiveness is a bug waiting
+     * for the next reader, so the full set is stated in one place here and
+     * every terminal branch goes through it.
+     *
+     * @param {Object} [overrides] Fields this particular ending sets.
+     * @returns {Object}
+     */
+    function settledSubmission(overrides) {
+        return merge(
+            {
+                progress: 0,
+                isQueued: false,
+                activeId: null,
+                superseded: false,
+                completedId: null,
+            },
+            overrides || {},
+        );
     }
 
     function reducer(state, action) {
@@ -248,12 +284,7 @@
                               ? "ready_to_submit"
                               : state.status,
                     submission: submissionEnded
-                        ? {
-                              progress: deliveredThenFailed ? 1 : 0,
-                              isQueued: false,
-                              activeId: null,
-                              superseded: false,
-                          }
+                        ? settledSubmission({ progress: deliveredThenFailed ? 1 : 0 })
                         : state.submission,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
@@ -504,12 +535,9 @@
                     // and submitted it successfully, was told it was still
                     // waiting to be sent. The progress and queued markers belong
                     // to the finished attempt for the same reason.
-                    submission: {
-                        progress: 0,
-                        isQueued: false,
+                    submission: settledSubmission({
                         activeId: action.submissionId || null,
-                        superseded: false,
-                    },
+                    }),
                 });
 
             case "starmus/submit-progress": {
@@ -578,22 +606,17 @@
                 if (state.submission?.superseded === true) {
                     return merge(state, {
                         status: "ready_to_submit",
-                        submission: { progress: 0, isQueued: false, activeId: null },
+                        submission: settledSubmission(),
                     });
                 }
                 return merge(state, {
                     status: "complete",
-                    submission: {
-                        progress: 1,
-                        isQueued: false,
-                        activeId: null,
-                        // Which submission this completion settled. `activeId`
-                        // is cleared by this same transition, so anything
-                        // asking afterwards which upload finished had nothing
-                        // to read — and a delayed redirect from an older upload
-                        // could not be told from the current one.
-                        completedId: finished,
-                    },
+                    // `completedId` records which submission this completion
+                    // settled. `activeId` is cleared by this same transition, so
+                    // anything asking afterwards which upload finished had
+                    // nothing to read — and a delayed redirect from an older
+                    // upload could not be told from the current one.
+                    submission: settledSubmission({ progress: 1, completedId: finished }),
                 });
             }
 
@@ -631,12 +654,12 @@
                 if (state.submission?.superseded === true) {
                     return merge(state, {
                         status: "ready_to_submit",
-                        submission: { progress: 0, isQueued: false, activeId: null },
+                        submission: settledSubmission(),
                     });
                 }
                 return merge(state, {
                     status: "complete",
-                    submission: { progress: 0, isQueued: true },
+                    submission: settledSubmission({ isQueued: true }),
                 });
             }
 

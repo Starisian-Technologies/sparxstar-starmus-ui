@@ -174,3 +174,41 @@ test("core mints the attempt identity before the transfer, not inside it", async
     assert.match(between, /catch \(idError\)/, "a failed mint is handled, not propagated");
     assert.match(between, /localAttemptId\(\)/, "and the attempt still gets an identity");
 });
+
+test("a named error does not settle an unidentified submission", () => {
+    // `errorIsCurrent` treated `inFlight === null` as a wildcard, so an error
+    // naming one attempt could end a submission that named none. That is the
+    // same pair `submit-complete` refuses by requiring both ids: two things
+    // that cannot be shown to be the same submission are not matched.
+    const store = createStore({ instanceId: "t" });
+    store.dispatch({ type: "starmus/init", payload: { instanceId: "t", tier: "A" } });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { instanceId: "t", blob: { size: 1 } },
+    });
+    // A caller that announces a submission without naming it.
+    store.dispatch({ type: "starmus/submit-start" });
+    assert.equal(store.getState().status, "submitting");
+    assert.equal(store.getState().submission.activeId, null, "precondition: unidentified");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "gone", retryable: false, attemptId: UPLOAD_A },
+    });
+    assert.equal(
+        store.getState().status,
+        "submitting",
+        "an error for a different attempt does not end this one",
+    );
+});
+
+test("an error naming no attempt still applies to whatever is running", () => {
+    // The wildcard that must survive: a denied microphone or a recorder that
+    // would not start belongs to no attempt and applies to all of them.
+    const store = submittingStore();
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "queue unavailable", retryable: false },
+    });
+    assert.equal(store.getState().status, "ready_to_submit", "the UI is given back");
+});

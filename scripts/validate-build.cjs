@@ -131,12 +131,25 @@ if (fs.existsSync(mainFile)) {
 // ---- CHECK TUS CONSTRAINTS ----
 const tusFile = path.join(ROOT_DIR, "src/js/starmus-tus.js");
 if (fs.existsSync(tusFile)) {
-    const tusContent = fs.readFileSync(tusFile, "utf8");
+    const tusSource = fs.readFileSync(tusFile, "utf8");
+    // Comments stripped once, here, before anything reads the module, because
+    // every check in this function asks what the code *does*. Both directions
+    // need it and both were wrong: a positive check passes on its own
+    // documentation — the chunk cap, the checksum algorithm and the three
+    // capture-profile assertions all had their implementation-shaped text
+    // sitting in the comments right above them — and a negative one like the
+    // full-file scan fails on it, so writing down why this module must not use
+    // `fetch` would break the build and teach the next author to delete the
+    // explanation rather than keep it. A guard its own prose satisfies, or its
+    // own prose breaks, is not a guard.
+    const tusCode = tusSource
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
 
     // Verify the runtime chunk size cap enforces ≤ 512 KB via Math.min.
     // Use lazy [\s\S]*? so the match crosses newlines and function call parens.
     const chunkCapPattern = /Math\.min\([\s\S]*?512\s*\*\s*1024/;
-    if (!chunkCapPattern.test(tusContent)) {
+    if (!chunkCapPattern.test(tusCode)) {
         console.log(
             "❌ starmus-tus.js: Runtime chunk size cap not found. Expected Math.min(…, 512 * 1024).",
         );
@@ -147,7 +160,7 @@ if (fs.existsSync(tusFile)) {
 
     // Verify uploadTus is exported as a function (not just mentioned in a comment/import).
     const exportTusPattern = /export\s+(?:async\s+)?function\s+uploadTus\b/;
-    if (!exportTusPattern.test(tusContent)) {
+    if (!exportTusPattern.test(tusCode)) {
         console.log(
             "❌ starmus-tus.js: Missing exported uploadTus function (primary chunked upload path).",
         );
@@ -160,7 +173,7 @@ if (fs.existsSync(tusFile)) {
     const checksumSha256Pattern = /checksumAlgorithm\s*[:=]\s*["']sha256["']/;
     const checksumSha1Pattern = /checksumAlgorithm\s*[:=]\s*["']sha1["']/;
 
-    if (checksumSha1Pattern.test(tusContent) || !checksumSha256Pattern.test(tusContent)) {
+    if (checksumSha1Pattern.test(tusCode) || !checksumSha256Pattern.test(tusCode)) {
         console.log(
             '❌ starmus-tus.js: checksumAlgorithm must be explicitly set to "sha256" and must not use "sha1".',
         );
@@ -179,15 +192,6 @@ if (fs.existsSync(tusFile)) {
     // POST, so the check is on the *capability*: this module transfers through
     // tus and nothing else. A whole-blob send needs one of these three, and
     // none of them has a legitimate use here.
-    // Comments stripped once, here, for every check below that asks what the
-    // module *does*. Both directions need it. A positive check passes on its
-    // own documentation; a negative one like the full-file scan fails on it —
-    // writing down why this module must not use `fetch` would break the build
-    // and teach the next author to delete the explanation rather than keep it.
-    const tusCode = tusContent
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/^\s*\/\/.*$/gm, "");
-
     const fullFileMechanisms = [
         [/\bfunction\s+uploadDirect\b|\buploadDirect\s*=|directUpload/, "the former direct-upload path"],
         [/\bnew\s+FormData\b/, "a FormData body"],
@@ -261,13 +265,13 @@ if (fs.existsSync(tusFile)) {
     // the trim, because the trim alone let that through.
     const profileTrimmedBeforeTest =
         /typeof\s+rawProfile\s*===\s*"string"\s*\?\s*sanitizeMetadata\(\s*rawProfile\s*\)\s*\.trim\(\)\s*:\s*""/.test(
-            tusContent,
+            tusCode,
         );
     const profileSentConditionally = /if\s*\(\s*captureProfile\s*\)\s*\{\s*\n\s*tusMetadata\.captureProfile\s*=\s*captureProfile;/.test(
-        tusContent,
+        tusCode,
     );
     const profileDefaultsToEmpty = /captureProfile\s*:\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\|\|/.test(
-        tusContent,
+        tusCode,
     );
     if (!profileTrimmedBeforeTest || !profileSentConditionally || profileDefaultsToEmpty) {
         console.log(
@@ -284,7 +288,7 @@ if (fs.existsSync(tusFile)) {
     // deadline sitting beside it: the watchdog must exist, must be re-armed on
     // progress, and the total-duration timeout it replaced must not return.
     // Read from the comment-stripped source, like the resume check above it.
-    // Scanning `tusContent` meant the explanation counted as the thing: lose
+    // Scanning `tusCode` meant the explanation counted as the thing: lose
     // `stallTimeoutMs` from the code while the paragraph describing it remains,
     // and this reported a watchdog that no longer exists. Every one of these
     // guards has now been caught certifying its own documentation at least
@@ -373,6 +377,10 @@ if (fs.existsSync(tusFile)) {
     // pointing at nothing, which AGENTS.md's "update it when one is removed or
     // renamed" is exactly about, and which the missing-only test could never
     // catch.
+    //
+    // And every symbol in each direction, not only the exported ones — see the
+    // module-scope collection below for why that asymmetry was a hole rather
+    // than a scope.
     const exported = new Set();
     const sourceByPath = new Map();
     for (const file of allSourceJs()) {
@@ -380,6 +388,38 @@ if (fs.existsSync(tusFile)) {
         const rel = path.relative(ROOT_DIR, file).split(path.sep).join("/");
         sourceByPath.set(rel, content);
         const here = new Set();
+
+        // Comments removed before anything is counted. A symbol named only in
+        // an `@example` or a `@param` is prose, and a manifest check that
+        // counts prose demands entries for things that do not exist.
+        const moduleCode = content
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/^\s*\/\/.*$/gm, "");
+
+        // Internal symbols too, not only exported ones.
+        //
+        // AGENTS.md says to update the manifest "when any symbol is added,
+        // removed, or renamed", and its final rule says to take the stricter
+        // reading where one is ambiguous. This collected exports alone, so 47
+        // module-scope symbols — `OfflineQueue`, `UploadCircuitBreaker`, the
+        // reducer, the queue's `CONFIG` — were absent while the check reported
+        // success, and the *stale* half below was already testing internal
+        // entries the *missing* half could never have required. A check that
+        // enforces one direction of a two-directional rule certifies drift in
+        // the other.
+        //
+        // Module scope is column 0, except in the IIFE-wrapped store where it
+        // is one indent in. Anything deeper is a local and not a symbol the
+        // manifest is about.
+        const base = /^\(function\s*\(/m.test(moduleCode) ? "(?: {4})?" : "";
+        const topLevel = new RegExp(
+            `^${base}(?:export\\s+)?(?:async\\s+)?(?:function|const|let|var|class)\\s+(\\w+)`,
+            "gm",
+        );
+        let top;
+        while ((top = topLevel.exec(moduleCode)) !== null) {
+            here.add(top[1]);
+        }
 
         // `export function foo`, `export const foo`, `export class Foo`,
         // `export let/var foo`, with or without `async`.
@@ -446,7 +486,7 @@ if (fs.existsSync(tusFile)) {
 
     if (missing.length > 0) {
         console.log(
-            `❌ ai_manifest.json is missing ${missing.length} exported symbol(s): ${missing.join(", ")}. AGENTS.md requires the manifest to track every symbol added, removed or renamed.`,
+            `❌ ai_manifest.json is missing ${missing.length} module-scope symbol(s): ${missing.join(", ")}. AGENTS.md requires the manifest to track every symbol added, removed or renamed.`,
         );
         ok = false;
     }
@@ -457,7 +497,7 @@ if (fs.existsSync(tusFile)) {
         ok = false;
     }
     if (missing.length === 0 && stale.length === 0) {
-        console.log("✅ ai_manifest.json matches the exported symbols, in both directions");
+        console.log("✅ ai_manifest.json matches every module-scope symbol, in both directions");
     }
 }
 

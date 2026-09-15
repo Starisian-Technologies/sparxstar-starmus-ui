@@ -1224,20 +1224,29 @@ test("the shared classifier retries what the queue retries", async () => {
     for (const msg of ["HTTP 429 Too Many Requests", "response code 408", "status: 425"]) {
         assert.equal(isNonRetryableUploadFailure(msg), false, `should retry: ${msg}`);
     }
-    // A start that failed wraps whatever went wrong underneath and is usually
-    // transient — an endpoint that was unreachable for a moment, a device that
-    // dropped off. Core called it final while the queue retried it.
-    assert.equal(
-        isNonRetryableUploadFailure(
-            "TUS_UPLOAD_START_FAILED: the upload could not be started (network error).",
-        ),
-        false,
-        "a start failure is retried, not held",
-    );
-    // And what genuinely will not fix itself stays held.
-    for (const msg of ["response code: 403", "HTTP 401", "Invalid JSON", "QuotaExceeded"]) {
+    // And what genuinely will not fix itself stays held. `starmus-tus.js`
+    // separates a resume-*lookup* failure from a *setup or start* failure for
+    // exactly this reason, and says of the second: "not going to fix itself on
+    // the next drain". A missing endpoint is the same kind of fact. Held is not
+    // dropped — ADR-011 keeps the recording either way; this decides whether
+    // the queue spends three attempts relearning it or surfaces it now.
+    for (const msg of [
+        "response code: 403",
+        "HTTP 401",
+        "Invalid JSON",
+        "QuotaExceeded",
+        "TUS_UPLOAD_START_FAILED: the upload could not be started (bad endpoint).",
+        "NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl",
+    ]) {
         assert.equal(isNonRetryableUploadFailure(msg), true, `should hold: ${msg}`);
     }
+    // The lookup half stays retryable: not knowing whether a partial exists is
+    // a condition, and starting over would be the re-upload ADR-038 forbids.
+    assert.equal(
+        isNonRetryableUploadFailure("TUS_RESUME_LOOKUP_FAILED: could not determine ..."),
+        false,
+        "a lookup failure is deferred, not held",
+    );
 });
 
 test("a superseded upload that fails after transfer does not complete the new source", () => {

@@ -213,8 +213,15 @@
                 // because nothing tied the error to the attempt that raised it.
                 const attempt = errObj.attemptId ?? null;
                 const inFlight = state.submission?.activeId ?? null;
-                const errorIsCurrent =
-                    attempt === null || inFlight === null || attempt === inFlight;
+                // An error that names no attempt is general and applies to
+                // whatever is happening. One that names an attempt applies only
+                // to that attempt — and if nothing in flight is named either,
+                // the two cannot be shown to be the same submission. Treating
+                // that pair as a match is the same hole `submit-complete`
+                // refuses by requiring both ids: it let a stale error for one
+                // attempt reset an unidentified submission that was still
+                // running.
+                const errorIsCurrent = attempt === null || attempt === inFlight;
 
                 const submissionFailed =
                     state.status === "submitting" &&

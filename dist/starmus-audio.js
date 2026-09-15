@@ -2920,7 +2920,15 @@
             // because nothing tied the error to the attempt that raised it.
             var attempt = (_errObj$attemptId = errObj.attemptId) !== null && _errObj$attemptId !== void 0 ? _errObj$attemptId : null;
             var inFlight = (_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
-            var errorIsCurrent = attempt === null || inFlight === null || attempt === inFlight;
+            // An error that names no attempt is general and applies to
+            // whatever is happening. One that names an attempt applies only
+            // to that attempt — and if nothing in flight is named either,
+            // the two cannot be shown to be the same submission. Treating
+            // that pair as a match is the same hole `submit-complete`
+            // refuses by requiring both ids: it let a stale error for one
+            // attempt reset an unidentified submission that was still
+            // running.
+            var errorIsCurrent = attempt === null || attempt === inFlight;
             var submissionFailed = state.status === "submitting" && errorIsCurrent && errObj.retryable === false && !errObj.uploadId;
 
             // The transfer succeeded and the handling after it did not.
@@ -15161,6 +15169,22 @@
   function isNonRetryableUploadFailure(message) {
     var msg = typeof message === "string" ? message : String(message !== null && message !== void 0 ? message : "");
 
+    // Configuration, not conditions. `starmus-tus.js` separates a *lookup*
+    // failure from a *setup or start* failure precisely because the two need
+    // different handling, and says of the second: "not going to fix itself on
+    // the next drain". A missing endpoint is the same kind of fact. Retrying
+    // either spends three attempts to learn what the first one already
+    // established, and then holds the row anyway — later, with the reason
+    // buried under two more failures.
+    //
+    // Held is not dropped. ADR-011 keeps the recording; what this decides is
+    // whether the queue keeps trying or surfaces it through
+    // `getHeldSubmissions()` now, where a person can act on it.
+    var misconfigured = /NO_UPLOAD_ENDPOINT|TUS_UPLOAD_START_FAILED/i.test(msg);
+    if (misconfigured) {
+      return true;
+    }
+
     // Transient by nature: a stalled transfer, a resume lookup that failed, a
     // device that went offline before the attempt began.
     var stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(msg);
@@ -16292,7 +16316,7 @@
                     }
                     var item = cursor.value;
                     if ((item === null || item === void 0 ? void 0 : item.held) === true) {
-                      var _item$retryCount, _item$lastAttempt, _item$error, _item$audioBlob, _item$audioBlob2, _item$metadata, _item$metadata2;
+                      var _item$retryCount, _item$lastAttempt, _item$error, _item$audioBlob, _item$audioBlob2, _item$metadata, _item$metadata2, _item$metadata3;
                       held.push({
                         id: item.id,
                         instanceId: item.instanceId,
@@ -16308,7 +16332,17 @@
                         // Whether the server already has these bytes. A host
                         // showing this entry needs to know that releasing it
                         // finishes the job rather than sending it again.
-                        transferred: item.transferred === true
+                        transferred: item.transferred === true,
+                        // And under which identifier, because `transferred`
+                        // alone cannot be acted on. When the bytes have landed
+                        // this is the only handle the two sides share: without
+                        // it a host can see that an asset is on the server and
+                        // still have no way to say which one, so a
+                        // post-transfer failure cannot be reconciled or even
+                        // reported. Canonicalised the same way the drain
+                        // canonicalises it, and null rather than a malformed
+                        // string when there is nothing usable to give.
+                        uploadId: isUploadId((_item$metadata3 = item.metadata) === null || _item$metadata3 === void 0 ? void 0 : _item$metadata3.uploadId) ? item.metadata.uploadId.trim() : null
                       });
                     }
                     cursor.continue();

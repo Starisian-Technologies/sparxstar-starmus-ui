@@ -57,6 +57,22 @@ import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 export function isNonRetryableUploadFailure(message) {
     const msg = typeof message === "string" ? message : String(message ?? "");
 
+    // Configuration, not conditions. `starmus-tus.js` separates a *lookup*
+    // failure from a *setup or start* failure precisely because the two need
+    // different handling, and says of the second: "not going to fix itself on
+    // the next drain". A missing endpoint is the same kind of fact. Retrying
+    // either spends three attempts to learn what the first one already
+    // established, and then holds the row anyway — later, with the reason
+    // buried under two more failures.
+    //
+    // Held is not dropped. ADR-011 keeps the recording; what this decides is
+    // whether the queue keeps trying or surfaces it through
+    // `getHeldSubmissions()` now, where a person can act on it.
+    const misconfigured = /NO_UPLOAD_ENDPOINT|TUS_UPLOAD_START_FAILED/i.test(msg);
+    if (misconfigured) {
+        return true;
+    }
+
     // Transient by nature: a stalled transfer, a resume lookup that failed, a
     // device that went offline before the attempt began.
     const stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(msg);
@@ -1008,6 +1024,18 @@ class OfflineQueue {
                         // showing this entry needs to know that releasing it
                         // finishes the job rather than sending it again.
                         transferred: item.transferred === true,
+                        // And under which identifier, because `transferred`
+                        // alone cannot be acted on. When the bytes have landed
+                        // this is the only handle the two sides share: without
+                        // it a host can see that an asset is on the server and
+                        // still have no way to say which one, so a
+                        // post-transfer failure cannot be reconciled or even
+                        // reported. Canonicalised the same way the drain
+                        // canonicalises it, and null rather than a malformed
+                        // string when there is nothing usable to give.
+                        uploadId: isUploadId(item.metadata?.uploadId)
+                            ? item.metadata.uploadId.trim()
+                            : null,
                     });
                 }
                 cursor.continue();

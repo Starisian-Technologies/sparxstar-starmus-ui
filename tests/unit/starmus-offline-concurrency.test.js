@@ -752,3 +752,41 @@ test("a recording the server already has is not counted as pending", async () =>
     assert.equal((await tab.queue.getAll()).length, 2, "while both rows are still retained");
     assert.ok(waiting, "and the one still waiting is the one counted");
 });
+
+test("every queue transaction settles when it aborts", async () => {
+    // An IndexedDB transaction can abort without firing `onerror`. Every
+    // promise here is awaited by the drain, which sets `isProcessing` first, so
+    // one that never settles leaves that flag true forever: later drains return
+    // at their first line and every queued recording is stranded until reload.
+    //
+    // A previous audit of mine missed ten of these because it looked for
+    // transactions with *neither* handler; one with `onerror` and no `onabort`
+    // passed it and was still vulnerable.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+    const lines = source.split("\n");
+
+    const unguarded = [];
+    lines.forEach((line, index) => {
+        if (!line.includes("this.db.transaction(")) {
+            return;
+        }
+        const block = lines.slice(index, index + 75).join("\n");
+        if (!block.includes("tx.onabort")) {
+            unguarded.push(index + 1);
+        }
+    });
+
+    assert.deepEqual(unguarded, [], "every transaction has an abort path");
+
+    // And every abort handler settles rather than merely logging.
+    const aborts = source.match(/tx\.onabort\s*=[^;]*;/g) || [];
+    assert.ok(aborts.length >= 11, `expected an abort handler per transaction, found ${aborts.length}`);
+    for (const handler of aborts) {
+        assert.match(
+            handler,
+            /resolve|reject|fail\(/,
+            `an abort handler that does not settle is the defect: ${handler}`,
+        );
+    }
+});

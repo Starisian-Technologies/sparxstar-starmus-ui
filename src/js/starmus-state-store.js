@@ -145,7 +145,15 @@
                 });
                 const shouldResetStatus =
                     (state.status === "calibrating" || state.status === "recording") &&
-                    (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+                    (errObj.code === "MIC_DENIED" ||
+                        errObj.code === "MEDIARECORDER_FAILED" ||
+                        // `startCalibration()` raises this one itself, while
+                        // the state is `calibrating`. Left out of the reset
+                        // list, it stranded the UI mid-calibration with the
+                        // setup control disabled — no way for the contributor
+                        // to retry and no way for the host to correct the
+                        // profile that caused it.
+                        errObj.code === "INVALID_CAPTURE_PROFILE");
 
                 // A submission that failed terminally has to give the UI back.
                 //
@@ -504,10 +512,21 @@
                     },
                 });
 
-            case "starmus/submit-progress":
+            case "starmus/submit-progress": {
+                // Progress from an upload that is no longer the one in flight
+                // is not this submission's progress. An upload continuing after
+                // its source was replaced drove the new submission's bar from
+                // the old one's bytes, which reads to a contributor as a
+                // transfer jumping backwards.
+                const runningId = state.submission?.activeId ?? null;
+                const reportingId = action.uploadId ?? null;
+                if (runningId !== null && reportingId !== null && runningId !== reportingId) {
+                    return state;
+                }
                 return merge(state, {
                     submission: merge(state.submission, { progress: action.progress }),
                 });
+            }
 
             case "starmus/submit-complete": {
                 // Ignored when it does not belong to the submission in flight.

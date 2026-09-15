@@ -2856,7 +2856,14 @@
               timestamp: Date.now(),
               severity: errObj.retryable === false ? "hard" : "soft"
             });
-            var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+            var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED" ||
+            // `startCalibration()` raises this one itself, while
+            // the state is `calibrating`. Left out of the reset
+            // list, it stranded the UI mid-calibration with the
+            // setup control disabled — no way for the contributor
+            // to retry and no way for the host to correct the
+            // profile that caused it.
+            errObj.code === "INVALID_CAPTURE_PROFILE");
 
             // A submission that failed terminally has to give the UI back.
             //
@@ -3190,14 +3197,27 @@
             }
           });
         case "starmus/submit-progress":
-          return merge(state, {
-            submission: merge(state.submission, {
-              progress: action.progress
-            })
-          });
+          {
+            var _state$submission$act2, _state$submission4, _action$uploadId;
+            // Progress from an upload that is no longer the one in flight
+            // is not this submission's progress. An upload continuing after
+            // its source was replaced drove the new submission's bar from
+            // the old one's bytes, which reads to a contributor as a
+            // transfer jumping backwards.
+            var runningId = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
+            var reportingId = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
+            if (runningId !== null && reportingId !== null && runningId !== reportingId) {
+              return state;
+            }
+            return merge(state, {
+              submission: merge(state.submission, {
+                progress: action.progress
+              })
+            });
+          }
         case "starmus/submit-complete":
           {
-            var _state$submission$act2, _state$submission4, _action$submissionId, _state$submission5;
+            var _state$submission$act3, _state$submission5, _action$submissionId, _state$submission6;
             // Ignored when it does not belong to the submission in flight.
             //
             // A contributor who attaches a file while an upload is running
@@ -3224,7 +3244,7 @@
             // unidentified submission — which is every legacy caller and
             // every stale one, exactly the pair least likely to be about
             // the same upload.
-            var active = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
+            var active = (_state$submission$act3 = (_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
             var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
             if (active === null || finished === null || active !== finished) {
               return state;
@@ -3237,7 +3257,7 @@
             // had ever uploaded — the contributor was shown a delivery
             // that never happened and given no way to send the real one.
             // The UI goes back to submittable so the attachment can go.
-            if (((_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.superseded) === true) {
+            if (((_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
                 submission: {
@@ -3258,15 +3278,15 @@
           }
         case "starmus/submit-queued":
           {
-            var _state$submission$act3, _state$submission6, _action$uploadId, _state$submission7;
+            var _state$submission$act4, _state$submission7, _action$uploadId2, _state$submission8;
             // Ignored when it does not belong to the submission in flight.
             // `queueSubmission()` is asynchronous, so a slow result from an
             // earlier attempt could otherwise mark whatever is on screen as
             // queued. Matched on `uploadId` — the same identifier
             // `submit-start` records — and not on `submissionId`, which is
             // the queue's own row id and would never match it.
-            var _inFlight = (_state$submission$act3 = (_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
-            var queuedUpload = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
+            var _inFlight = (_state$submission$act4 = (_state$submission7 = state.submission) === null || _state$submission7 === void 0 ? void 0 : _state$submission7.activeId) !== null && _state$submission$act4 !== void 0 ? _state$submission$act4 : null;
+            var queuedUpload = (_action$uploadId2 = action.uploadId) !== null && _action$uploadId2 !== void 0 ? _action$uploadId2 : null;
             // An unnamed result is refused too, when something else is in
             // flight. Requiring the id to be non-null before comparing let
             // an older queue result with no id mark the current submission
@@ -3289,7 +3309,7 @@
             // the platform was holding a file it had never been given, and
             // disabled the control that would have sent it. The queue entry
             // for the earlier recording stands either way.
-            if (((_state$submission7 = state.submission) === null || _state$submission7 === void 0 ? void 0 : _state$submission7.superseded) === true) {
+            if (((_state$submission8 = state.submission) === null || _state$submission8 === void 0 ? void 0 : _state$submission8.superseded) === true) {
               return merge(state, {
                 status: "ready_to_submit",
                 submission: {
@@ -13928,7 +13948,13 @@
       }
       merged[_key] = _val;
     }
-    merged.chunkSize = Math.min(Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024, 512 * 1024);
+    // Bounded at both ends. The upper cap is AGENTS.md's 512 KB; the lower one
+    // matters just as much, because a host value of 0 or a negative number
+    // reaches tus-js-client as a slice length and produces chunks that never
+    // advance — an upload that runs forever without moving, on exactly the
+    // links where that is hardest to notice.
+    var requestedChunk = Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024;
+    merged.chunkSize = requestedChunk >= 1 ? Math.min(Math.floor(requestedChunk), 512 * 1024) : 512 * 1024;
 
     // Two values a host does not get to set, because they are not preferences.
     //
@@ -13959,7 +13985,7 @@
     // is armed — before a byte moves, on every device.
     if (!Number.isFinite(merged.stallTimeoutMs) || merged.stallTimeoutMs <= 0 || merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS) {
       if (Number.isFinite(merged.stallTimeoutMs)) {
-        console.warn("[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms exceeds the ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms the offline queue's claim lease covers; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms. A longer watchdog would let another tab claim a row whose upload is still running."));
+        console.warn(merged.stallTimeoutMs <= 0 ? "[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms is not a usable watchdog \u2014 it would abort every transfer the moment it is armed; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms.") : "[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms exceeds the ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms the offline queue's claim lease covers; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms. A longer watchdog would let another tab claim a row whose upload is still running."));
       }
       merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
     }
@@ -15540,6 +15566,12 @@
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
                 }));
             }
           }, _callee4, this);
@@ -15630,6 +15662,9 @@
                   tx.onerror = function () {
                     return resolve(null);
                   };
+                  tx.onabort = function () {
+                    return resolve(null);
+                  };
                 }));
             }
           }, _callee5, this);
@@ -15693,6 +15728,9 @@
                     return resolve();
                   };
                   tx.onerror = function () {
+                    return resolve();
+                  };
+                  tx.onabort = function () {
                     return resolve();
                   };
                 }));
@@ -15779,6 +15817,9 @@
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
                 }));
             }
           }, _callee7, this);
@@ -15852,6 +15893,9 @@
                     });
                   };
                   tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
                     return reject(ev.target.error);
                   };
                 }));
@@ -16148,6 +16192,9 @@
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
                 }));
             }
           }, _callee1, this);
@@ -16215,6 +16262,9 @@
                     return resolve(wrote);
                   };
                   tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
                     return reject(ev.target.error);
                   };
                 }));
@@ -16305,6 +16355,9 @@
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
                 }));
             }
           }, _callee11, this);
@@ -16387,6 +16440,9 @@
                     return resolve(renewed);
                   };
                   tx.onerror = function () {
+                    return resolve(null);
+                  };
+                  tx.onabort = function () {
                     return resolve(null);
                   };
                 }));
@@ -17236,12 +17292,18 @@
       /**
        * The ids the drain should consider, and the two flags it triages on.
        *
-       * No recordings. `getAll()` deserialised every queued row — each with its
-       * audio Blob — before the drain had claimed even the first one, so a drain
-       * over a full queue held up to the 20 MB queue cap at once against the 5 MB
-       * in-memory Blob budget AGENTS.md states as a FAIL condition. It also
-       * undid the cursor-based protection `usage()` and `getHeld()` already have,
-       * by the one path that runs most often.
+       * One row at a time, and nothing kept but three scalars.
+       *
+       * Stated precisely, because an earlier version of this comment claimed more
+       * than a cursor delivers: IndexedDB has no field projection, so
+       * `cursor.value` still yields the whole stored object, audio and all. What
+       * changes is lifetime and accumulation. `getAll()` built an array of every
+       * row and held it for the length of the drain; a cursor materialises one
+       * row, and the array that outlives it holds only `id`, `held` and
+       * `transferred`. One record live at a time against the queue's entire
+       * retained size is the difference, and on the devices this package exists
+       * for it is the difference that matters — but it is not the same as never
+       * touching a recording, and the comment should not say it is.
        *
        * Nothing is lost by not carrying the rows: `_claim()` returns the row as
        * its own transaction read it, and the attempt has been proceeding from
@@ -17437,6 +17499,9 @@
                   tx.onerror = function (ev) {
                     return reject(ev.target.error);
                   };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
                 }));
             }
           }, _callee18, this);
@@ -17557,7 +17622,10 @@
        * Id, retry count and last error for every queued row — and no recordings.
        *
        * The shape `starmus/offline/queue_updated` has always carried; what
-       * changed is that producing it no longer costs the memory of the queue.
+       * changed is that producing it holds one row at a time rather than all of
+       * them at once. As in `_pendingSummaries()`, a cursor still yields whole
+       * records — there is no field projection — so what this avoids is the
+       * accumulation, not every touch of a recording.
        *
        * @private
        * @returns {Promise<Array<{id: string, retryCount: number, error: string|null}>>}
@@ -18066,7 +18134,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _result$data, _result$data2, detail, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _store$getState$submi, _store$getState$submi2, _result$data, _result$data2, detail, wasCurrent, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -18188,7 +18256,12 @@
                 onProgress: function onProgress(uploaded, total) {
                   return store.dispatch({
                     type: "starmus/submit-progress",
-                    progress: uploaded / total
+                    progress: uploaded / total,
+                    // Named, like the completion and queue actions. An
+                    // upload that continues after its source was replaced
+                    // was otherwise driving the *new* submission's progress
+                    // bar from the old one's bytes.
+                    uploadId: metadata.uploadId
                   });
                 }
               });
@@ -18248,7 +18321,16 @@
                 // told the host page a submission had completed that this state
                 // does not consider complete. The side effects follow the
                 // reducer's decision rather than the transfer's.
-                settled = store.getState().status === "complete";
+                // Whether *this* attempt settled, decided before the dispatch.
+                //
+                // Reading the status afterwards could not tell the two apart:
+                // if upload A finishes after upload B has already completed,
+                // the reducer correctly ignores A's completion, but the state
+                // still says `complete` — so A went on to redirect and notify
+                // the host with its own result, for a submission the store had
+                // just refused.
+                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === metadata.uploadId;
+                settled = wasCurrent && store.getState().status === "complete";
                 redirect = settled ? getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url) : null;
                 if (redirect) {
                   // The submission this redirect belongs to, captured now.

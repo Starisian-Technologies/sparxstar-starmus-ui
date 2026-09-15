@@ -221,10 +221,14 @@ function getConfig() {
         }
         merged[key] = val;
     }
-    merged.chunkSize = Math.min(
-        Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024,
-        512 * 1024,
-    );
+    // Bounded at both ends. The upper cap is AGENTS.md's 512 KB; the lower one
+    // matters just as much, because a host value of 0 or a negative number
+    // reaches tus-js-client as a slice length and produces chunks that never
+    // advance — an upload that runs forever without moving, on exactly the
+    // links where that is hardest to notice.
+    const requestedChunk = Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024;
+    merged.chunkSize =
+        requestedChunk >= 1 ? Math.min(Math.floor(requestedChunk), 512 * 1024) : 512 * 1024;
 
     // Two values a host does not get to set, because they are not preferences.
     //
@@ -260,7 +264,9 @@ function getConfig() {
     ) {
         if (Number.isFinite(merged.stallTimeoutMs)) {
             console.warn(
-                `[TUS] stallTimeoutMs ${merged.stallTimeoutMs}ms exceeds the ${UPLOAD_STALL_TIMEOUT_MS}ms the offline queue's claim lease covers; using ${UPLOAD_STALL_TIMEOUT_MS}ms. A longer watchdog would let another tab claim a row whose upload is still running.`,
+                merged.stallTimeoutMs <= 0
+                    ? `[TUS] stallTimeoutMs ${merged.stallTimeoutMs}ms is not a usable watchdog — it would abort every transfer the moment it is armed; using ${UPLOAD_STALL_TIMEOUT_MS}ms.`
+                    : `[TUS] stallTimeoutMs ${merged.stallTimeoutMs}ms exceeds the ${UPLOAD_STALL_TIMEOUT_MS}ms the offline queue's claim lease covers; using ${UPLOAD_STALL_TIMEOUT_MS}ms. A longer watchdog would let another tab claim a row whose upload is still running.`,
             );
         }
         merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;

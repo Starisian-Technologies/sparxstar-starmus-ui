@@ -1541,3 +1541,68 @@ test("host overrides cannot buy extra attempts or a zero-length watchdog", async
     assert.match(afterMerge, /\.slice\(0, 2\)/, "at most two retry delays survive an override");
     assert.match(afterMerge, /merged\.stallTimeoutMs <= 0/, "and a non-positive watchdog is refused");
 });
+
+test("progress from a superseded upload does not drive the current one", () => {
+    // An upload continuing after its source was replaced drove the new
+    // submission's progress bar from the old one's bytes, which reads to a
+    // contributor as a transfer jumping backwards.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-current" });
+    store.dispatch({ type: "starmus/submit-progress", progress: 0.5, uploadId: "upload-current" });
+    assert.equal(store.getState().submission.progress, 0.5);
+
+    store.dispatch({ type: "starmus/submit-progress", progress: 0.1, uploadId: "upload-old" });
+    assert.equal(store.getState().submission.progress, 0.5, "the old upload's bytes are ignored");
+});
+
+test("post-upload side effects follow the reducer's decision, not the status", async () => {
+    // If upload A finishes after upload B has already completed, the reducer
+    // ignores A's completion — but the state still says `complete`, so A went
+    // on to redirect and notify the host with its own result for a submission
+    // the store had just refused.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    assert.match(
+        source,
+        /const wasCurrent =\s*\(store\.getState\(\)\.submission\?\.activeId \?\? null\) === metadata\.uploadId;/,
+        "whether this attempt was current is captured before the dispatch",
+    );
+    const settledLine = /const settled = wasCurrent && store\.getState\(\)\.status === "complete";/;
+    assert.match(source, settledLine, "and the side effects require both");
+});
+
+test("a bad capture profile does not strand the UI mid-calibration", () => {
+    // `startCalibration()` raises INVALID_CAPTURE_PROFILE itself, while the
+    // state is `calibrating`. Left out of the reset list, it froze the UI there
+    // with the setup control disabled — no way for the contributor to retry and
+    // no way for the host to correct the profile that caused it.
+    const store = createStore();
+    store.dispatch({ type: "starmus/calibration-start" });
+    assert.equal(store.getState().status, "calibrating");
+
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "unknown profile", code: "INVALID_CAPTURE_PROFILE" },
+    });
+    assert.equal(store.getState().status, "ready", "the contributor can try again");
+});
+
+test("a chunk size is bounded at both ends", async () => {
+    // The upper cap is AGENTS.md's 512 KB. The lower one matters as much: a
+    // host value of 0 or a negative number reaches tus-js-client as a slice
+    // length and produces chunks that never advance — an upload running forever
+    // without moving, on exactly the links where that is hardest to notice.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+
+    assert.match(
+        source,
+        /requestedChunk >= 1 \? Math\.min\(Math\.floor\(requestedChunk\), 512 \* 1024\) : 512 \* 1024/,
+        "a non-positive chunk size falls back to the default rather than being passed through",
+    );
+});

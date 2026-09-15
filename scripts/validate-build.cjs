@@ -268,11 +268,18 @@ if (fs.existsSync(tusFile)) {
     // Two halves, because the presence of a stall bound does not rule out a
     // deadline sitting beside it: the watchdog must exist, must be re-armed on
     // progress, and the total-duration timeout it replaced must not return.
-    const hasStallBound = /stallTimeoutMs/.test(tusContent);
+    // Read from the comment-stripped source, like the resume check above it.
+    // Scanning `tusContent` meant the explanation counted as the thing: lose
+    // `stallTimeoutMs` from the code while the paragraph describing it remains,
+    // and this reported a watchdog that no longer exists. Every one of these
+    // guards has now been caught certifying its own documentation at least
+    // once, which is an argument for stripping first by default rather than
+    // remembering to.
+    const hasStallBound = /stallTimeoutMs/.test(tusCode);
     const rearmsOnProgress = /onProgress\s*\([^)]*\)\s*\{[\s\S]{0,200}?armStallWatchdog\s*\(/.test(
-        tusContent,
+        tusCode,
     );
-    const hasDeadline = /requestTimeoutMs/.test(tusContent);
+    const hasDeadline = /requestTimeoutMs/.test(tusCode);
     if (!hasStallBound || !rearmsOnProgress || hasDeadline) {
         console.log(
             "❌ starmus-tus.js: the upload watchdog must be a no-progress bound that is re-armed on every progress event, with no total-duration deadline beside it. " +
@@ -404,12 +411,20 @@ if (fs.existsSync(tusFile)) {
             // methods among them. Testing for an export here would have called
             // four correct entries stale.
             const name = entry.symbol.replace(/[^\w$]/g, "");
+            // Matched against the source with comments removed. A symbol whose
+            // implementation was deleted but whose JSDoc still says
+            // `@param {string} name` — or whose removal left an `@example`
+            // calling it — stayed "present" to this check, so the manifest
+            // could certify an entry pointing at nothing but prose.
+            const code = content
+                .replace(/\/\*[\s\S]*?\*\//g, "")
+                .replace(/^\s*\/\/.*$/gm, "");
             return !new RegExp(
                 `(?:function|const|let|var|class)\\s+${name}\\b` +
                     `|^\\s*(?:async\\s+)?${name}\\s*\\(` +
                     `|\\b${name}\\s*[:=]`,
                 "m",
-            ).test(content);
+            ).test(code);
         })
         .map((entry) => `${entry.symbol} (${entry.path})`)
         .sort();

@@ -508,6 +508,8 @@ class OfflineQueue {
                 resolve();
             };
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -577,6 +579,7 @@ class OfflineQueue {
             req.onerror = () => resolve(null);
             tx.oncomplete = () => resolve(committed);
             tx.onerror = () => resolve(null);
+            tx.onabort = () => resolve(null);
         });
     }
 
@@ -621,6 +624,7 @@ class OfflineQueue {
             req.onerror = () => resolve();
             tx.oncomplete = () => resolve();
             tx.onerror = () => resolve();
+            tx.onabort = () => resolve();
         });
     }
 
@@ -684,6 +688,7 @@ class OfflineQueue {
                 resolve();
             };
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -747,6 +752,7 @@ class OfflineQueue {
                     maxTotalBytes: CONFIG.maxTotalBytes,
                 });
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -982,6 +988,7 @@ class OfflineQueue {
 
             tx.oncomplete = () => resolve(held);
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -1028,6 +1035,7 @@ class OfflineQueue {
             // proceeded under an id no row records.
             tx.oncomplete = () => resolve(wrote);
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -1091,6 +1099,7 @@ class OfflineQueue {
             req.onerror = (ev) => reject(ev.target.error);
             tx.oncomplete = () => resolve(claimed ? { token, row: claimed } : null);
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -1153,6 +1162,7 @@ class OfflineQueue {
             req.onerror = () => resolve(null);
             tx.oncomplete = () => resolve(renewed);
             tx.onerror = () => resolve(null);
+            tx.onabort = () => resolve(null);
         });
     }
 
@@ -1872,12 +1882,18 @@ class OfflineQueue {
     /**
      * The ids the drain should consider, and the two flags it triages on.
      *
-     * No recordings. `getAll()` deserialised every queued row — each with its
-     * audio Blob — before the drain had claimed even the first one, so a drain
-     * over a full queue held up to the 20 MB queue cap at once against the 5 MB
-     * in-memory Blob budget AGENTS.md states as a FAIL condition. It also
-     * undid the cursor-based protection `usage()` and `getHeld()` already have,
-     * by the one path that runs most often.
+     * One row at a time, and nothing kept but three scalars.
+     *
+     * Stated precisely, because an earlier version of this comment claimed more
+     * than a cursor delivers: IndexedDB has no field projection, so
+     * `cursor.value` still yields the whole stored object, audio and all. What
+     * changes is lifetime and accumulation. `getAll()` built an array of every
+     * row and held it for the length of the drain; a cursor materialises one
+     * row, and the array that outlives it holds only `id`, `held` and
+     * `transferred`. One record live at a time against the queue's entire
+     * retained size is the difference, and on the devices this package exists
+     * for it is the difference that matters — but it is not the same as never
+     * touching a recording, and the comment should not say it is.
      *
      * Nothing is lost by not carrying the rows: `_claim()` returns the row as
      * its own transaction read it, and the attempt has been proceeding from
@@ -2014,6 +2030,7 @@ class OfflineQueue {
             req.onerror = (ev) => reject(ev.target.error);
             tx.oncomplete = () => resolve(rows);
             tx.onerror = (ev) => reject(ev.target.error);
+            tx.onabort = (ev) => reject(ev.target.error);
         });
     }
 
@@ -2082,7 +2099,10 @@ class OfflineQueue {
      * Id, retry count and last error for every queued row — and no recordings.
      *
      * The shape `starmus/offline/queue_updated` has always carried; what
-     * changed is that producing it no longer costs the memory of the queue.
+     * changed is that producing it holds one row at a time rather than all of
+     * them at once. As in `_pendingSummaries()`, a cursor still yields whole
+     * records — there is no field projection — so what this avoids is the
+     * accumulation, not every touch of a recording.
      *
      * @private
      * @returns {Promise<Array<{id: string, retryCount: number, error: string|null}>>}

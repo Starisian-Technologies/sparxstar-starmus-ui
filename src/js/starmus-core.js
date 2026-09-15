@@ -288,6 +288,11 @@ export function initCore(store, instanceId, env) {
                     store.dispatch({
                         type: "starmus/submit-progress",
                         progress: uploaded / total,
+                        // Named, like the completion and queue actions. An
+                        // upload that continues after its source was replaced
+                        // was otherwise driving the *new* submission's progress
+                        // bar from the old one's bytes.
+                        uploadId: metadata.uploadId,
                     }),
             });
 
@@ -347,7 +352,18 @@ export function initCore(store, instanceId, env) {
                 // told the host page a submission had completed that this state
                 // does not consider complete. The side effects follow the
                 // reducer's decision rather than the transfer's.
-                const settled = store.getState().status === "complete";
+                // Whether *this* attempt settled, decided before the dispatch.
+                //
+                // Reading the status afterwards could not tell the two apart:
+                // if upload A finishes after upload B has already completed,
+                // the reducer correctly ignores A's completion, but the state
+                // still says `complete` — so A went on to redirect and notify
+                // the host with its own result, for a submission the store had
+                // just refused.
+                const wasCurrent =
+                    (store.getState().submission?.activeId ?? null) === metadata.uploadId;
+
+                const settled = wasCurrent && store.getState().status === "complete";
 
                 const redirect = settled
                     ? getSafeRedirect(result.data?.redirect_url || result.redirect_url)

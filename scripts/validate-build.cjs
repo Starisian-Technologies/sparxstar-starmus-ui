@@ -30,10 +30,15 @@ const requiredFiles = [
 ];
 
 // Source files scanned by the cross-cutting checks below.
-function allSourceJs(dir = "src/js") {
+function allSourceJs(dir = path.join(ROOT_DIR, "src/js")) {
+    // Resolved from ROOT_DIR, not from the working directory. Walking `src/js`
+    // relatively meant this scanned whatever tree the caller happened to be
+    // standing in: run from a subdirectory it throws, and run from a parent it
+    // could quietly scan a different checkout — a build guard whose answer
+    // depends on where you invoked it is not a guard.
     const out = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = `${dir}/${entry.name}`;
+        const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
             out.push(...allSourceJs(full));
         } else if (entry.name.endsWith(".js")) {
@@ -46,7 +51,11 @@ function allSourceJs(dir = "src/js") {
 let ok = true;
 
 // ---- CHECK CSS SIZE (<20KB unminified) ----
-const cssFile = "src/starmus-audio.css";
+// Every path in this script resolves from ROOT_DIR. Relative ones made the
+// whole validator depend on the working directory: run from `scripts/` it
+// reported eight required files missing and would have failed a build for
+// the location of the caller rather than the state of the code.
+const cssFile = path.join(ROOT_DIR, "src/starmus-audio.css");
 if (fs.existsSync(cssFile)) {
     const cssSize = fs.statSync(cssFile).size;
     const cssSizeKB = (cssSize / 1024).toFixed(2);
@@ -91,7 +100,7 @@ if (fs.existsSync(cssFile)) {
 // ---- CHECK FILE PRESENCE ----
 console.log("\n📦 Checking required files:");
 for (const file of requiredFiles) {
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(path.join(ROOT_DIR, file))) {
         console.log(`❌ Missing: ${file}`);
         ok = false;
     } else {
@@ -100,7 +109,7 @@ for (const file of requiredFiles) {
 }
 
 // ---- CHECK MAIN ENTRY DOES NOT IMPORT EXCLUDED MODULES ----
-const mainFile = "src/js/starmus-main.js";
+const mainFile = path.join(ROOT_DIR, "src/js/starmus-main.js");
 if (fs.existsSync(mainFile)) {
     const mainContent = fs.readFileSync(mainFile, "utf8");
     const excluded = [
@@ -120,7 +129,7 @@ if (fs.existsSync(mainFile)) {
 }
 
 // ---- CHECK TUS CONSTRAINTS ----
-const tusFile = "src/js/starmus-tus.js";
+const tusFile = path.join(ROOT_DIR, "src/js/starmus-tus.js");
 if (fs.existsSync(tusFile)) {
     const tusContent = fs.readFileSync(tusFile, "utf8");
 

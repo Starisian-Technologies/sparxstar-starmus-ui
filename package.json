@@ -11,7 +11,7 @@
     },
     "./transcript": {
       "import": "./dist/starmus-transcript.esm.js",
-      "default": "./dist/starmus-transcript.js"
+      "default": "./dist/starmus-transcript.esm.js"
     },
     "./css": "./dist/starmus-audio.css",
     "./css/consent": "./dist/starmus-consent.css"

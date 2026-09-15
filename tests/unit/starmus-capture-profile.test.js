@@ -1663,3 +1663,46 @@ test("a chunk size is bounded at both ends", async () => {
         "a non-positive chunk size falls back to the default rather than being passed through",
     );
 });
+
+test("the build validator gives the same answer from any directory", async () => {
+    // Paths were resolved against the working directory, so running the
+    // validator from `scripts/` reported eight required files missing — it
+    // would have failed a build for where it was invoked from rather than for
+    // the state of the code, and passed from the one directory where the
+    // relative paths happened to line up.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("scripts/validate-build.cjs", "utf8");
+
+    // No bare relative literal reaches the filesystem.
+    assert.doesNotMatch(source, /const cssFile = "src\//, "css path is rooted");
+    assert.doesNotMatch(source, /const mainFile = "src\//, "main path is rooted");
+    assert.doesNotMatch(source, /const tusFile = "src\//, "tus path is rooted");
+    assert.match(
+        source,
+        /function allSourceJs\(dir = path\.join\(ROOT_DIR, "src\/js"\)\)/,
+        "and the source walk starts from the repository root",
+    );
+    assert.match(
+        source,
+        /fs\.existsSync\(path\.join\(ROOT_DIR, file\)\)/,
+        "as does the required-file check",
+    );
+});
+
+test("the transcript subpath resolves to a module on every condition", async () => {
+    // `default` pointed at the IIFE, which has no exports. Tooling that falls
+    // back to that condition — rather than honouring `import` — received a file
+    // it could not import at all. The IIFE is for a `<script>` tag, which does
+    // not consult the exports map.
+    const { readFileSync } = await import("node:fs");
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+    const transcript = pkg.exports["./transcript"];
+
+    for (const [condition, target] of Object.entries(transcript)) {
+        assert.match(
+            target,
+            /\.esm\.js$/,
+            `the ${condition} condition must resolve to a module, not ${target}`,
+        );
+    }
+});

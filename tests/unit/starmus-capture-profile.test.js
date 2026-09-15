@@ -555,26 +555,23 @@ test("listing held recordings does not load their audio", async () => {
     assert.match(body, /sizeBytes: item\.audioBlob\?\.size/, "only its size does");
 });
 
-test("a recording keeps the profile set when its microphone opened", () => {
-    // The recorder dispatches `capture-profile` when the mic opens and
-    // `recording-available` when it stops. Clearing the profile on
-    // `recording-available` — to defend against a stale `import` profile from
-    // an earlier file attachment — would destroy the profile belonging to the
-    // recording that just ended, which is the failure ADR-035 and the build
-    // check exist to prevent. The attachment case is already covered: opening
-    // the microphone overwrites `import` before any recording exists.
+test("a recording carries the profile its own microphone opened under", () => {
+    // The recorder sends this take's attainment *with* the take. It used to
+    // rely on `capture-profile`, dispatched when the mic opened, still standing
+    // in the store when the recording stopped — which held only while nothing
+    // touched the profile in between. See the mid-take attachment below for
+    // what does.
     const store = createStore();
 
     store.dispatch({ type: "starmus/file-attached", file: fakeFile });
     assert.equal(store.getState().source.captureProfile, "import");
 
-    store.dispatch({
-        type: "starmus/capture-profile",
-        attainment: { profile: "conversation", attained: true, exceeded: [], unverified: [] },
-    });
+    const attainment = { profile: "conversation", attained: true, exceeded: [], unverified: [] };
+    store.dispatch({ type: "starmus/capture-profile", attainment });
     store.dispatch({
         type: "starmus/recording-available",
         payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+        attainment,
     });
 
     const source = store.getState().source;
@@ -582,6 +579,57 @@ test("a recording keeps the profile set when its microphone opened", () => {
     assert.equal(source.captureAttainment.profile, "conversation");
     assert.equal(source.file, null, "while the stale file does not");
     assert.equal(source.transcript, "", "nor the stale draft");
+});
+
+test("a file attached mid-take does not relabel the recording as imported", () => {
+    // The file input stays live while recording, so this ordering is reachable
+    // from the UI: mic opens, a file is attached, then the recorder stops and
+    // delivers the take it was already capturing. `file-attached` sets the
+    // profile to `import` *and* overwrites the attainment record, so by the
+    // time the recording lands the store no longer holds its profile anywhere
+    // — the take's own attainment, sent with it, is the only surviving copy.
+    //
+    // Getting this wrong sends microphone audio to ingestion described as
+    // prerecorded imported material. ADR-035 keeps the profile with the asset
+    // so a consumer can judge whether a measurement from it is admissible; a
+    // wrong profile is believed, which is worse than an absent one.
+    const store = createStore();
+
+    const attainment = { profile: "conversation", attained: true, exceeded: [], unverified: [] };
+    store.dispatch({ type: "starmus/capture-profile", attainment });
+    store.dispatch({ type: "starmus/mic-start" });
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    assert.equal(store.getState().source.captureProfile, "import", "precondition");
+    assert.equal(store.getState().source.captureAttainment.profile, "import");
+
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+        attainment,
+    });
+
+    const source = store.getState().source;
+    assert.equal(source.kind, "blob", "the microphone bytes are what is here");
+    assert.equal(source.captureProfile, "conversation", "described as what it is");
+    assert.equal(source.captureAttainment.profile, "conversation");
+});
+
+test("a recording with no attainment is unlabelled rather than mislabelled", () => {
+    // Absent is a condition the Node probes for and the build check tolerates
+    // (never blank); inherited-from-something-else is a lie nothing downstream
+    // can detect.
+    const store = createStore();
+
+    store.dispatch({ type: "starmus/file-attached", file: fakeFile });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+
+    const source = store.getState().source;
+    assert.equal(source.captureProfile, null);
+    assert.equal(source.captureAttainment, null);
 });
 
 test("the boundary event is emitted before the store dispatch that can throw", async () => {
@@ -1130,27 +1178,65 @@ test("a stated HE-AAC profile is not reported as AAC-LC", async () => {
     assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc");
 });
 
-test("both submission paths agree about a server error", async () => {
-    // tus-js-client reports `response code: 503`. Core recognised only
-    // `HTTP 5xx`, so it told the contributor the failure was final and returned
-    // the UI to submittable while the queue was still retrying the same
-    // recording — and a retry from the button queued it a second time.
+test("the submit path asks the queue how to classify a failure", async () => {
+    // There used to be a second classifier here, beside the queue's, and the
+    // two drifted every time either moved: first on `response code: 503`, then
+    // on the transient 4xx, then on `TUS_UPLOAD_START_FAILED`. Each drift told
+    // the contributor their recording had failed for good while the queue was
+    // still retrying it, and a press of the button queued the same take again.
+    //
+    // Asserted as delegation rather than as matching patterns. The previous
+    // version of this test checked that core's own regex contained the same
+    // forms — which pinned the duplication in place and would have passed just
+    // as happily on the next thing only one side learned.
     const { readFileSync } = await import("node:fs");
-    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
     const core = readFileSync("src/js/starmus-core.js", "utf8");
 
-    const retryableInCore = core.slice(
+    const classifier = core.slice(
         core.indexOf("const retryableUploadError ="),
         core.indexOf("if (transferred) {"),
     );
     assert.match(
-        retryableInCore,
-        /response code\|status\|HTTP/,
-        "core recognises the structured server-error forms the queue does",
+        classifier,
+        /!isNonRetryableUploadFailure\(message\)/,
+        "core asks the queue's classifier",
     );
+    assert.doesNotMatch(
+        classifier,
+        /response code\|status\|HTTP/,
+        "and keeps no competing copy of its rules",
+    );
+    assert.match(
+        core,
+        /import \{[\s\S]*?isNonRetryableUploadFailure[\s\S]*?\} from "\.\/starmus-offline\.js"/,
+        "imported from the module that acts on it",
+    );
+});
 
+test("the shared classifier retries what the queue retries", async () => {
+    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
+
+    // Server errors, in the shapes tus-js-client actually reports.
     for (const msg of ["tus: response code: 503", "HTTP 500", "status: 502"]) {
-        assert.equal(isNonRetryableUploadFailure(msg), false, `the queue retries: ${msg}`);
+        assert.equal(isNonRetryableUploadFailure(msg), false, `should retry: ${msg}`);
+    }
+    // The 4xx that describe a request that did not complete, not a refusal.
+    for (const msg of ["HTTP 429 Too Many Requests", "response code 408", "status: 425"]) {
+        assert.equal(isNonRetryableUploadFailure(msg), false, `should retry: ${msg}`);
+    }
+    // A start that failed wraps whatever went wrong underneath and is usually
+    // transient — an endpoint that was unreachable for a moment, a device that
+    // dropped off. Core called it final while the queue retried it.
+    assert.equal(
+        isNonRetryableUploadFailure(
+            "TUS_UPLOAD_START_FAILED: the upload could not be started (network error).",
+        ),
+        false,
+        "a start failure is retried, not held",
+    );
+    // And what genuinely will not fix itself stays held.
+    for (const msg of ["response code: 403", "HTTP 401", "Invalid JSON", "QuotaExceeded"]) {
+        assert.equal(isNonRetryableUploadFailure(msg), true, `should hold: ${msg}`);
     }
 });
 
@@ -1358,24 +1444,6 @@ test("a post-transfer failure from an older upload does not complete the current
     assert.equal(store.getState().status, "complete", "the current one still settles");
 });
 
-test("both submission paths treat a transient 4xx the same way", async () => {
-    // The queue retries 408, 425 and 429; core called them final, so the UI
-    // reported a hard failure while the queue went on retrying the recording.
-    const { readFileSync } = await import("node:fs");
-    const { isNonRetryableUploadFailure } = await import("../../src/js/starmus-offline.js");
-    const core = readFileSync("src/js/starmus-core.js", "utf8");
-
-    const classifier = core.slice(
-        core.indexOf("const retryableUploadError ="),
-        core.indexOf("if (transferred) {"),
-    );
-    assert.match(classifier, /4\(\?:08\|25\|29\)/, "core recognises the transient 4xx");
-
-    for (const msg of ["HTTP 429 Too Many Requests", "response code 408", "status: 425"]) {
-        assert.equal(isNonRetryableUploadFailure(msg), false, `the queue retries: ${msg}`);
-    }
-});
-
 test("Opus is named only when Opus is named", async () => {
     const { resolveUploadFormat } = await import("../../src/js/starmus-completion-event.js");
 
@@ -1530,7 +1598,9 @@ test("the delayed redirect belongs to the upload that produced it", async () => 
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-core.js", "utf8");
 
-    const timer = source.slice(source.indexOf("const redirectFor = metadata.uploadId;"));
+    const anchor = "const redirectFor = attemptId;";
+    assert.notEqual(source.indexOf(anchor), -1, "the redirect still captures the attempt it belongs to");
+    const timer = source.slice(source.indexOf(anchor));
     assert.match(
         timer.slice(0, 1200),
         /now\.submission\?\.completedId === redirectFor/,

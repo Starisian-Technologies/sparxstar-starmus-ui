@@ -114,9 +114,12 @@ var StarmusTranscript = (function (exports) {
      *                              //   `startMs`/`endMs`. Omitted or false, the
      *                              //   slot stamps the recorder clock and marks
      *                              //   the token `timing: 'approximate'`.
-     *     abort?(): void,          // force the engine down, discarding anything
+     *     abort(): void,           // force the engine down, discarding anything
      *                              //   undelivered. Called only when `stop()`
-     *                              //   produced no terminal event in time.
+     *                              //   produced no terminal event in time, so it
+     *                              //   must not merely ask again: this is the one
+     *                              //   call standing behind the slot's promise
+     *                              //   that no microphone outlives it. Required.
      *     start(context): void,    // context.emit(token)
      *                              // context.fail(error)
      *                              // context.ended(reason) — the engine stopped
@@ -317,6 +320,15 @@ var StarmusTranscript = (function (exports) {
       if (typeof candidate.start !== "function" || typeof candidate.stop !== "function") {
         return "it must implement start() and stop()";
       }
+      // `abort()` was optional, and a provider without one was asked to `stop()`
+      // a second time on the grace-timeout path — the same call that had already
+      // failed to produce a terminal event. So the slot settled, reported itself
+      // finished, and the engine could still be running with the microphone open.
+      // The auto-disable bound is a sensor-safety promise; a promise kept only by
+      // providers that happened to implement an optional method is not one.
+      if (typeof candidate.abort !== "function") {
+        return "it must implement abort(), which is what the slot's auto-disable bound rests on";
+      }
       if (typeof candidate.engine !== "string" || candidate.engine.trim() === "") {
         return "provenance needs a non-empty `engine`";
       }
@@ -384,11 +396,25 @@ var StarmusTranscript = (function (exports) {
       }
       let provider = null;
       for (const factory of providerFactories) {
-        const candidate = factory.create({
-          language,
-          tier,
-          sessionId
-        });
+        // A factory probes the environment, and probing can throw — a getter
+        // that raises on a locked-down browser, a constructor that rejects the
+        // tier. Unguarded, one such throw left this loop entirely: selection
+        // was abandoned, every remaining provider went untried, and the caller
+        // got an exception instead of the `null` that means "no live
+        // transcript here". Since the newest registration is preferred, a
+        // single environment-specific failure could disable a fallback that
+        // would have worked. One unusable factory costs one factory.
+        let candidate;
+        try {
+          candidate = factory.create({
+            language,
+            tier,
+            sessionId
+          });
+        } catch (error) {
+          console.warn(`[Transcript] Provider "${factory.name}" could not be created:`, error && error.message ? error.message : String(error));
+          continue;
+        }
         if (!candidate) {
           continue;
         }
@@ -575,18 +601,17 @@ var StarmusTranscript = (function (exports) {
       /**
        * Shut the provider down without waiting for it to finish.
        *
-       * `abort()` is optional on a provider; one that does not implement it is
-       * asked to stop a second time, which is all that is left to try.
+       * `abort()` is required of every provider and checked before one is
+       * selected (`describeProviderDefect`), so there is no fallback here. There
+       * used to be — `stop()` again — and it guaranteed nothing: `stop()` is
+       * precisely the call whose terminal event never arrived, which is why this
+       * path is running at all.
        *
        * @returns {void}
        */
       function forceProviderDown() {
         try {
-          if (typeof provider.abort === "function") {
-            provider.abort();
-          } else {
-            provider.stop();
-          }
+          provider.abort();
         } catch (error) {
           console.warn("[Transcript] Provider would not shut down:", error.message);
         }

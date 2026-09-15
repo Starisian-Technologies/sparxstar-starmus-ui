@@ -389,6 +389,24 @@
                         // the payload cannot disagree. See `file-attached`
                         // below for what leaving the other one set costs.
                         file: null,
+                        // The capture profile goes with the bytes.
+                        //
+                        // This branch replaces an attached file, and
+                        // `file-attached` had set the profile to `import` and
+                        // overwritten the attainment record — so a recording
+                        // finishing after a mid-take attachment inherited that
+                        // label and reached ingestion described as prerecorded
+                        // imported material. The recorder now sends this take's
+                        // own attainment with it (`starmus-recorder.js`), which
+                        // is the only place the truth still exists once
+                        // `file-attached` has run.
+                        //
+                        // Absent, never wrong, when no attainment came with the
+                        // action: an asset with no profile is warned about and
+                        // probed by the Node, while one carrying someone else's
+                        // profile is believed.
+                        captureProfile: action.attainment?.profile ?? null,
+                        captureAttainment: action.attainment ?? null,
                         // The transcript is deliberately NOT cleared here, and
                         // an earlier version of this did clear it — which
                         // erased every recording's own draft.

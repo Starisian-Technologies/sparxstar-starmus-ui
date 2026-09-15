@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createStore, DEFAULT_INITIAL_STATE } from "../../src/js/starmus-state-store.js";
+import { isUploadId } from "../../src/js/starmus-tus.js";
 
 const SETTLED_KEYS = ["activeId", "completedId", "isQueued", "progress", "superseded"];
 
@@ -124,4 +125,52 @@ test("a post-transfer error keeps the delivery but still writes the full shape",
     assert.equal(status, "complete", "the bytes landed; do not invite a second upload");
     assert.deepEqual(keysOf(submission), SETTLED_KEYS);
     assert.equal(submission.progress, 1);
+});
+
+test("a submit that could not be given an upload id still reaches the queued state", () => {
+    // `createUploadId()` throws where there is no secure randomness — an
+    // insecure origin, or a browser with neither crypto API. It used to throw
+    // inside the try that wraps the transfer, so `submit-start` never ran; the
+    // catch still queued the recording, but `submit-queued` has to attach to a
+    // submission in flight and the reducer dropped it. The contributor watched
+    // a button that never moved, pressed it again, and put a second copy of the
+    // same take into a 20 MB queue — every time, on that class of device.
+    //
+    // The attempt now carries a page-local identity instead. It is not a UUID,
+    // so it can never be mistaken for an upload id, and the reducer must match
+    // on it all the same.
+    const store = createStore({ instanceId: "t" });
+    store.dispatch({ type: "starmus/init", payload: { instanceId: "t", tier: "A" } });
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { instanceId: "t", blob: { size: 1 } },
+    });
+
+    const local = "local-attempt-1758000000000-1";
+    assert.equal(isUploadId(local), false, "precondition: not mistakable for an upload id");
+
+    store.dispatch({ type: "starmus/submit-start", submissionId: local });
+    assert.equal(store.getState().status, "submitting");
+
+    store.dispatch({ type: "starmus/submit-queued", uploadId: local, submissionId: "row-1" });
+    const { status, submission } = store.getState();
+    assert.equal(submission.isQueued, true, "the contributor is told it is held for sending");
+    assert.equal(status, "complete", "and the button does not offer to send it again");
+});
+
+test("core mints the attempt identity before the transfer, not inside it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const mint = source.indexOf("metadata.uploadId = createUploadId();");
+    const announce = source.indexOf('store.dispatch({ type: "starmus/submit-start"');
+    assert.notEqual(mint, -1);
+    assert.notEqual(announce, -1);
+    assert.ok(mint < announce, "the identity exists before the submission announces itself");
+
+    // The mint has its own catch, so a throw there does not skip the
+    // announcement — which is the whole defect.
+    const between = source.slice(mint, announce);
+    assert.match(between, /catch \(idError\)/, "a failed mint is handled, not propagated");
+    assert.match(between, /localAttemptId\(\)/, "and the attempt still gets an identity");
 });

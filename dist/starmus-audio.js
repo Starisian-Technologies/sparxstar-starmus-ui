@@ -2853,7 +2853,7 @@
       }, overrides || {});
     }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment2;
+      var _action$attainment$pr, _action$attainment, _action$attainment2, _action$attainment$pr2, _action$attainment3, _action$attainment4;
       if (!action || !action.type) {
         return state;
       }
@@ -3075,6 +3075,24 @@
               // the payload cannot disagree. See `file-attached`
               // below for what leaving the other one set costs.
               file: null,
+              // The capture profile goes with the bytes.
+              //
+              // This branch replaces an attached file, and
+              // `file-attached` had set the profile to `import` and
+              // overwritten the attainment record — so a recording
+              // finishing after a mid-take attachment inherited that
+              // label and reached ingestion described as prerecorded
+              // imported material. The recorder now sends this take's
+              // own attainment with it (`starmus-recorder.js`), which
+              // is the only place the truth still exists once
+              // `file-attached` has run.
+              //
+              // Absent, never wrong, when no attainment came with the
+              // action: an asset with no profile is warned about and
+              // probed by the Node, while one carrying someone else's
+              // profile is believed.
+              captureProfile: (_action$attainment$pr2 = (_action$attainment3 = action.attainment) === null || _action$attainment3 === void 0 ? void 0 : _action$attainment3.profile) !== null && _action$attainment$pr2 !== void 0 ? _action$attainment$pr2 : null,
+              captureAttainment: (_action$attainment4 = action.attainment) !== null && _action$attainment4 !== void 0 ? _action$attainment4 : null,
               // The transcript is deliberately NOT cleared here, and
               // an earlier version of this did clear it — which
               // erased every recording's own draft.
@@ -3422,6 +3440,76 @@
    * @exports DEFAULT_INITIAL_STATE
    */
   runtimeGlobal.StarmusStore.DEFAULT_INITIAL_STATE;
+
+  var es_array_concat = {};
+
+  var hasRequiredEs_array_concat;
+
+  function requireEs_array_concat () {
+  	if (hasRequiredEs_array_concat) return es_array_concat;
+  	hasRequiredEs_array_concat = 1;
+  	var $ = require_export();
+  	var fails = requireFails();
+  	var isArray = requireIsArray();
+  	var isObject = requireIsObject();
+  	var toObject = requireToObject();
+  	var lengthOfArrayLike = requireLengthOfArrayLike();
+  	var doesNotExceedSafeInteger = requireDoesNotExceedSafeInteger();
+  	var createProperty = requireCreateProperty();
+  	var setArrayLength = requireArraySetLength();
+  	var arraySpeciesCreate = requireArraySpeciesCreate();
+  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var V8_VERSION = requireEnvironmentV8Version();
+
+  	var IS_CONCAT_SPREADABLE = wellKnownSymbol('isConcatSpreadable');
+
+  	// We can't use this feature detection in V8 since it causes
+  	// deoptimization and serious performance degradation
+  	// https://github.com/zloirock/core-js/issues/679
+  	var IS_CONCAT_SPREADABLE_SUPPORT = V8_VERSION >= 51 || !fails(function () {
+  	  var array = [];
+  	  array[IS_CONCAT_SPREADABLE] = false;
+  	  return array.concat()[0] !== array;
+  	});
+
+  	var isConcatSpreadable = function (O) {
+  	  if (!isObject(O)) return false;
+  	  var spreadable = O[IS_CONCAT_SPREADABLE];
+  	  return spreadable !== undefined ? !!spreadable : isArray(O);
+  	};
+
+  	var FORCED = !IS_CONCAT_SPREADABLE_SUPPORT || !arrayMethodHasSpeciesSupport('concat');
+
+  	// `Array.prototype.concat` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.concat
+  	// with adding support of @@isConcatSpreadable and @@species
+  	$({ target: 'Array', proto: true, arity: 1, forced: FORCED }, {
+  	  // eslint-disable-next-line no-unused-vars -- required for `.length`
+  	  concat: function concat(arg) {
+  	    var O = toObject(this);
+  	    var A = arraySpeciesCreate(O, 0);
+  	    var n = 0;
+  	    var i, k, length, len, E;
+  	    for (i = -1, length = arguments.length; i < length; i++) {
+  	      E = i === -1 ? O : arguments[i];
+  	      if (isConcatSpreadable(E)) {
+  	        len = lengthOfArrayLike(E);
+  	        doesNotExceedSafeInteger(n + len);
+  	        for (k = 0; k < len; k++, n++) if (k in E) createProperty(A, n, E[k]);
+  	      } else {
+  	        doesNotExceedSafeInteger(n + 1);
+  	        createProperty(A, n++, E);
+  	      }
+  	    }
+  	    setArrayLength(A, n);
+  	    return A;
+  	  }
+  	});
+  	return es_array_concat;
+  }
+
+  requireEs_array_concat();
 
   var objectDefineProperties = {};
 
@@ -4047,7 +4135,7 @@
 
   requireEs_array_iterator();
 
-  var es_regexp_exec = {};
+  var es_string_iterator = {};
 
   var toString;
   var hasRequiredToString;
@@ -4065,262 +4153,6 @@
   	};
   	return toString;
   }
-
-  var regexpFlags;
-  var hasRequiredRegexpFlags;
-
-  function requireRegexpFlags () {
-  	if (hasRequiredRegexpFlags) return regexpFlags;
-  	hasRequiredRegexpFlags = 1;
-  	var anObject = requireAnObject();
-
-  	// `RegExp.prototype.flags` getter implementation
-  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
-  	regexpFlags = function () {
-  	  var that = anObject(this);
-  	  var result = '';
-  	  if (that.hasIndices) result += 'd';
-  	  if (that.global) result += 'g';
-  	  if (that.ignoreCase) result += 'i';
-  	  if (that.multiline) result += 'm';
-  	  if (that.dotAll) result += 's';
-  	  if (that.unicode) result += 'u';
-  	  if (that.unicodeSets) result += 'v';
-  	  if (that.sticky) result += 'y';
-  	  return result;
-  	};
-  	return regexpFlags;
-  }
-
-  var regexpStickyHelpers;
-  var hasRequiredRegexpStickyHelpers;
-
-  function requireRegexpStickyHelpers () {
-  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
-  	hasRequiredRegexpStickyHelpers = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	var UNSUPPORTED_Y = fails(function () {
-  	  var re = $RegExp('a', 'y');
-  	  re.lastIndex = 2;
-  	  return re.exec('abcd') !== null;
-  	});
-
-  	// UC Browser bug
-  	// https://github.com/zloirock/core-js/issues/1008
-  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
-  	  return !$RegExp('a', 'y').sticky;
-  	});
-
-  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
-  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
-  	  var re = $RegExp('^r', 'gy');
-  	  re.lastIndex = 2;
-  	  return re.exec('str') !== null;
-  	});
-
-  	regexpStickyHelpers = {
-  	  BROKEN_CARET: BROKEN_CARET,
-  	  MISSED_STICKY: MISSED_STICKY,
-  	  UNSUPPORTED_Y: UNSUPPORTED_Y
-  	};
-  	return regexpStickyHelpers;
-  }
-
-  var regexpUnsupportedDotAll;
-  var hasRequiredRegexpUnsupportedDotAll;
-
-  function requireRegexpUnsupportedDotAll () {
-  	if (hasRequiredRegexpUnsupportedDotAll) return regexpUnsupportedDotAll;
-  	hasRequiredRegexpUnsupportedDotAll = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('.', 's') -> /./s and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	regexpUnsupportedDotAll = fails(function () {
-  	  var re = $RegExp('.', 's');
-  	  return !(re.dotAll && re.test('\n') && re.flags === 's');
-  	});
-  	return regexpUnsupportedDotAll;
-  }
-
-  var regexpUnsupportedNcg;
-  var hasRequiredRegexpUnsupportedNcg;
-
-  function requireRegexpUnsupportedNcg () {
-  	if (hasRequiredRegexpUnsupportedNcg) return regexpUnsupportedNcg;
-  	hasRequiredRegexpUnsupportedNcg = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('(?<a>b)', 'g') -> /(?<a>b)/g and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	regexpUnsupportedNcg = fails(function () {
-  	  var re = $RegExp('(?<a>b)', 'g');
-  	  return re.exec('b').groups.a !== 'b' ||
-  	    'b'.replace(re, '$<a>c') !== 'bc';
-  	});
-  	return regexpUnsupportedNcg;
-  }
-
-  var regexpExec;
-  var hasRequiredRegexpExec;
-
-  function requireRegexpExec () {
-  	if (hasRequiredRegexpExec) return regexpExec;
-  	hasRequiredRegexpExec = 1;
-  	/* eslint-disable regexp/no-empty-capturing-group, regexp/no-empty-group, regexp/no-lazy-ends -- testing */
-  	/* eslint-disable regexp/no-useless-quantifier -- testing */
-  	var call = requireFunctionCall();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var toString = requireToString();
-  	var regexpFlags = requireRegexpFlags();
-  	var stickyHelpers = requireRegexpStickyHelpers();
-  	var shared = requireShared();
-  	var create = requireObjectCreate();
-  	var getInternalState = requireInternalState().get;
-  	var UNSUPPORTED_DOT_ALL = requireRegexpUnsupportedDotAll();
-  	var UNSUPPORTED_NCG = requireRegexpUnsupportedNcg();
-
-  	var nativeReplace = shared('native-string-replace', String.prototype.replace);
-  	var nativeExec = RegExp.prototype.exec;
-  	var patchedExec = nativeExec;
-  	var charAt = uncurryThis(''.charAt);
-  	var indexOf = uncurryThis(''.indexOf);
-  	var replace = uncurryThis(''.replace);
-  	var stringSlice = uncurryThis(''.slice);
-
-  	var UPDATES_LAST_INDEX_WRONG = (function () {
-  	  var re1 = /a/;
-  	  var re2 = /b*/g;
-  	  call(nativeExec, re1, 'a');
-  	  call(nativeExec, re2, 'a');
-  	  return re1.lastIndex !== 0 || re2.lastIndex !== 0;
-  	})();
-
-  	var UNSUPPORTED_Y = stickyHelpers.BROKEN_CARET;
-
-  	// nonparticipating capturing group, copied from es5-shim's String#split patch.
-  	var NPCG_INCLUDED = /()??/.exec('')[1] !== undefined;
-
-  	var PATCH = UPDATES_LAST_INDEX_WRONG || NPCG_INCLUDED || UNSUPPORTED_Y || UNSUPPORTED_DOT_ALL || UNSUPPORTED_NCG;
-
-  	var setGroups = function (re, groups) {
-  	  var object = re.groups = create(null);
-  	  for (var i = 0; i < groups.length; i++) {
-  	    var group = groups[i];
-  	    object[group[0]] = re[group[1]];
-  	  }
-  	};
-
-  	if (PATCH) {
-  	  patchedExec = function exec(string) {
-  	    var re = this;
-  	    var state = getInternalState(re);
-  	    var str = toString(string);
-  	    var raw = state.raw;
-  	    var result, reCopy, lastIndex;
-
-  	    if (raw) {
-  	      raw.lastIndex = re.lastIndex;
-  	      result = call(patchedExec, raw, str);
-  	      re.lastIndex = raw.lastIndex;
-
-  	      if (result && state.groups) setGroups(result, state.groups);
-
-  	      return result;
-  	    }
-
-  	    var groups = state.groups;
-  	    var sticky = UNSUPPORTED_Y && re.sticky;
-  	    var flags = call(regexpFlags, re);
-  	    var source = re.source;
-  	    var charsAdded = 0;
-  	    var strCopy = str;
-
-  	    if (sticky) {
-  	      flags = replace(flags, 'y', '');
-  	      if (indexOf(flags, 'g') === -1) {
-  	        flags += 'g';
-  	      }
-
-  	      strCopy = stringSlice(str, re.lastIndex);
-  	      // Support anchored sticky behavior.
-  	      var prevChar = re.lastIndex > 0 && charAt(str, re.lastIndex - 1);
-  	      if (re.lastIndex > 0 &&
-  	        (!re.multiline || re.multiline && prevChar !== '\n' && prevChar !== '\r' && prevChar !== '\u2028' && prevChar !== '\u2029')) {
-  	        source = '(?: (?:' + source + '))';
-  	        strCopy = ' ' + strCopy;
-  	        charsAdded++;
-  	      }
-  	      // ^(? + rx + ) is needed, in combination with some str slicing, to
-  	      // simulate the 'y' flag.
-  	      reCopy = new RegExp('^(?:' + source + ')', flags);
-  	    }
-
-  	    if (NPCG_INCLUDED) {
-  	      reCopy = new RegExp('^' + source + '$(?!\\s)', flags);
-  	    }
-  	    if (UPDATES_LAST_INDEX_WRONG) lastIndex = re.lastIndex;
-
-  	    var match = call(nativeExec, sticky ? reCopy : re, strCopy);
-
-  	    if (sticky) {
-  	      if (match) {
-  	        match.input = str;
-  	        match[0] = stringSlice(match[0], charsAdded);
-  	        match.index = re.lastIndex;
-  	        re.lastIndex += match[0].length;
-  	      } else re.lastIndex = 0;
-  	    } else if (UPDATES_LAST_INDEX_WRONG && match) {
-  	      re.lastIndex = re.global ? match.index + match[0].length : lastIndex;
-  	    }
-  	    if (NPCG_INCLUDED && match && match.length > 1) {
-  	      // Fix browsers whose `exec` methods don't consistently return `undefined`
-  	      // for NPCG, like IE8. NOTE: This doesn't work for /(.?)?/
-  	      call(nativeReplace, match[0], reCopy, function () {
-  	        for (var i = 1; i < arguments.length - 2; i++) {
-  	          if (arguments[i] === undefined) match[i] = undefined;
-  	        }
-  	      });
-  	    }
-
-  	    if (match && groups) setGroups(match, groups);
-
-  	    return match;
-  	  };
-  	}
-
-  	regexpExec = patchedExec;
-  	return regexpExec;
-  }
-
-  var hasRequiredEs_regexp_exec;
-
-  function requireEs_regexp_exec () {
-  	if (hasRequiredEs_regexp_exec) return es_regexp_exec;
-  	hasRequiredEs_regexp_exec = 1;
-  	var $ = require_export();
-  	var exec = requireRegexpExec();
-
-  	// `RegExp.prototype.exec` method
-  	// https://tc39.es/ecma262/#sec-regexp.prototype.exec
-  	$({ target: 'RegExp', proto: true, forced: /./.exec !== exec }, {
-  	  exec: exec
-  	});
-  	return es_regexp_exec;
-  }
-
-  requireEs_regexp_exec();
-
-  var es_string_iterator = {};
 
   var stringMultibyte;
   var hasRequiredStringMultibyte;
@@ -6882,76 +6714,6 @@
 
   requireWeb_urlSearchParams();
 
-  var es_array_concat = {};
-
-  var hasRequiredEs_array_concat;
-
-  function requireEs_array_concat () {
-  	if (hasRequiredEs_array_concat) return es_array_concat;
-  	hasRequiredEs_array_concat = 1;
-  	var $ = require_export();
-  	var fails = requireFails();
-  	var isArray = requireIsArray();
-  	var isObject = requireIsObject();
-  	var toObject = requireToObject();
-  	var lengthOfArrayLike = requireLengthOfArrayLike();
-  	var doesNotExceedSafeInteger = requireDoesNotExceedSafeInteger();
-  	var createProperty = requireCreateProperty();
-  	var setArrayLength = requireArraySetLength();
-  	var arraySpeciesCreate = requireArraySpeciesCreate();
-  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
-  	var wellKnownSymbol = requireWellKnownSymbol();
-  	var V8_VERSION = requireEnvironmentV8Version();
-
-  	var IS_CONCAT_SPREADABLE = wellKnownSymbol('isConcatSpreadable');
-
-  	// We can't use this feature detection in V8 since it causes
-  	// deoptimization and serious performance degradation
-  	// https://github.com/zloirock/core-js/issues/679
-  	var IS_CONCAT_SPREADABLE_SUPPORT = V8_VERSION >= 51 || !fails(function () {
-  	  var array = [];
-  	  array[IS_CONCAT_SPREADABLE] = false;
-  	  return array.concat()[0] !== array;
-  	});
-
-  	var isConcatSpreadable = function (O) {
-  	  if (!isObject(O)) return false;
-  	  var spreadable = O[IS_CONCAT_SPREADABLE];
-  	  return spreadable !== undefined ? !!spreadable : isArray(O);
-  	};
-
-  	var FORCED = !IS_CONCAT_SPREADABLE_SUPPORT || !arrayMethodHasSpeciesSupport('concat');
-
-  	// `Array.prototype.concat` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.concat
-  	// with adding support of @@isConcatSpreadable and @@species
-  	$({ target: 'Array', proto: true, arity: 1, forced: FORCED }, {
-  	  // eslint-disable-next-line no-unused-vars -- required for `.length`
-  	  concat: function concat(arg) {
-  	    var O = toObject(this);
-  	    var A = arraySpeciesCreate(O, 0);
-  	    var n = 0;
-  	    var i, k, length, len, E;
-  	    for (i = -1, length = arguments.length; i < length; i++) {
-  	      E = i === -1 ? O : arguments[i];
-  	      if (isConcatSpreadable(E)) {
-  	        len = lengthOfArrayLike(E);
-  	        doesNotExceedSafeInteger(n + len);
-  	        for (k = 0; k < len; k++, n++) if (k in E) createProperty(A, n, E[k]);
-  	      } else {
-  	        doesNotExceedSafeInteger(n + 1);
-  	        createProperty(A, n++, E);
-  	      }
-  	    }
-  	    setArrayLength(A, n);
-  	    return A;
-  	  }
-  	});
-  	return es_array_concat;
-  }
-
-  requireEs_array_concat();
-
   var es_array_filter = {};
 
   var hasRequiredEs_array_filter;
@@ -8911,6 +8673,262 @@
   }
 
   requireEs_promise();
+
+  var es_regexp_exec = {};
+
+  var regexpFlags;
+  var hasRequiredRegexpFlags;
+
+  function requireRegexpFlags () {
+  	if (hasRequiredRegexpFlags) return regexpFlags;
+  	hasRequiredRegexpFlags = 1;
+  	var anObject = requireAnObject();
+
+  	// `RegExp.prototype.flags` getter implementation
+  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
+  	regexpFlags = function () {
+  	  var that = anObject(this);
+  	  var result = '';
+  	  if (that.hasIndices) result += 'd';
+  	  if (that.global) result += 'g';
+  	  if (that.ignoreCase) result += 'i';
+  	  if (that.multiline) result += 'm';
+  	  if (that.dotAll) result += 's';
+  	  if (that.unicode) result += 'u';
+  	  if (that.unicodeSets) result += 'v';
+  	  if (that.sticky) result += 'y';
+  	  return result;
+  	};
+  	return regexpFlags;
+  }
+
+  var regexpStickyHelpers;
+  var hasRequiredRegexpStickyHelpers;
+
+  function requireRegexpStickyHelpers () {
+  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
+  	hasRequiredRegexpStickyHelpers = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	var UNSUPPORTED_Y = fails(function () {
+  	  var re = $RegExp('a', 'y');
+  	  re.lastIndex = 2;
+  	  return re.exec('abcd') !== null;
+  	});
+
+  	// UC Browser bug
+  	// https://github.com/zloirock/core-js/issues/1008
+  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
+  	  return !$RegExp('a', 'y').sticky;
+  	});
+
+  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
+  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
+  	  var re = $RegExp('^r', 'gy');
+  	  re.lastIndex = 2;
+  	  return re.exec('str') !== null;
+  	});
+
+  	regexpStickyHelpers = {
+  	  BROKEN_CARET: BROKEN_CARET,
+  	  MISSED_STICKY: MISSED_STICKY,
+  	  UNSUPPORTED_Y: UNSUPPORTED_Y
+  	};
+  	return regexpStickyHelpers;
+  }
+
+  var regexpUnsupportedDotAll;
+  var hasRequiredRegexpUnsupportedDotAll;
+
+  function requireRegexpUnsupportedDotAll () {
+  	if (hasRequiredRegexpUnsupportedDotAll) return regexpUnsupportedDotAll;
+  	hasRequiredRegexpUnsupportedDotAll = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('.', 's') -> /./s and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	regexpUnsupportedDotAll = fails(function () {
+  	  var re = $RegExp('.', 's');
+  	  return !(re.dotAll && re.test('\n') && re.flags === 's');
+  	});
+  	return regexpUnsupportedDotAll;
+  }
+
+  var regexpUnsupportedNcg;
+  var hasRequiredRegexpUnsupportedNcg;
+
+  function requireRegexpUnsupportedNcg () {
+  	if (hasRequiredRegexpUnsupportedNcg) return regexpUnsupportedNcg;
+  	hasRequiredRegexpUnsupportedNcg = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('(?<a>b)', 'g') -> /(?<a>b)/g and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	regexpUnsupportedNcg = fails(function () {
+  	  var re = $RegExp('(?<a>b)', 'g');
+  	  return re.exec('b').groups.a !== 'b' ||
+  	    'b'.replace(re, '$<a>c') !== 'bc';
+  	});
+  	return regexpUnsupportedNcg;
+  }
+
+  var regexpExec;
+  var hasRequiredRegexpExec;
+
+  function requireRegexpExec () {
+  	if (hasRequiredRegexpExec) return regexpExec;
+  	hasRequiredRegexpExec = 1;
+  	/* eslint-disable regexp/no-empty-capturing-group, regexp/no-empty-group, regexp/no-lazy-ends -- testing */
+  	/* eslint-disable regexp/no-useless-quantifier -- testing */
+  	var call = requireFunctionCall();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var toString = requireToString();
+  	var regexpFlags = requireRegexpFlags();
+  	var stickyHelpers = requireRegexpStickyHelpers();
+  	var shared = requireShared();
+  	var create = requireObjectCreate();
+  	var getInternalState = requireInternalState().get;
+  	var UNSUPPORTED_DOT_ALL = requireRegexpUnsupportedDotAll();
+  	var UNSUPPORTED_NCG = requireRegexpUnsupportedNcg();
+
+  	var nativeReplace = shared('native-string-replace', String.prototype.replace);
+  	var nativeExec = RegExp.prototype.exec;
+  	var patchedExec = nativeExec;
+  	var charAt = uncurryThis(''.charAt);
+  	var indexOf = uncurryThis(''.indexOf);
+  	var replace = uncurryThis(''.replace);
+  	var stringSlice = uncurryThis(''.slice);
+
+  	var UPDATES_LAST_INDEX_WRONG = (function () {
+  	  var re1 = /a/;
+  	  var re2 = /b*/g;
+  	  call(nativeExec, re1, 'a');
+  	  call(nativeExec, re2, 'a');
+  	  return re1.lastIndex !== 0 || re2.lastIndex !== 0;
+  	})();
+
+  	var UNSUPPORTED_Y = stickyHelpers.BROKEN_CARET;
+
+  	// nonparticipating capturing group, copied from es5-shim's String#split patch.
+  	var NPCG_INCLUDED = /()??/.exec('')[1] !== undefined;
+
+  	var PATCH = UPDATES_LAST_INDEX_WRONG || NPCG_INCLUDED || UNSUPPORTED_Y || UNSUPPORTED_DOT_ALL || UNSUPPORTED_NCG;
+
+  	var setGroups = function (re, groups) {
+  	  var object = re.groups = create(null);
+  	  for (var i = 0; i < groups.length; i++) {
+  	    var group = groups[i];
+  	    object[group[0]] = re[group[1]];
+  	  }
+  	};
+
+  	if (PATCH) {
+  	  patchedExec = function exec(string) {
+  	    var re = this;
+  	    var state = getInternalState(re);
+  	    var str = toString(string);
+  	    var raw = state.raw;
+  	    var result, reCopy, lastIndex;
+
+  	    if (raw) {
+  	      raw.lastIndex = re.lastIndex;
+  	      result = call(patchedExec, raw, str);
+  	      re.lastIndex = raw.lastIndex;
+
+  	      if (result && state.groups) setGroups(result, state.groups);
+
+  	      return result;
+  	    }
+
+  	    var groups = state.groups;
+  	    var sticky = UNSUPPORTED_Y && re.sticky;
+  	    var flags = call(regexpFlags, re);
+  	    var source = re.source;
+  	    var charsAdded = 0;
+  	    var strCopy = str;
+
+  	    if (sticky) {
+  	      flags = replace(flags, 'y', '');
+  	      if (indexOf(flags, 'g') === -1) {
+  	        flags += 'g';
+  	      }
+
+  	      strCopy = stringSlice(str, re.lastIndex);
+  	      // Support anchored sticky behavior.
+  	      var prevChar = re.lastIndex > 0 && charAt(str, re.lastIndex - 1);
+  	      if (re.lastIndex > 0 &&
+  	        (!re.multiline || re.multiline && prevChar !== '\n' && prevChar !== '\r' && prevChar !== '\u2028' && prevChar !== '\u2029')) {
+  	        source = '(?: (?:' + source + '))';
+  	        strCopy = ' ' + strCopy;
+  	        charsAdded++;
+  	      }
+  	      // ^(? + rx + ) is needed, in combination with some str slicing, to
+  	      // simulate the 'y' flag.
+  	      reCopy = new RegExp('^(?:' + source + ')', flags);
+  	    }
+
+  	    if (NPCG_INCLUDED) {
+  	      reCopy = new RegExp('^' + source + '$(?!\\s)', flags);
+  	    }
+  	    if (UPDATES_LAST_INDEX_WRONG) lastIndex = re.lastIndex;
+
+  	    var match = call(nativeExec, sticky ? reCopy : re, strCopy);
+
+  	    if (sticky) {
+  	      if (match) {
+  	        match.input = str;
+  	        match[0] = stringSlice(match[0], charsAdded);
+  	        match.index = re.lastIndex;
+  	        re.lastIndex += match[0].length;
+  	      } else re.lastIndex = 0;
+  	    } else if (UPDATES_LAST_INDEX_WRONG && match) {
+  	      re.lastIndex = re.global ? match.index + match[0].length : lastIndex;
+  	    }
+  	    if (NPCG_INCLUDED && match && match.length > 1) {
+  	      // Fix browsers whose `exec` methods don't consistently return `undefined`
+  	      // for NPCG, like IE8. NOTE: This doesn't work for /(.?)?/
+  	      call(nativeReplace, match[0], reCopy, function () {
+  	        for (var i = 1; i < arguments.length - 2; i++) {
+  	          if (arguments[i] === undefined) match[i] = undefined;
+  	        }
+  	      });
+  	    }
+
+  	    if (match && groups) setGroups(match, groups);
+
+  	    return match;
+  	  };
+  	}
+
+  	regexpExec = patchedExec;
+  	return regexpExec;
+  }
+
+  var hasRequiredEs_regexp_exec;
+
+  function requireEs_regexp_exec () {
+  	if (hasRequiredEs_regexp_exec) return es_regexp_exec;
+  	hasRequiredEs_regexp_exec = 1;
+  	var $ = require_export();
+  	var exec = requireRegexpExec();
+
+  	// `RegExp.prototype.exec` method
+  	// https://tc39.es/ecma262/#sec-regexp.prototype.exec
+  	$({ target: 'RegExp', proto: true, forced: /./.exec !== exec }, {
+  	  exec: exec
+  	});
+  	return es_regexp_exec;
+  }
+
+  requireEs_regexp_exec();
 
   var es_regexp_toString = {};
 
@@ -18169,6 +18187,23 @@
    * @param {Object} env - Environment data (may be partial on first call)
    * @returns {{ handleSubmit: function }}
    */
+  /** Monotonic within a page load; see `localAttemptId()`. */
+  var attemptCounter = 0;
+
+  /**
+   * An identity for a submit attempt that could not be given an upload id.
+   *
+   * Deliberately not a UUID, so `isUploadId()` rejects it and it can never be
+   * mistaken for — or written into — `metadata.uploadId`. It exists only so the
+   * store can match this attempt's `submit-start` against its `submit-queued`;
+   * it is never sent, never stored with the recording, and never reaches tus.
+   *
+   * @returns {string}
+   */
+  function localAttemptId() {
+    attemptCounter += 1;
+    return "local-attempt-".concat(Date.now(), "-").concat(attemptCounter);
+  }
   function initCore(store, instanceId, env) {
     sparxstarIntegration.init().then(function (environmentData) {
       var _enhancedEnv$network;
@@ -18243,7 +18278,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _store$getState$submi, _store$getState$submi2, _result$data, _result$data2, detail, wasCurrent, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, attemptId, result, _metadata$durationMs, _stateEnv$identifiers, _store$getState$submi, _store$getState$submi2, _result$data, _result$data2, detail, wasCurrent, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -18333,29 +18368,57 @@
               // naming the format, building the completion detail, notifying the
               // host — can still fail, and none of those failures mean the recording
               // needs sending again.
-              transferred = false;
+              transferred = false; // The identity this attempt is known by inside the store.
+              //
+              // `createUploadId()` throws where there is no secure randomness — an
+              // insecure origin, or a browser with neither crypto API, which on the
+              // devices this package targets is not hypothetical. It used to throw
+              // *inside* the try below, and then `submit-start` never ran: the catch
+              // still queued the recording, but `submit-queued` has to attach to a
+              // submission in flight and the reducer dropped it. The contributor
+              // watched a submit button that never moved, pressed it again, and put
+              // a second copy of the same take into a 20 MB queue — every time, on
+              // the one class of device where it happens at all.
+              //
+              // So the attempt gets an identity either way. Where no upload id can
+              // be minted it is a page-local string that is not a UUID: it is never
+              // sent, never written to `metadata.uploadId`, and never reaches tus.
+              // The queue backfills a real upload id on its first drain, which may
+              // be a later page load where secure randomness is available again.
+              try {
+                metadata.uploadId = createUploadId();
+                attemptId = metadata.uploadId;
+              } catch (idError) {
+                console.warn("[Core] No secure upload id could be minted; the recording is queued rather than sent:", idError.message);
+                attemptId = localAttemptId();
+              }
               _context.p = 2;
-              metadata.uploadId = createUploadId();
-
-              // Dispatched here, after the id exists, and not before the `try`.
+              // Dispatched here, after the identity exists, and not before it.
               //
               // The id names which submission is in flight, so a completion can
               // be matched against it; announced while it was still null, the
               // match was between null and an id and never rejected anything.
-              // `createUploadId()` can throw on an insecure origin, and a submit
-              // that never began needs no "Uploading…" to undo, so starting the
-              // announcement after it is also the honest order.
               store.dispatch({
                 type: "starmus/submit-start",
-                submissionId: metadata.uploadId
+                submissionId: attemptId
               });
-              if (navigator.onLine) {
+
+              // No upload id means no transfer: `uploadTus()` mints its own when
+              // none is supplied, by the same call that just failed. Queueing is
+              // the whole of what can be done, and the catch below does it.
+              if (metadata.uploadId) {
                 _context.n = 3;
                 break;
               }
-              throw new Error("OFFLINE_FAST_PATH");
+              throw new Error("NO_SECURE_UPLOAD_ID: this browser offers no secure randomness, so the recording is queued instead of sent.");
             case 3:
-              _context.n = 4;
+              if (navigator.onLine) {
+                _context.n = 4;
+                break;
+              }
+              throw new Error("OFFLINE_FAST_PATH");
+            case 4:
+              _context.n = 5;
               return uploadWithPriority({
                 blob: audioBlob,
                 fileName: fileName,
@@ -18374,7 +18437,7 @@
                   });
                 }
               });
-            case 4:
+            case 5:
               result = _context.v;
               if (result && result.success) {
                 transferred = true;
@@ -18422,11 +18485,11 @@
                 // host notification on the ordinary path. An earlier version of
                 // this captured it after the dispatch and a test asserted only
                 // that the line existed, not where.
-                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === metadata.uploadId;
+                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === attemptId;
                 store.dispatch({
                   type: "starmus/submit-complete",
                   payload: result,
-                  submissionId: metadata.uploadId
+                  submissionId: attemptId
                 });
 
                 // Only if the completion was actually applied.
@@ -18449,7 +18512,7 @@
                   // the old timer sees `complete` — set by the *second*
                   // upload — and navigates to the first upload's URL. The
                   // state is right and the destination is wrong.
-                  redirectFor = metadata.uploadId;
+                  redirectFor = attemptId;
                   setTimeout(function () {
                     var _now$submission;
                     // Compared against the id the reducer records when a
@@ -18481,10 +18544,10 @@
                   }
                 }
               }
-              _context.n = 10;
+              _context.n = 11;
               break;
-            case 5:
-              _context.p = 5;
+            case 6:
+              _context.p = 6;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -18494,22 +18557,23 @@
                 network: stateEnv.network,
                 fileSize: audioBlob.size
               });
-              message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine ||
-              // The server-error forms the queue recognises, not just
-              // `HTTP 5xx`. tus-js-client reports `response code: 503`, which
-              // this missed — so core told the contributor the failure was
-              // final and returned the UI to submittable while the queue was
-              // still retrying the same recording. A retry from the button
-              // then queued it a second time.
-              /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(message) || /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message) ||
-              // The transient 4xx the queue also retries. Disagreeing here
-              // told the contributor a failure was final while the queue went
-              // on retrying the same recording — and 429 is a server asking
-              // for exactly the retry this would have called hopeless.
-              /(?:response code|status|HTTP)\D{0,3}4(?:08|25|29)\b/i.test(message);
+              message = _t && _t.message ? _t.message : String(_t); // Asked of the queue, not decided again here.
+              //
+              // This used to keep its own list of retryable forms beside the
+              // queue's, and the two drifted every time either moved: first on
+              // `response code: 503`, then on the transient 4xx, and most
+              // recently on `TUS_UPLOAD_START_FAILED`, which the queue retries
+              // and this called final. Each time the contributor was told their
+              // recording had failed for good while the queue was still retrying
+              // it, and a press of the button queued the same take again.
+              //
+              // One classifier, exported from the queue that acts on it, so the
+              // two answers cannot disagree by construction. Being offline is
+              // still asked separately: that is a fact about this device now, not
+              // a property of the error text.
+              retryableUploadError = !navigator.onLine || !isNonRetryableUploadFailure(message);
               if (!transferred) {
-                _context.n = 6;
+                _context.n = 7;
                 break;
               }
               // The upload succeeded and something after it did not — the
@@ -18547,30 +18611,33 @@
                   // because "delivered" and "whose failure is this" are
                   // different questions and only one of them is answered
                   // by the presence of an upload id.
-                  attemptId: metadata.uploadId
+                  attemptId: attemptId
                 }
               });
               return _context.a(2);
-            case 6:
-              _context.p = 6;
-              _context.n = 7;
-              return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
             case 7:
+              _context.p = 7;
+              _context.n = 8;
+              return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
+            case 8:
               submissionId = _context.v;
               // Two identifiers, because they are two different things. The
-              // queue row id is what queue operations address; the upload id
-              // is what says *which submission* this result belongs to. The
-              // store matches on the second — matching on the first would
-              // compare a queue row id against the TUS uuid held as
-              // `activeId` and reject every ordinary queue transition.
+              // queue row id is what queue operations address; the attempt
+              // identity is what says *which submission* this result belongs
+              // to. The store matches on the second — matching on the first
+              // would compare a queue row id against what `submit-start`
+              // recorded as `activeId` and reject every ordinary queue
+              // transition. It is the attempt identity and not
+              // `metadata.uploadId` because those differ in exactly the case
+              // this has to survive: no upload id could be minted.
               store.dispatch({
                 type: "starmus/submit-queued",
                 submissionId: submissionId,
-                uploadId: metadata.uploadId
+                uploadId: attemptId
               });
-              _context.n = 8;
+              _context.n = 9;
               return getPendingCount();
-            case 8:
+            case 9:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
@@ -18584,14 +18651,14 @@
                   error: {
                     message: message,
                     retryable: false,
-                    attemptId: metadata.uploadId
+                    attemptId: attemptId
                   }
                 });
               }
-              _context.n = 10;
+              _context.n = 11;
               break;
-            case 9:
-              _context.p = 9;
+            case 10:
+              _context.p = 10;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
               // The queue's own message is kept. `QueueFull` names how much
@@ -18605,13 +18672,13 @@
                 error: {
                   message: queueMessage,
                   retryable: false,
-                  attemptId: metadata.uploadId
+                  attemptId: attemptId
                 }
               });
-            case 10:
+            case 11:
               return _context.a(2);
           }
-        }, _callee, null, [[6, 9], [2, 5]]);
+        }, _callee, null, [[7, 10], [2, 6]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }
@@ -20400,7 +20467,21 @@
                   payload: {
                     blob: blob,
                     fileName: fileName
-                  }
+                  },
+                  // The profile this take was actually captured under, carried
+                  // with the take rather than left standing in the store from
+                  // `capture-profile` at the start of the recording.
+                  //
+                  // The file input stays live while recording, so a contributor
+                  // who attaches a file mid-take sets the source profile to
+                  // `import` — and this dispatch, landing afterwards, replaced
+                  // the bytes without replacing the label. The microphone
+                  // recording then travelled to ingestion described as
+                  // prerecorded imported material, which for an archive is the
+                  // mislabelling ADR-035 exists to prevent. Re-sending the
+                  // attainment here means the take carries its own truth no
+                  // matter what happened to the store while it was running.
+                  attainment: attainment
                 });
               });
               mediaRecorder.start(1000); // 1-second chunks

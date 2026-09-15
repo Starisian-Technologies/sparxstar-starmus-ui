@@ -24,7 +24,11 @@
 import { CommandBus } from "./starmus-hooks.js";
 import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { queueSubmission, getPendingCount } from "./starmus-offline.js";
+import {
+    queueSubmission,
+    getPendingCount,
+    isNonRetryableUploadFailure,
+} from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /**
@@ -95,6 +99,24 @@ function detectTier(environmentData = null) {
  * @param {Object} env - Environment data (may be partial on first call)
  * @returns {{ handleSubmit: function }}
  */
+/** Monotonic within a page load; see `localAttemptId()`. */
+let attemptCounter = 0;
+
+/**
+ * An identity for a submit attempt that could not be given an upload id.
+ *
+ * Deliberately not a UUID, so `isUploadId()` rejects it and it can never be
+ * mistaken for — or written into — `metadata.uploadId`. It exists only so the
+ * store can match this attempt's `submit-start` against its `submit-queued`;
+ * it is never sent, never stored with the recording, and never reaches tus.
+ *
+ * @returns {string}
+ */
+function localAttemptId() {
+    attemptCounter += 1;
+    return `local-attempt-${Date.now()}-${attemptCounter}`;
+}
+
 export function initCore(store, instanceId, env) {
     sparxstarIntegration
         .init()
@@ -261,18 +283,51 @@ export function initCore(store, instanceId, env) {
         // needs sending again.
         let transferred = false;
 
+        // The identity this attempt is known by inside the store.
+        //
+        // `createUploadId()` throws where there is no secure randomness — an
+        // insecure origin, or a browser with neither crypto API, which on the
+        // devices this package targets is not hypothetical. It used to throw
+        // *inside* the try below, and then `submit-start` never ran: the catch
+        // still queued the recording, but `submit-queued` has to attach to a
+        // submission in flight and the reducer dropped it. The contributor
+        // watched a submit button that never moved, pressed it again, and put
+        // a second copy of the same take into a 20 MB queue — every time, on
+        // the one class of device where it happens at all.
+        //
+        // So the attempt gets an identity either way. Where no upload id can
+        // be minted it is a page-local string that is not a UUID: it is never
+        // sent, never written to `metadata.uploadId`, and never reaches tus.
+        // The queue backfills a real upload id on its first drain, which may
+        // be a later page load where secure randomness is available again.
+        let attemptId;
         try {
             metadata.uploadId = createUploadId();
+            attemptId = metadata.uploadId;
+        } catch (idError) {
+            console.warn(
+                "[Core] No secure upload id could be minted; the recording is queued rather than sent:",
+                idError.message,
+            );
+            attemptId = localAttemptId();
+        }
 
-            // Dispatched here, after the id exists, and not before the `try`.
+        try {
+            // Dispatched here, after the identity exists, and not before it.
             //
             // The id names which submission is in flight, so a completion can
             // be matched against it; announced while it was still null, the
             // match was between null and an id and never rejected anything.
-            // `createUploadId()` can throw on an insecure origin, and a submit
-            // that never began needs no "Uploading…" to undo, so starting the
-            // announcement after it is also the honest order.
-            store.dispatch({ type: "starmus/submit-start", submissionId: metadata.uploadId });
+            store.dispatch({ type: "starmus/submit-start", submissionId: attemptId });
+
+            // No upload id means no transfer: `uploadTus()` mints its own when
+            // none is supplied, by the same call that just failed. Queueing is
+            // the whole of what can be done, and the catch below does it.
+            if (!metadata.uploadId) {
+                throw new Error(
+                    "NO_SECURE_UPLOAD_ID: this browser offers no secure randomness, so the recording is queued instead of sent.",
+                );
+            }
 
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
@@ -345,12 +400,12 @@ export function initCore(store, instanceId, env) {
             // this captured it after the dispatch and a test asserted only
             // that the line existed, not where.
             const wasCurrent =
-                (store.getState().submission?.activeId ?? null) === metadata.uploadId;
+                (store.getState().submission?.activeId ?? null) === attemptId;
 
             store.dispatch({
                 type: "starmus/submit-complete",
                 payload: result,
-                submissionId: metadata.uploadId,
+                submissionId: attemptId,
             });
 
                 // Only if the completion was actually applied.
@@ -376,7 +431,7 @@ export function initCore(store, instanceId, env) {
                     // the old timer sees `complete` — set by the *second*
                     // upload — and navigates to the first upload's URL. The
                     // state is right and the destination is wrong.
-                    const redirectFor = metadata.uploadId;
+                    const redirectFor = attemptId;
                     setTimeout(() => {
                         // Compared against the id the reducer records when a
                         // completion is applied, which survives settlement.
@@ -424,23 +479,22 @@ export function initCore(store, instanceId, env) {
             });
 
             const message = error && error.message ? error.message : String(error);
+            // Asked of the queue, not decided again here.
+            //
+            // This used to keep its own list of retryable forms beside the
+            // queue's, and the two drifted every time either moved: first on
+            // `response code: 503`, then on the transient 4xx, and most
+            // recently on `TUS_UPLOAD_START_FAILED`, which the queue retries
+            // and this called final. Each time the contributor was told their
+            // recording had failed for good while the queue was still retrying
+            // it, and a press of the button queued the same take again.
+            //
+            // One classifier, exported from the queue that acts on it, so the
+            // two answers cannot disagree by construction. Being offline is
+            // still asked separately: that is a fact about this device now, not
+            // a property of the error text.
             const retryableUploadError =
-                !navigator.onLine ||
-                // The server-error forms the queue recognises, not just
-                // `HTTP 5xx`. tus-js-client reports `response code: 503`, which
-                // this missed — so core told the contributor the failure was
-                // final and returned the UI to submittable while the queue was
-                // still retrying the same recording. A retry from the button
-                // then queued it a second time.
-                /OFFLINE_FAST_PATH|TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|network error|timed out|circuit breaker open|aborted/i.test(
-                    message,
-                ) ||
-                /(?:response code|status|HTTP)\D{0,3}5\d\d/i.test(message) ||
-                // The transient 4xx the queue also retries. Disagreeing here
-                // told the contributor a failure was final while the queue went
-                // on retrying the same recording — and 429 is a server asking
-                // for exactly the retry this would have called hopeless.
-                /(?:response code|status|HTTP)\D{0,3}4(?:08|25|29)\b/i.test(message);
+                !navigator.onLine || !isNonRetryableUploadFailure(message);
 
             if (transferred) {
                 // The upload succeeded and something after it did not — the
@@ -478,7 +532,7 @@ export function initCore(store, instanceId, env) {
                         // because "delivered" and "whose failure is this" are
                         // different questions and only one of them is answered
                         // by the presence of an upload id.
-                        attemptId: metadata.uploadId,
+                        attemptId,
                     },
                 });
                 return;
@@ -502,15 +556,18 @@ export function initCore(store, instanceId, env) {
                     metadata,
                 );
                 // Two identifiers, because they are two different things. The
-                // queue row id is what queue operations address; the upload id
-                // is what says *which submission* this result belongs to. The
-                // store matches on the second — matching on the first would
-                // compare a queue row id against the TUS uuid held as
-                // `activeId` and reject every ordinary queue transition.
+                // queue row id is what queue operations address; the attempt
+                // identity is what says *which submission* this result belongs
+                // to. The store matches on the second — matching on the first
+                // would compare a queue row id against what `submit-start`
+                // recorded as `activeId` and reject every ordinary queue
+                // transition. It is the attempt identity and not
+                // `metadata.uploadId` because those differ in exactly the case
+                // this has to survive: no upload id could be minted.
                 store.dispatch({
                     type: "starmus/submit-queued",
                     submissionId,
-                    uploadId: metadata.uploadId,
+                    uploadId: attemptId,
                 });
                 const pending = await getPendingCount();
                 if (window.CommandBus) {
@@ -522,7 +579,7 @@ export function initCore(store, instanceId, env) {
                     // Held, but not something the queue will clear on its own.
                     store.dispatch({
                         type: "starmus/error",
-                        error: { message, retryable: false, attemptId: metadata.uploadId },
+                        error: { message, retryable: false, attemptId },
                     });
                 }
             } catch (queueError) {
@@ -538,7 +595,7 @@ export function initCore(store, instanceId, env) {
                         : "Upload failed completely.";
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message: queueMessage, retryable: false, attemptId: metadata.uploadId },
+                    error: { message: queueMessage, retryable: false, attemptId },
                 });
             }
         }

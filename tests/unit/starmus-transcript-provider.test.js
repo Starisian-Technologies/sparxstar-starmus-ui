@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
     MAX_PROVIDER_RESTARTS,
+    SETTLE_GRACE_MS,
     TRANSCRIPT_AUTHORITY,
     clearTranscriptProviders,
     openTranscriptSlot,
@@ -28,7 +29,7 @@ function stubProvider({
     tokenGranularity,
     throwOnStart = false,
 } = {}) {
-    const captured = { context: null, started: 0, stopped: 0 };
+    const captured = { context: null, started: 0, stopped: 0, aborted: 0 };
     registerTranscriptProvider("stub", () => ({
         engine,
         model,
@@ -48,6 +49,13 @@ function stubProvider({
             if (captured.context && !captured.suppressEnd) {
                 captured.context.ended("stopped");
             }
+        },
+        // Required of every provider: it is what the slot's auto-disable bound
+        // rests on. Deliberately does *not* call `ended()` — a forced shutdown
+        // discards whatever was undelivered, and the slot must settle on its
+        // own rather than wait for an engine that has already stopped talking.
+        abort() {
+            captured.aborted += 1;
         },
     }));
     return captured;
@@ -260,6 +268,82 @@ test("the auto-disable bound stops a provider that is never stopped", async () =
     assert.equal(captured.stopped, 1);
 });
 
+test("a provider that never reports back is forced down, not merely asked again", async () => {
+    // The sensor-safety bound. `stop()` asks; a provider that ignores it is the
+    // whole reason this path exists, so asking a second time guarantees
+    // nothing — `abort()` is what stands behind the promise that no microphone
+    // outlives the slot that opened it. The fallback used to be another
+    // `stop()`, and with it the slot could settle and report itself finished
+    // while the engine was still listening.
+    clearTranscriptProviders();
+    const captured = stubProvider();
+    captured.suppressEnd = true; // the engine never delivers its terminal event
+
+    const slot = openTranscriptSlot({
+        sessionId: "s1",
+        getElapsedMs: () => 0,
+        tier: "A",
+        maxDurationMs: 5,
+    });
+    slot.start();
+    // Past the auto-disable deadline *and* the grace the slot allows the engine
+    // to deliver a closing result in. Taken from the source constant so the
+    // test cannot pass by waiting a duration the slot no longer uses.
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_GRACE_MS + 200));
+
+    assert.equal(captured.stopped, 1, "it was asked once");
+    assert.equal(captured.aborted, 1, "and then forced down when nothing came back");
+});
+
+test("a provider with no abort() is refused rather than selected", () => {
+    // Checked before selection, so `forceProviderDown()` needs no fallback.
+    // While `abort` was optional, such a provider was selected happily and the
+    // auto-disable bound quietly became a request.
+    clearTranscriptProviders();
+    registerTranscriptProvider("no-abort", () => ({
+        engine: "no-abort",
+        model: null,
+        start() {},
+        stop() {},
+    }));
+    const slot = openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0, tier: "A" });
+    assert.equal(slot, null, "no slot rather than one that cannot be shut down");
+});
+
+test("a factory that throws costs one factory, not the whole selection", () => {
+    // Factories probe the environment and probing can throw. Unguarded, one
+    // throw left the selection loop entirely: every remaining provider went
+    // untried and the caller got an exception instead of the `null` that means
+    // "no live transcript here". The newest registration is preferred, so a
+    // single environment-specific failure could disable a working fallback.
+    clearTranscriptProviders();
+    registerTranscriptProvider("fallback", () => ({
+        engine: "fallback",
+        model: null,
+        start() {},
+        stop() {},
+        abort() {},
+    }));
+    registerTranscriptProvider("explodes", () => {
+        throw new Error("probing this browser threw");
+    });
+
+    const slot = openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0, tier: "A" });
+    assert.notEqual(slot, null, "the usable provider behind it is still reached");
+    assert.equal(slot.draft().provenance.engine, "fallback");
+});
+
+test("a factory that throws with nothing behind it yields no slot, not an exception", () => {
+    clearTranscriptProviders();
+    registerTranscriptProvider("explodes", () => {
+        throw new Error("probing this browser threw");
+    });
+    assert.equal(
+        openTranscriptSlot({ sessionId: "s1", getElapsedMs: () => 0, tier: "A" }),
+        null,
+    );
+});
+
 test("the most recently registered provider is preferred", () => {
     clearTranscriptProviders();
     registerTranscriptProvider("first", () => ({
@@ -267,12 +351,14 @@ test("the most recently registered provider is preferred", () => {
         model: null,
         start() {},
         stop() {},
+        abort() {},
     }));
     registerTranscriptProvider("second", () => ({
         engine: "second",
         model: null,
         start() {},
         stop() {},
+        abort() {},
     }));
     const slot = openTranscriptSlot({
         sessionId: "s1",
@@ -289,6 +375,7 @@ test("a factory that cannot run in this environment is skipped", () => {
         model: null,
         start() {},
         stop() {},
+        abort() {},
     }));
     registerTranscriptProvider("unavailable", () => null);
     const slot = openTranscriptSlot({
@@ -315,6 +402,7 @@ test("the engine's closing result is kept, not dropped on stop", async () => {
             captured.context.emit({ text: "the last thing said", isFinal: true });
             captured.context.ended("stopped");
         },
+        abort() {},
     }));
 
     let elapsed = 0;
@@ -348,6 +436,7 @@ test("an engine that ends on its own is restarted, within a bound", async () => 
             captured.stopped += 1;
             captured.context.ended("stopped");
         },
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({
@@ -391,6 +480,7 @@ test("every stop() caller gets a promise that resolves, not just the last", asyn
             // Terminal event arrives later, as a real engine's does.
             setTimeout(() => captured.context.ended("stopped"), 5);
         },
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({
@@ -425,6 +515,7 @@ test("settling does not leave a timer that can reach into the next run", async (
             captured.stopped += 1;
             captured.context.ended("stopped");
         },
+        abort() {},
     }));
 
     // The two runs are deliberately separated in time. The leak being tested
@@ -498,6 +589,7 @@ test("the draft carries tokens, under a name that cannot be read as VAD output",
             context.emit({ text: "kori", isFinal: true, startMs: 0, endMs: 100 });
         },
         stop() {},
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({
@@ -542,6 +634,7 @@ test("a provider that measures its own timings keeps them; one that does not is 
             context.emit({ text: "future", isFinal: true, startMs: 0, endMs: clock + 9000 });
         },
         stop() {},
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({
@@ -580,6 +673,7 @@ test("a provider that declares no timings is stamped from the clock, as before",
             context.emit({ text: "kori", isFinal: true, startMs: 120, endMs: 480 });
         },
         stop() {},
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => 3000 });
@@ -610,16 +704,19 @@ test("a provider without complete provenance is skipped, not selected", async ()
         model: null,
         start() {},
         stop() {},
+        abort() {},
     }));
     registerTranscriptProvider("no-model", () => ({
         engine: "no-model",
         start() {},
         stop() {},
+        abort() {},
     }));
     registerTranscriptProvider("no-engine", () => ({
         model: "v1",
         start() {},
         stop() {},
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => 0 });
@@ -648,6 +745,7 @@ test("measured timings that go backwards fall back to the clock", async () => {
             context.emit({ text: "two", isFinal: true, startMs: 500, endMs: 900 });
         },
         stop() {},
+        abort() {},
     }));
 
     const slot = openTranscriptSlot({ sessionId: "s1", tier: "A", getElapsedMs: () => clock });

@@ -359,6 +359,20 @@ export function initRecorder(store, instanceId) {
             store.dispatch({
                 type: "starmus/recording-available",
                 payload: { blob, fileName },
+                // The profile this take was actually captured under, carried
+                // with the take rather than left standing in the store from
+                // `capture-profile` at the start of the recording.
+                //
+                // The file input stays live while recording, so a contributor
+                // who attaches a file mid-take sets the source profile to
+                // `import` — and this dispatch, landing afterwards, replaced
+                // the bytes without replacing the label. The microphone
+                // recording then travelled to ingestion described as
+                // prerecorded imported material, which for an archive is the
+                // mislabelling ADR-035 exists to prevent. Re-sending the
+                // attainment here means the take carries its own truth no
+                // matter what happened to the store while it was running.
+                attainment,
             });
         });
 

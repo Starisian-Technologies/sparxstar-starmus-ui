@@ -531,9 +531,14 @@
                     return state;
                 }
 
+                // Both must be named, and must agree. Treating `(null, null)`
+                // as a match let an unidentified completion settle an
+                // unidentified submission — which is every legacy caller and
+                // every stale one, exactly the pair least likely to be about
+                // the same upload.
                 const active = state.submission?.activeId ?? null;
                 const finished = action.submissionId ?? null;
-                if (active !== null && active !== finished) {
+                if (active === null || finished === null || active !== finished) {
                     return state;
                 }
 
@@ -570,7 +575,15 @@
                 // an older queue result with no id mark the current submission
                 // queued — the same hole the id check was added to close, left
                 // open for exactly the callers least likely to be current.
-                if (inFlight !== null && inFlight !== queuedUpload) {
+                // And only while something is in flight. With `activeId`
+                // cleared — after a reset, or after a terminal failure — this
+                // accepted any delayed result, including one naming an upload
+                // from a submission that had already ended, and marked whatever
+                // was on screen queued.
+                if (state.status !== "submitting" || inFlight === null) {
+                    return state;
+                }
+                if (inFlight !== queuedUpload) {
                     return state;
                 }
                 // The recording that was queued is the one that was in flight,

@@ -1463,3 +1463,81 @@ test("HE-AAC named by media type is not rescued by a .aac filename", async () =>
     assert.equal(resolveUploadFormat("audio/aac", "take.aac"), "aac-lc", "plain AAC still is");
     assert.equal(resolveUploadFormat("", "take.aac"), "aac-lc", "and the extension alone still is");
 });
+
+test("a completion and a queue result both need a named submission", () => {
+    // `(null, null)` was treated as a match, so an unidentified completion
+    // settled an unidentified submission — every legacy caller and every stale
+    // one, which is the pair least likely to concern the same upload. And with
+    // `activeId` cleared after a terminal failure, a delayed queue result
+    // marked whatever was on screen queued.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+
+    store.dispatch({ type: "starmus/submit-start" });
+    assert.equal(store.getState().submission.activeId, null, "an unnamed submission");
+    store.dispatch({ type: "starmus/submit-complete" });
+    assert.equal(store.getState().status, "submitting", "is not settled by an unnamed completion");
+
+    // After a terminal failure there is nothing in flight to queue.
+    store.dispatch({
+        type: "starmus/error",
+        error: { message: "QueueFull", retryable: false },
+    });
+    assert.equal(store.getState().status, "ready_to_submit");
+    store.dispatch({
+        type: "starmus/submit-queued",
+        submissionId: "row-1",
+        uploadId: "upload-from-the-failed-attempt",
+    });
+    assert.equal(
+        store.getState().status,
+        "ready_to_submit",
+        "a late queue result does not resurrect a submission that ended",
+    );
+
+    // And one carrying no id either. This is the case an id comparison alone
+    // cannot catch: with `activeId` cleared, `null !== null` is false, so the
+    // action fell through and marked the state queued. Nothing is in flight to
+    // be queued, which is what the status check is for.
+    store.dispatch({ type: "starmus/submit-queued", submissionId: "row-2" });
+    assert.equal(
+        store.getState().status,
+        "ready_to_submit",
+        "nor does an unidentified one",
+    );
+    assert.equal(store.getState().submission.isQueued, false);
+});
+
+test("the delayed redirect belongs to the upload that produced it", async () => {
+    // A contributor can replace the source, submit again, and have the second
+    // upload finish inside the 1.5-second delay. The old timer then sees
+    // `complete` — set by the second upload — and navigates to the first
+    // upload's URL: right state, wrong destination.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-core.js", "utf8");
+
+    const timer = source.slice(source.indexOf("const redirectFor = metadata.uploadId;"));
+    assert.match(timer.slice(0, 900), /settledNow === redirectFor/, "the timer checks identity");
+    assert.doesNotMatch(
+        timer.slice(0, 900),
+        /if \(store\.getState\(\)\.status === "complete"\) \{\s*window\.location\.href/,
+        "not the shared status alone",
+    );
+});
+
+test("host overrides cannot buy extra attempts or a zero-length watchdog", async () => {
+    // tus-js-client counts every `retryDelays` entry as a retry, so a host
+    // array of any length buys as many — and AGENTS.md's three-attempt maximum
+    // is a FAIL condition, not a preference. A `stallTimeoutMs` of 0 is worse:
+    // the watchdog is a `setTimeout`, so it aborts every transfer the moment it
+    // is armed.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-tus.js", "utf8");
+    const afterMerge = source.slice(source.indexOf("merged.removeFingerprintOnSuccess = false;"));
+
+    assert.match(afterMerge, /\.slice\(0, 2\)/, "at most two retry delays survive an override");
+    assert.match(afterMerge, /merged\.stallTimeoutMs <= 0/, "and a non-positive watchdog is refused");
+});

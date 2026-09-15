@@ -353,12 +353,22 @@ export function initCore(store, instanceId, env) {
                     ? getSafeRedirect(result.data?.redirect_url || result.redirect_url)
                     : null;
                 if (redirect) {
+                    // The submission this redirect belongs to, captured now.
+                    //
+                    // Re-checking `status === "complete"` alone was not enough:
+                    // a contributor can replace the source, submit the new one
+                    // and have it finish inside the 1.5 seconds, at which point
+                    // the old timer sees `complete` — set by the *second*
+                    // upload — and navigates to the first upload's URL. The
+                    // state is right and the destination is wrong.
+                    const redirectFor = metadata.uploadId;
                     setTimeout(() => {
-                        // Re-checked on the way out. The source can be replaced
-                        // during this delay too, and navigating away from a
-                        // recording the contributor is still working on loses
-                        // it.
-                        if (store.getState().status === "complete") {
+                        const now = store.getState();
+                        const settledNow = now.submission?.activeId ?? null;
+                        if (
+                            now.status === "complete" &&
+                            (settledNow === null || settledNow === redirectFor)
+                        ) {
                             window.location.href = redirect;
                         }
                     }, 1500);

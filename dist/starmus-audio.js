@@ -3218,9 +3218,15 @@
             if (state.status !== "submitting") {
               return state;
             }
+
+            // Both must be named, and must agree. Treating `(null, null)`
+            // as a match let an unidentified completion settle an
+            // unidentified submission — which is every legacy caller and
+            // every stale one, exactly the pair least likely to be about
+            // the same upload.
             var active = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
             var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
-            if (active !== null && active !== finished) {
+            if (active === null || finished === null || active !== finished) {
               return state;
             }
 
@@ -3266,7 +3272,15 @@
             // an older queue result with no id mark the current submission
             // queued — the same hole the id check was added to close, left
             // open for exactly the callers least likely to be current.
-            if (_inFlight !== null && _inFlight !== queuedUpload) {
+            // And only while something is in flight. With `activeId`
+            // cleared — after a reset, or after a terminal failure — this
+            // accepted any delayed result, including one naming an upload
+            // from a submission that had already ended, and marked whatever
+            // was on screen queued.
+            if (state.status !== "submitting" || _inFlight === null) {
+              return state;
+            }
+            if (_inFlight !== queuedUpload) {
               return state;
             }
             // The recording that was queued is the one that was in flight,
@@ -6888,6 +6902,32 @@
   }
 
   requireEs_array_concat();
+
+  var es_array_filter = {};
+
+  var hasRequiredEs_array_filter;
+
+  function requireEs_array_filter () {
+  	if (hasRequiredEs_array_filter) return es_array_filter;
+  	hasRequiredEs_array_filter = 1;
+  	var $ = require_export();
+  	var $filter = requireArrayIteration().filter;
+  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
+
+  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
+
+  	// `Array.prototype.filter` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.filter
+  	// with adding support of @@species
+  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
+  	  filter: function filter(callbackfn /* , thisArg */) {
+  	    return $filter(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+  	return es_array_filter;
+  }
+
+  requireEs_array_filter();
 
   var es_array_from = {};
 
@@ -13898,13 +13938,26 @@
     // second time — a cost paid by the contributor, from a config key.
     merged.removeFingerprintOnSuccess = false;
 
+    // Nor more attempts than the package allows. tus-js-client counts every
+    // entry as a retry, so a host array of any length buys as many, and
+    // AGENTS.md's three-attempt maximum is a FAIL condition rather than a
+    // preference. Kept to two finite, non-negative delays.
+    var hostDelays = Array.isArray(merged.retryDelays) ? merged.retryDelays : [];
+    var usableDelays = hostDelays.filter(function (delay) {
+      return Number.isFinite(delay) && delay >= 0;
+    }).slice(0, 2);
+    merged.retryDelays = usableDelays.length > 0 ? usableDelays : [0, 2000];
+
     // The stall watchdog must stay inside the offline queue's claim lease,
     // which is this constant plus a minute. A host raising the timeout past
     // that lets the watchdog run after the claim has expired, so a second tab
     // takes a row whose transfer is still alive — the exact race the lease was
     // derived from this constant to prevent. A lower value is harmless and is
     // left alone.
-    if (!Number.isFinite(merged.stallTimeoutMs) || merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS) {
+    // A non-positive value is refused as firmly as an over-long one: the
+    // watchdog is a `setTimeout`, so zero aborts every transfer the moment it
+    // is armed — before a byte moves, on every device.
+    if (!Number.isFinite(merged.stallTimeoutMs) || merged.stallTimeoutMs <= 0 || merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS) {
       if (Number.isFinite(merged.stallTimeoutMs)) {
         console.warn("[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms exceeds the ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms the offline queue's claim lease covers; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms. A longer watchdog would let another tab claim a row whose upload is still running."));
       }
@@ -16548,7 +16601,7 @@
                 _context16.p = 9;
                 _loop = /*#__PURE__*/_regenerator().m(function _loop() {
                   var _current$retryCount;
-                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, _msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg2, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg3, _msg4, nextRetryCount, _msg5, _t, _t2, _t4, _t5;
+                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, _msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, heldForReconciliation, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg2, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg3, _msg4, nextRetryCount, _msg5, _t, _t2, _t4, _t5;
                   return _regenerator().w(function (_context15) {
                     while (1) switch (_context15.p = _context15.n) {
                       case 0:
@@ -16725,7 +16778,9 @@
                         // alone here and then silently re-identified on every attempt —
                         // a different fingerprint each time, never able to resume the
                         // partial the previous attempt left on the server.
-                        // Set when the upload id could not be written back, because
+                        // Set when the transfer landed but could not be recorded, so
+                        // the row is held for reconciliation and must survive cleanup.
+                        heldForReconciliation = false; // Set when the upload id could not be written back, because
                         // this drain no longer holds the row. Named for what it means
                         // rather than for the lease, so it cannot be confused with
                         // `claimLost` below, which tracks ownership during the transfer
@@ -16905,7 +16960,7 @@
                         return _context15.a(2, 0);
                       case 38:
                         if (!(recorded === null)) {
-                          _context15.n = 39;
+                          _context15.n = 40;
                           break;
                         }
                         // Storage could not record the transfer, and the bytes
@@ -16925,6 +16980,8 @@
                         _context15.n = 39;
                         return _this15._hold(id, "Uploaded; the transfer could not be recorded locally. Do not re-upload — reconcile by upload id.", true, claimToken);
                       case 39:
+                        heldForReconciliation = true;
+                      case 40:
                         // `starmus:complete` is the boundary before any
                         // server-side processing (ADR-034). A queued upload that
                         // drains is as complete as an immediate one, so it fires
@@ -16960,9 +17017,9 @@
                         // missing one is not. Losing the event is the worse failure,
                         // so the ordering favours repeating it.
                         emitCompletionEvent(_detail);
-                        _context15.n = 40;
+                        _context15.n = 41;
                         return _this15._markCompletionEmitted(id, claimToken);
-                      case 40:
+                      case 41:
                         if (_detail.format === "unknown") {
                           sparxstarIntegration.reportError("upload_format_unnamed", {
                             submissionId: id,
@@ -16972,13 +17029,13 @@
                             captureProfile: ((_metadata13 = metadata) === null || _metadata13 === void 0 ? void 0 : _metadata13.captureProfile) || null
                           });
                         }
-                        _context15.n = 47;
+                        _context15.n = 48;
                         break;
-                      case 41:
-                        _context15.p = 41;
+                      case 42:
+                        _context15.p = 42;
                         _t4 = _context15.v;
                         if (!uploaded) {
-                          _context15.n = 43;
+                          _context15.n = 44;
                           break;
                         }
                         // Reaching here after a successful transfer means the
@@ -16988,48 +17045,54 @@
                         // next drain does not upload it again.
                         _msg3 = _t4 && _t4.message ? _t4.message : String(_t4);
                         console.error("[Offline] Uploaded, but completion failed:", id, _msg3);
-                        _context15.n = 42;
+                        _context15.n = 43;
                         return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg3), true, claimToken);
-                      case 42:
-                        return _context15.a(2, 0);
                       case 43:
+                        return _context15.a(2, 0);
+                      case 44:
                         _msg4 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
                         // outcome, below — never before it. A separate release
                         // first made the row claimable while it still carried the
                         // previous attempt's backoff state.
                         if (!isNonRetryableUploadFailure(_msg4)) {
-                          _context15.n = 45;
+                          _context15.n = 46;
                           break;
                         }
-                        _context15.n = 44;
+                        _context15.n = 45;
                         return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg4), false, claimToken);
-                      case 44:
-                        _context15.n = 46;
-                        break;
                       case 45:
-                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                        _context15.n = 46;
-                        return _this15._updateRetry(id, nextRetryCount, _msg4, claimToken);
-                      case 46:
-                        return _context15.a(2, 0);
-                      case 47:
-                        _context15.p = 47;
-                        _context15.n = 48;
-                        return _this15.remove(id, claimToken);
-                      case 48:
-                        _context15.n = 50;
+                        _context15.n = 47;
                         break;
+                      case 46:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context15.n = 47;
+                        return _this15._updateRetry(id, nextRetryCount, _msg4, claimToken);
+                      case 47:
+                        return _context15.a(2, 0);
+                      case 48:
+                        if (!heldForReconciliation) {
+                          _context15.n = 49;
+                          break;
+                        }
+                        return _context15.a(2, 0);
                       case 49:
                         _context15.p = 49;
+                        _context15.n = 50;
+                        return _this15.remove(id, claimToken);
+                      case 50:
+                        _context15.n = 52;
+                        break;
+                      case 51:
+                        _context15.p = 51;
                         _t5 = _context15.v;
                         _msg5 = _t5 && _t5.message ? _t5.message : String(_t5);
                         console.error("[Offline] Uploaded but could not clear the entry:", id, _msg5);
-                        _context15.n = 50;
+                        _context15.n = 52;
                         return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg5), true, claimToken);
-                      case 50:
+                      case 52:
                         return _context15.a(2);
                     }
-                  }, _loop, null, [[47, 49], [32, 34], [30, 41], [21, 27], [8, 10]]);
+                  }, _loop, null, [[49, 51], [32, 34], [30, 42], [21, 27], [8, 10]]);
                 });
                 _iterator.s();
               case 10:
@@ -18003,7 +18066,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _result$data, _result$data2, detail, settled, redirect, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, result, _metadata$durationMs, _stateEnv$identifiers, _result$data, _result$data2, detail, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -18188,12 +18251,20 @@
                 settled = store.getState().status === "complete";
                 redirect = settled ? getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url) : null;
                 if (redirect) {
+                  // The submission this redirect belongs to, captured now.
+                  //
+                  // Re-checking `status === "complete"` alone was not enough:
+                  // a contributor can replace the source, submit the new one
+                  // and have it finish inside the 1.5 seconds, at which point
+                  // the old timer sees `complete` — set by the *second*
+                  // upload — and navigates to the first upload's URL. The
+                  // state is right and the destination is wrong.
+                  redirectFor = metadata.uploadId;
                   setTimeout(function () {
-                    // Re-checked on the way out. The source can be replaced
-                    // during this delay too, and navigating away from a
-                    // recording the contributor is still working on loses
-                    // it.
-                    if (store.getState().status === "complete") {
+                    var _now$submission$activ, _now$submission;
+                    var now = store.getState();
+                    var settledNow = (_now$submission$activ = (_now$submission = now.submission) === null || _now$submission === void 0 ? void 0 : _now$submission.activeId) !== null && _now$submission$activ !== void 0 ? _now$submission$activ : null;
+                    if (now.status === "complete" && (settledNow === null || settledNow === redirectFor)) {
                       window.location.href = redirect;
                     }
                   }, 1500);

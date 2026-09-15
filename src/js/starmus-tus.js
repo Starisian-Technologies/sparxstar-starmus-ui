@@ -234,14 +234,28 @@ function getConfig() {
     // second time — a cost paid by the contributor, from a config key.
     merged.removeFingerprintOnSuccess = false;
 
+    // Nor more attempts than the package allows. tus-js-client counts every
+    // entry as a retry, so a host array of any length buys as many, and
+    // AGENTS.md's three-attempt maximum is a FAIL condition rather than a
+    // preference. Kept to two finite, non-negative delays.
+    const hostDelays = Array.isArray(merged.retryDelays) ? merged.retryDelays : [];
+    const usableDelays = hostDelays
+        .filter((delay) => Number.isFinite(delay) && delay >= 0)
+        .slice(0, 2);
+    merged.retryDelays = usableDelays.length > 0 ? usableDelays : [0, 2000];
+
     // The stall watchdog must stay inside the offline queue's claim lease,
     // which is this constant plus a minute. A host raising the timeout past
     // that lets the watchdog run after the claim has expired, so a second tab
     // takes a row whose transfer is still alive — the exact race the lease was
     // derived from this constant to prevent. A lower value is harmless and is
     // left alone.
+    // A non-positive value is refused as firmly as an over-long one: the
+    // watchdog is a `setTimeout`, so zero aborts every transfer the moment it
+    // is armed — before a byte moves, on every device.
     if (
         !Number.isFinite(merged.stallTimeoutMs) ||
+        merged.stallTimeoutMs <= 0 ||
         merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS
     ) {
         if (Number.isFinite(merged.stallTimeoutMs)) {

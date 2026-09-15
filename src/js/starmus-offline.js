@@ -1474,6 +1474,10 @@ class OfflineQueue {
                 // alone here and then silently re-identified on every attempt —
                 // a different fingerprint each time, never able to resume the
                 // partial the previous attempt left on the server.
+                // Set when the transfer landed but could not be recorded, so
+                // the row is held for reconciliation and must survive cleanup.
+                let heldForReconciliation = false;
+
                 // Set when the upload id could not be written back, because
                 // this drain no longer holds the row. Named for what it means
                 // rather than for the lease, so it cannot be confused with
@@ -1666,6 +1670,7 @@ class OfflineQueue {
                             true,
                             claimToken,
                         );
+                        heldForReconciliation = true;
                     }
 
                     // `starmus:complete` is the boundary before any
@@ -1742,6 +1747,20 @@ class OfflineQueue {
                         const nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
                         await this._updateRetry(id, nextRetryCount, msg, claimToken);
                     }
+                    continue;
+                }
+
+                // A row held for reconciliation is not cleaned up.
+                //
+                // The branch above says the removal does not happen, and until
+                // now the code did it anyway: `_hold()` marked the row and
+                // execution fell straight through to `remove()`, which deleted
+                // it. So a storage failure after a successful transfer still
+                // destroyed the only local record — the exact loss the hold was
+                // added to prevent, with a comment above it asserting the
+                // opposite. The entry stays, held, for a person or a later
+                // reconciliation to resolve by upload id.
+                if (heldForReconciliation) {
                     continue;
                 }
 

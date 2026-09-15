@@ -530,6 +530,37 @@ test("counting the queue does not load the queue", async () => {
     }
 });
 
+test("a transfer held for reconciliation is not then deleted by cleanup", async () => {
+    // The branch that holds an unrecordable transfer used to fall straight
+    // through to `remove()`, which deleted the row it had just held — the exact
+    // loss the hold exists to prevent, under a comment asserting the removal
+    // did not happen.
+    //
+    // This is a control-flow assertion, not an end-to-end drain, and the limit
+    // is worth stating: reaching that branch for real needs `uploadWithPriority`
+    // to *succeed*, which needs XHR and a TUS endpoint, neither of which exists
+    // in this runtime. The drain therefore always fails before the marker is
+    // ever called. End-to-end coverage of this path belongs in the Playwright
+    // suite against a real endpoint; what is checked here is that the flag
+    // exists, is set where the row is held, and gates the removal.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/js/starmus-offline.js", "utf8");
+
+    const drain = source.slice(source.indexOf("async processQueue()"));
+    const heldAt = drain.indexOf("heldForReconciliation = true;");
+    const gateAt = drain.indexOf("if (heldForReconciliation) {");
+    const removeAt = drain.indexOf("await this.remove(id, claimToken);");
+
+    assert.ok(heldAt > -1, "the hold sets a flag");
+    assert.ok(gateAt > -1, "and something reads it");
+    assert.ok(removeAt > -1, "and the cleanup is still there for the ordinary case");
+    assert.ok(heldAt < gateAt, "the flag is set before it is read");
+    assert.ok(gateAt < removeAt, "and read before the removal it guards");
+
+    const betweenGateAndRemove = drain.slice(gateAt, removeAt);
+    assert.match(betweenGateAndRemove, /continue;/, "the guarded path leaves the row alone");
+});
+
 test("every storage failure in the transfer marker answers unknown", async () => {
     // The closed-connection case above covers the synchronous throw. The
     // request- and transaction-level error handlers are the other two ways

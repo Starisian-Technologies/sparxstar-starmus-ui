@@ -518,9 +518,16 @@
                 // its source was replaced drove the new submission's bar from
                 // the old one's bytes, which reads to a contributor as a
                 // transfer jumping backwards.
+                // Both named, equal, and something in flight. A one-sided
+                // null slipped through: progress arriving after the submission
+                // completed or failed, or from a callback that omits the id,
+                // still overwrote the bar.
                 const runningId = state.submission?.activeId ?? null;
                 const reportingId = action.uploadId ?? null;
-                if (runningId !== null && reportingId !== null && runningId !== reportingId) {
+                if (state.status !== "submitting" || runningId === null || reportingId === null) {
+                    return state;
+                }
+                if (runningId !== reportingId) {
                     return state;
                 }
                 return merge(state, {
@@ -576,7 +583,17 @@
                 }
                 return merge(state, {
                     status: "complete",
-                    submission: { progress: 1, isQueued: false, activeId: null },
+                    submission: {
+                        progress: 1,
+                        isQueued: false,
+                        activeId: null,
+                        // Which submission this completion settled. `activeId`
+                        // is cleared by this same transition, so anything
+                        // asking afterwards which upload finished had nothing
+                        // to read — and a delayed redirect from an older upload
+                        // could not be told from the current one.
+                        completedId: finished,
+                    },
                 });
             }
 

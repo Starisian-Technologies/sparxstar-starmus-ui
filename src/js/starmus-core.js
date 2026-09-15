@@ -337,6 +337,16 @@ export function initCore(store, instanceId, env) {
             // its local record together, over a UI listener's bug. The event
             // is built entirely from the submit-time snapshot, so nothing in
             // it depends on this dispatch having happened first.
+            // Whether *this* attempt is the one in flight, read **before** the
+            // dispatch. The reducer clears `activeId` when it applies a
+            // completion, so asking afterwards answers `false` for every
+            // successful upload — which suppressed the redirect and the
+            // host notification on the ordinary path. An earlier version of
+            // this captured it after the dispatch and a test asserted only
+            // that the line existed, not where.
+            const wasCurrent =
+                (store.getState().submission?.activeId ?? null) === metadata.uploadId;
+
             store.dispatch({
                 type: "starmus/submit-complete",
                 payload: result,
@@ -352,17 +362,6 @@ export function initCore(store, instanceId, env) {
                 // told the host page a submission had completed that this state
                 // does not consider complete. The side effects follow the
                 // reducer's decision rather than the transfer's.
-                // Whether *this* attempt settled, decided before the dispatch.
-                //
-                // Reading the status afterwards could not tell the two apart:
-                // if upload A finishes after upload B has already completed,
-                // the reducer correctly ignores A's completion, but the state
-                // still says `complete` — so A went on to redirect and notify
-                // the host with its own result, for a submission the store had
-                // just refused.
-                const wasCurrent =
-                    (store.getState().submission?.activeId ?? null) === metadata.uploadId;
-
                 const settled = wasCurrent && store.getState().status === "complete";
 
                 const redirect = settled
@@ -379,11 +378,16 @@ export function initCore(store, instanceId, env) {
                     // state is right and the destination is wrong.
                     const redirectFor = metadata.uploadId;
                     setTimeout(() => {
+                        // Compared against the id the reducer records when a
+                        // completion is applied, which survives settlement.
+                        // `activeId` is cleared by that same transition, so a
+                        // null there meant "any completed state" and an older
+                        // timer could navigate after a newer upload finished,
+                        // using the older upload's URL.
                         const now = store.getState();
-                        const settledNow = now.submission?.activeId ?? null;
                         if (
                             now.status === "complete" &&
-                            (settledNow === null || settledNow === redirectFor)
+                            now.submission?.completedId === redirectFor
                         ) {
                             window.location.href = redirect;
                         }

@@ -1520,12 +1520,15 @@ test("the delayed redirect belongs to the upload that produced it", async () => 
     const source = readFileSync("src/js/starmus-core.js", "utf8");
 
     const timer = source.slice(source.indexOf("const redirectFor = metadata.uploadId;"));
-    assert.match(timer.slice(0, 900), /settledNow === redirectFor/, "the timer checks identity");
-    assert.doesNotMatch(
-        timer.slice(0, 900),
-        /if \(store\.getState\(\)\.status === "complete"\) \{\s*window\.location\.href/,
-        "not the shared status alone",
+    assert.match(
+        timer.slice(0, 1200),
+        /now\.submission\?\.completedId === redirectFor/,
+        "the timer compares a durable completed id",
     );
+    // Not `activeId`, and not a null-accepting comparison: the reducer clears
+    // `activeId` when it applies a completion, so a null there means "any
+    // completed state" — which is exactly the older timer this guards against.
+    assert.doesNotMatch(timer.slice(0, 1200), /settledNow === null/, "null is not a match");
 });
 
 test("host overrides cannot buy extra attempts or a zero-length watchdog", async () => {
@@ -1557,6 +1560,33 @@ test("progress from a superseded upload does not drive the current one", () => {
 
     store.dispatch({ type: "starmus/submit-progress", progress: 0.1, uploadId: "upload-old" });
     assert.equal(store.getState().submission.progress, 0.5, "the old upload's bytes are ignored");
+
+    // A one-sided null slipped through the id comparison alone: a callback that
+    // omits the id has nothing to mismatch against, so it overwrote the bar.
+    store.dispatch({ type: "starmus/submit-progress", progress: 0.2 });
+    assert.equal(store.getState().submission.progress, 0.5, "and so is an unidentified report");
+
+    // And progress arriving after the submission settled belongs to nothing.
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-current" });
+    assert.equal(store.getState().status, "complete");
+    store.dispatch({ type: "starmus/submit-progress", progress: 0.3, uploadId: "upload-current" });
+    assert.equal(
+        store.getState().submission.progress,
+        1,
+        "a completed submission does not go backwards",
+    );
+
+    // The case an id comparison alone cannot reach: after completion `activeId`
+    // is cleared, so an unidentified report has nothing to mismatch against —
+    // `null !== null` is false and it fell straight through onto a finished
+    // submission's bar. Requiring a submission to be in flight is what closes
+    // it, and this is the only assertion that fails without that check.
+    store.dispatch({ type: "starmus/submit-progress", progress: 0.4 });
+    assert.equal(
+        store.getState().submission.progress,
+        1,
+        "nor does an unidentified report reach a settled submission",
+    );
 });
 
 test("post-upload side effects follow the reducer's decision, not the status", async () => {
@@ -1567,13 +1597,40 @@ test("post-upload side effects follow the reducer's decision, not the status", a
     const { readFileSync } = await import("node:fs");
     const source = readFileSync("src/js/starmus-core.js", "utf8");
 
-    assert.match(
-        source,
-        /const wasCurrent =\s*\(store\.getState\(\)\.submission\?\.activeId \?\? null\) === metadata\.uploadId;/,
-        "whether this attempt was current is captured before the dispatch",
-    );
-    const settledLine = /const settled = wasCurrent && store\.getState\(\)\.status === "complete";/;
-    assert.match(source, settledLine, "and the side effects require both");
+    // Positions, not presence. The previous version of this test asserted only
+    // that the declaration existed — and it existed *after* the dispatch, where
+    // the reducer has already cleared `activeId`, so `wasCurrent` was false for
+    // every successful upload and the redirect and host notification were
+    // suppressed on the ordinary path. The test passed throughout.
+    const captureAt = source.indexOf("const wasCurrent =");
+    const dispatchAt = source.indexOf('type: "starmus/submit-complete"');
+    const useAt = source.indexOf("const settled = wasCurrent &&");
+
+    assert.ok(captureAt > -1 && dispatchAt > -1 && useAt > -1, "all three are present");
+    assert.ok(captureAt < dispatchAt, "the identity is captured before the dispatch");
+    assert.ok(dispatchAt < useAt, "and consumed after it");
+});
+
+test("a successful upload still redirects and notifies the host", async () => {
+    // The regression this guards: reading the submission identity after the
+    // dispatch made `wasCurrent` false for every successful upload, so `settled`
+    // was false and both side effects were skipped on the ordinary path.
+    const store = createStore();
+    store.dispatch({
+        type: "starmus/recording-available",
+        payload: { blob: { type: "audio/webm", size: 2048 }, fileName: "take.webm" },
+    });
+    store.dispatch({ type: "starmus/submit-start", submissionId: "upload-1" });
+
+    // What core reads before dispatching.
+    const wasCurrent = (store.getState().submission?.activeId ?? null) === "upload-1";
+    assert.equal(wasCurrent, true, "the attempt is current before it completes");
+
+    store.dispatch({ type: "starmus/submit-complete", submissionId: "upload-1" });
+    const after = store.getState();
+    assert.equal(after.status, "complete");
+    assert.equal(after.submission.activeId, null, "which is why reading it afterwards fails");
+    assert.equal(after.submission.completedId, "upload-1", "the durable id is what survives");
 });
 
 test("a bad capture profile does not strand the UI mid-calibration", () => {

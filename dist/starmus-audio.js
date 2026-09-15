@@ -3204,9 +3204,16 @@
             // its source was replaced drove the new submission's bar from
             // the old one's bytes, which reads to a contributor as a
             // transfer jumping backwards.
+            // Both named, equal, and something in flight. A one-sided
+            // null slipped through: progress arriving after the submission
+            // completed or failed, or from a callback that omits the id,
+            // still overwrote the bar.
             var runningId = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
             var reportingId = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
-            if (runningId !== null && reportingId !== null && runningId !== reportingId) {
+            if (state.status !== "submitting" || runningId === null || reportingId === null) {
+              return state;
+            }
+            if (runningId !== reportingId) {
               return state;
             }
             return merge(state, {
@@ -3272,7 +3279,13 @@
               submission: {
                 progress: 1,
                 isQueued: false,
-                activeId: null
+                activeId: null,
+                // Which submission this completion settled. `activeId`
+                // is cleared by this same transition, so anything
+                // asking afterwards which upload finished had nothing
+                // to read — and a delayed redirect from an older upload
+                // could not be told from the current one.
+                completedId: finished
               }
             });
           }
@@ -18306,6 +18319,14 @@
                 // its local record together, over a UI listener's bug. The event
                 // is built entirely from the submit-time snapshot, so nothing in
                 // it depends on this dispatch having happened first.
+                // Whether *this* attempt is the one in flight, read **before** the
+                // dispatch. The reducer clears `activeId` when it applies a
+                // completion, so asking afterwards answers `false` for every
+                // successful upload — which suppressed the redirect and the
+                // host notification on the ordinary path. An earlier version of
+                // this captured it after the dispatch and a test asserted only
+                // that the line existed, not where.
+                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === metadata.uploadId;
                 store.dispatch({
                   type: "starmus/submit-complete",
                   payload: result,
@@ -18321,15 +18342,6 @@
                 // told the host page a submission had completed that this state
                 // does not consider complete. The side effects follow the
                 // reducer's decision rather than the transfer's.
-                // Whether *this* attempt settled, decided before the dispatch.
-                //
-                // Reading the status afterwards could not tell the two apart:
-                // if upload A finishes after upload B has already completed,
-                // the reducer correctly ignores A's completion, but the state
-                // still says `complete` — so A went on to redirect and notify
-                // the host with its own result, for a submission the store had
-                // just refused.
-                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === metadata.uploadId;
                 settled = wasCurrent && store.getState().status === "complete";
                 redirect = settled ? getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url) : null;
                 if (redirect) {
@@ -18343,10 +18355,15 @@
                   // state is right and the destination is wrong.
                   redirectFor = metadata.uploadId;
                   setTimeout(function () {
-                    var _now$submission$activ, _now$submission;
+                    var _now$submission;
+                    // Compared against the id the reducer records when a
+                    // completion is applied, which survives settlement.
+                    // `activeId` is cleared by that same transition, so a
+                    // null there meant "any completed state" and an older
+                    // timer could navigate after a newer upload finished,
+                    // using the older upload's URL.
                     var now = store.getState();
-                    var settledNow = (_now$submission$activ = (_now$submission = now.submission) === null || _now$submission === void 0 ? void 0 : _now$submission.activeId) !== null && _now$submission$activ !== void 0 ? _now$submission$activ : null;
-                    if (now.status === "complete" && (settledNow === null || settledNow === redirectFor)) {
+                    if (now.status === "complete" && ((_now$submission = now.submission) === null || _now$submission === void 0 ? void 0 : _now$submission.completedId) === redirectFor) {
                       window.location.href = redirect;
                     }
                   }, 1500);

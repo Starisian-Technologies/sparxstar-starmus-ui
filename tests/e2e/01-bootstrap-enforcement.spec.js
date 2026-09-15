@@ -61,7 +61,7 @@ test.describe('Bootstrap Enforcement', () => {
         await page.addInitScript(() => {
             window.STARMUS_BOOTSTRAP = {
                 restUrl: 'http://localhost:8081/wp-json/star-starmus-audio-recorder/v1',
-                nonce: 'test-nonce-12345',
+                uploadHeaders: { 'X-Test-Auth': 'test-nonce-12345' },
                 postId: 0,
                 uploadEndpoint: 'upload',
                 debug: false,
@@ -116,7 +116,7 @@ test.describe('Bootstrap Enforcement', () => {
         await page.addInitScript(() => {
             window.STARMUS_BOOTSTRAP = {
                 restUrl: 'http://localhost:8081/wp-json/star-starmus-audio-recorder/v1',
-                nonce: 'test-nonce-12345',
+                uploadHeaders: { 'X-Test-Auth': 'test-nonce-12345' },
                 postId: 0,
                 uploadEndpoint: 'upload',
                 debug: false,
@@ -165,7 +165,7 @@ test.describe('Bootstrap Enforcement', () => {
         await page.addInitScript(() => {
             window.STARMUS_BOOTSTRAP = {
                 restUrl: 'http://localhost:8081/wp-json/star-starmus-audio-recorder/v1',
-                nonce: 'test-nonce-12345',
+                uploadHeaders: { 'X-Test-Auth': 'test-nonce-12345' },
                 postId: 0,
                 uploadEndpoint: 'upload',
                 debug: false,

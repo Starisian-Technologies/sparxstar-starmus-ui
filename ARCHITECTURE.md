@@ -48,6 +48,15 @@ window.STARMUS_BOOTSTRAP = {
   // and holds no CMS path: with no `restUrl`, uploads throw
   // NO_UPLOAD_ENDPOINT rather than posting to a guessed route.
   uploadEndpoint: string | undefined,
+  // Auth headers for the upload, injected by the host.
+  //
+  // BREAKING, ADR-034: this replaces `nonce`. The package used to read
+  // `bootstrap.nonce` and set `X-WP-Nonce` itself, which made it hold a CMS
+  // header name. It now sends exactly what the host puts here and knows
+  // nothing about what the header means. A host that previously supplied
+  // `nonce` must supply `{ 'X-WP-Nonce': '…' }` here instead; a host that
+  // supplies neither sends no authorization header at all.
+  uploadHeaders: Record<string, string> | undefined,
 }
 ```
 

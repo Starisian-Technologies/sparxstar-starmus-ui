@@ -9,6 +9,9 @@
   function _arrayWithHoles$1(r) {
     if (Array.isArray(r)) return r;
   }
+  function _arrayWithoutHoles(r) {
+    if (Array.isArray(r)) return _arrayLikeToArray$1(r);
+  }
   function asyncGeneratorStep$2(n, t, e, r, o, a, c) {
     try {
       var i = n[a](c),
@@ -104,6 +107,9 @@
       writable: true
     }) : e[r] = t, e;
   }
+  function _iterableToArray(r) {
+    if ("undefined" != typeof Symbol && null != r[Symbol.iterator] || null != r["@@iterator"]) return Array.from(r);
+  }
   function _iterableToArrayLimit$1(r, l) {
     var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"];
     if (null != t) {
@@ -130,6 +136,9 @@
   }
   function _nonIterableRest$1() {
     throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+  }
+  function _nonIterableSpread() {
+    throw new TypeError("Invalid attempt to spread non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
   }
   function ownKeys$3(e, r) {
     var t = Object.keys(e);
@@ -260,8 +269,28 @@
       }) : e[r] = n : (o("next", 0), o("throw", 1), o("return", 2));
     }, _regeneratorDefine(e, r, n, t);
   }
+  function _regeneratorValues(e) {
+    if (null != e) {
+      var t = e["function" == typeof Symbol && Symbol.iterator || "@@iterator"],
+        r = 0;
+      if (t) return t.call(e);
+      if ("function" == typeof e.next) return e;
+      if (!isNaN(e.length)) return {
+        next: function () {
+          return e && r >= e.length && (e = void 0), {
+            value: e && e[r++],
+            done: !e
+          };
+        }
+      };
+    }
+    throw new TypeError(typeof e + " is not iterable");
+  }
   function _slicedToArray$1(r, e) {
     return _arrayWithHoles$1(r) || _iterableToArrayLimit$1(r, e) || _unsupportedIterableToArray$1(r, e) || _nonIterableRest$1();
+  }
+  function _toConsumableArray(r) {
+    return _arrayWithoutHoles(r) || _iterableToArray(r) || _unsupportedIterableToArray$1(r) || _nonIterableSpread();
   }
   function _toPrimitive$8(t, r) {
     if ("object" != typeof t || !t) return t;
@@ -2767,9 +2796,16 @@
         isPlaying: false,
         isPaused: false
       },
+      // Same key set the terminal transitions write (see
+      // `settledSubmission()`), so a fresh store and a settled one answer
+      // `activeId` and `superseded` the same way instead of one returning
+      // `undefined` and the other `null`.
       submission: {
         progress: 0,
-        isQueued: false
+        isQueued: false,
+        activeId: null,
+        superseded: false,
+        completedId: null
       }
     };
     function shallowClone(obj) {
@@ -2790,8 +2826,34 @@
       }
       return out;
     }
+
+    /**
+     * The `submission` shape every transition that ends an attempt writes.
+     *
+     * `submission` is replaced wholesale rather than merged, so any key a
+     * branch leaves out becomes `undefined` instead of keeping its previous
+     * value. That has been benign only because each consumer happened to use
+     * `?? null` or a truthiness test: `activeId` was `null` after a completion
+     * and `undefined` after a queue, and `superseded` was cleared on the
+     * superseded branches by being omitted rather than by being set false.
+     * Behaviour that survives on the reader's defensiveness is a bug waiting
+     * for the next reader, so the full set is stated in one place here and
+     * every terminal branch goes through it.
+     *
+     * @param {Object} [overrides] Fields this particular ending sets.
+     * @returns {Object}
+     */
+    function settledSubmission(overrides) {
+      return merge({
+        progress: 0,
+        isQueued: false,
+        activeId: null,
+        superseded: false,
+        completedId: null
+      }, overrides || {});
+    }
     function reducer(state, action) {
-      var _action$attainment$pr, _action$attainment, _action$attainment2;
+      var _action$attainment$pr, _action$attainment, _action$attainment2, _action$attainment$pr2, _action$attainment3, _action$attainment4;
       if (!action || !action.type) {
         return state;
       }
@@ -2818,6 +2880,7 @@
           }
         case "starmus/error":
           {
+            var _errObj$attemptId, _state$submission$act, _state$submission, _state$submission2, _state$submission3;
             var errObj = action.error || action.payload;
             var currentErrors = state.env && state.env.errors ? state.env.errors.slice() : [];
             currentErrors.push({
@@ -2826,9 +2889,100 @@
               timestamp: Date.now(),
               severity: errObj.retryable === false ? "hard" : "soft"
             });
-            var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+            var shouldResetStatus = (state.status === "calibrating" || state.status === "recording") && (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED" ||
+            // `startCalibration()` raises this one itself, while
+            // the state is `calibrating`. Left out of the reset
+            // list, it stranded the UI mid-calibration with the
+            // setup control disabled — no way for the contributor
+            // to retry and no way for the host to correct the
+            // profile that caused it.
+            errObj.code === "INVALID_CAPTURE_PROFILE");
+
+            // A submission that failed terminally has to give the UI back.
+            //
+            // `starmus/error` left `status` alone, so a queue failure while
+            // submitting — the queue full, IndexedDB unavailable — left the
+            // contributor on "Uploading…" with the submit control disabled,
+            // their recording still in state, and no way to retry it. The
+            // upload is over; pretending it is still running helps nobody.
+            //
+            // Not when the bytes already landed. A post-transfer failure
+            // carries `uploadId`, and returning that to a submittable state
+            // would invite a second upload of an asset the server has.
+            // Whose failure this is.
+            //
+            // An error with no attempt named is a general one — a denied
+            // microphone, a recorder that would not start — and applies to
+            // whatever is happening. One that names an attempt applies only
+            // to that attempt: a held transfer reporting terminally after
+            // its source was replaced and a new submit began would
+            // otherwise have reset the *new* submission to submittable,
+            // because nothing tied the error to the attempt that raised it.
+            var attempt = (_errObj$attemptId = errObj.attemptId) !== null && _errObj$attemptId !== void 0 ? _errObj$attemptId : null;
+            var inFlight = (_state$submission$act = (_state$submission = state.submission) === null || _state$submission === void 0 ? void 0 : _state$submission.activeId) !== null && _state$submission$act !== void 0 ? _state$submission$act : null;
+            // An error that names no attempt is general and applies to
+            // whatever is happening. One that names an attempt applies only
+            // to that attempt — and if nothing in flight is named either,
+            // the two cannot be shown to be the same submission. Treating
+            // that pair as a match is the same hole `submit-complete`
+            // refuses by requiring both ids: it let a stale error for one
+            // attempt reset an unidentified submission that was still
+            // running.
+            var errorIsCurrent = attempt === null || attempt === inFlight;
+            var submissionFailed = state.status === "submitting" && errorIsCurrent && errObj.retryable === false && !errObj.uploadId;
+
+            // The transfer succeeded and the handling after it did not.
+            //
+            // Left as `submitting`, this was the same trap by another door:
+            // "Uploading…" forever over an upload that finished minutes
+            // ago, with no request running and no control enabled. The
+            // asset is on the server, so the honest terminal state is the
+            // delivered one — and it is the one that does not invite a
+            // second upload. The error travels with it, carrying the upload
+            // id the two sides are reconciled by.
+            //
+            // Not when the source has been replaced. A post-transfer
+            // failure still carries the *old* upload id, so this branch
+            // read it as a valid delivery and marked the replacement
+            // `complete` — disabling submission for bytes that were never
+            // uploaded, which is the same defect the superseded state was
+            // added to prevent, arriving through the error path instead of
+            // the completion path.
+            // Matched against the submission in flight, not merely
+            // "carries some id". An older upload reporting a
+            // completion-handling failure after a new `submit-start` would
+            // otherwise mark the new source complete — the same stale-event
+            // hole `submit-complete` is guarded against, through the error
+            // path.
+            // The same rule as `errorIsCurrent` above, and it had the same
+            // hole one line further down: `inFlight === null` counted as a
+            // match, so any error carrying an upload id could be read as
+            // *this* submission's delivery. With an unidentified
+            // submission in flight that marked the current source
+            // `complete` — disabling submit for bytes nothing had
+            // uploaded, which is precisely the harm the superseded
+            // handling exists to prevent, arriving through the error path.
+            var failedUploadIsCurrent = Boolean(errObj.uploadId) && errorIsCurrent && errObj.uploadId === inFlight;
+            var deliveredThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission2 = state.submission) === null || _state$submission2 === void 0 ? void 0 : _state$submission2.superseded) !== true;
+
+            // The replaced source goes back to submittable, exactly as it
+            // does when a superseded upload completes normally.
+            var supersededThenFailed = state.status === "submitting" && failedUploadIsCurrent && ((_state$submission3 = state.submission) === null || _state$submission3 === void 0 ? void 0 : _state$submission3.superseded) === true;
+            // A submission that has ended leaves no record of itself.
+            //
+            // These branches moved `status` out of `submitting` while
+            // `submission` kept the finished attempt's `activeId`, progress
+            // and `superseded` flag. A late completion naming that id then
+            // matched and drove the UI back to `complete` over a submission
+            // that had already failed, and everything reading `submission`
+            // in between was reading a description of something that was
+            // no longer happening.
+            var submissionEnded = submissionFailed || deliveredThenFailed || supersededThenFailed;
             return merge(state, {
-              status: shouldResetStatus ? "ready" : state.status,
+              status: shouldResetStatus ? "ready" : submissionFailed ? "ready_to_submit" : deliveredThenFailed ? "complete" : supersededThenFailed ? "ready_to_submit" : state.status,
+              submission: submissionEnded ? settledSubmission({
+                progress: deliveredThenFailed ? 1 : 0
+              }) : state.submission,
               error: errObj,
               env: merge(state.env, {
                 errors: currentErrors
@@ -2877,6 +3031,18 @@
             recorder: merge(state.recorder, {
               duration: 0,
               isPaused: false
+            }),
+            source: merge(state.source, {
+              // The previous take's draft goes when the microphone
+              // opens, not when the new recording lands.
+              // `handleSubmit()` copies `source.transcript` into the
+              // upload metadata, so a retake used to carry the
+              // *previous* take's words; clearing at stop instead
+              // erased the draft of the take that had just finished.
+              // Here is the one moment when the old words are stale
+              // and no new ones exist yet.
+              transcript: "",
+              interimTranscript: ""
             })
           });
         case "starmus/mic-pause":
@@ -2906,10 +3072,67 @@
           });
         case "starmus/recording-available":
           return merge(state, {
-            status: "ready_to_submit",
+            // An upload in flight keeps the UI it owns, exactly as in
+            // `file-attached`. Flipping to `ready_to_submit` here
+            // re-enabled submit during a running transfer and allowed a
+            // second one alongside it; the superseded handling returns
+            // this take to submittable once the first upload settles.
+            status: state.status === "submitting" ? state.status : "ready_to_submit",
+            // As in `file-attached`: a recording that arrives while an
+            // upload is still running replaces the source under it, so
+            // that upload's result no longer describes what is here.
+            submission: state.status === "submitting" ? merge(state.submission, {
+              superseded: true
+            }) : state.submission,
             source: merge(state.source, {
               kind: "blob",
               blob: action.payload.blob,
+              // A previously attached file is cleared, so `kind` and
+              // the payload cannot disagree. See `file-attached`
+              // below for what leaving the other one set costs.
+              file: null,
+              // The capture profile goes with the bytes.
+              //
+              // This branch replaces an attached file, and
+              // `file-attached` had set the profile to `import` and
+              // overwritten the attainment record — so a recording
+              // finishing after a mid-take attachment inherited that
+              // label and reached ingestion described as prerecorded
+              // imported material. The recorder now sends this take's
+              // own attainment with it (`starmus-recorder.js`), which
+              // is the only place the truth still exists once
+              // `file-attached` has run.
+              //
+              // Absent, never wrong, when no attainment came with the
+              // action: an asset with no profile is warned about and
+              // probed by the Node, while one carrying someone else's
+              // profile is believed.
+              captureProfile: (_action$attainment$pr2 = (_action$attainment3 = action.attainment) === null || _action$attainment3 === void 0 ? void 0 : _action$attainment3.profile) !== null && _action$attainment$pr2 !== void 0 ? _action$attainment$pr2 : null,
+              captureAttainment: (_action$attainment4 = action.attainment) !== null && _action$attainment4 !== void 0 ? _action$attainment4 : null,
+              // The transcript is deliberately NOT cleared here, and
+              // an earlier version of this did clear it — which
+              // erased every recording's own draft.
+              //
+              // `recording-available` is dispatched from
+              // MediaRecorder's `stop` handler, *after* a whole
+              // recording's worth of `transcript-update` actions have
+              // accumulated. Clearing at stop therefore wiped the
+              // draft belonging to the take that had just finished,
+              // before `handleSubmit()` could snapshot it. The retake
+              // leak it was meant to fix is handled at `mic-start`
+              // instead: a new recording clears the previous draft
+              // when the microphone opens, which is before any of the
+              // new one's words exist.
+              //
+              // The capture profile is deliberately NOT cleared here.
+              // `starmus/capture-profile` is dispatched when the
+              // microphone opens and `starmus/recording-available`
+              // when it stops, so clearing at stop would destroy the
+              // profile belonging to the recording that just ended —
+              // and an asset with no profile is the exact failure
+              // ADR-035 and the build check exist to prevent. A stale
+              // `import` profile cannot survive into a recording,
+              // because opening the microphone overwrites it first.
               fileName: action.payload.fileName,
               metadata: {
                 duration: state.recorder.duration || 0,
@@ -2931,12 +3154,83 @@
             })
           });
         case "starmus/file-attached":
+          // A submission already in flight is not interrupted. The file
+          // input stays active while `status === "submitting"`, so
+          // attaching a file mid-upload used to flip the status back to
+          // `ready_to_submit`, re-enabling submit and permitting a second
+          // submission to run alongside the first. The attachment is
+          // still recorded; only the status is left alone, so the
+          // in-flight upload keeps the UI it owns until it settles.
           return merge(state, {
-            status: "ready_to_submit",
+            status: state.status === "submitting" ? state.status : "ready_to_submit",
+            // The in-flight upload no longer describes what is on
+            // screen. It carries the bytes of a source that has just
+            // been replaced, so whatever it reports back cannot be
+            // said about this attachment.
+            submission: state.status === "submitting" ? merge(state.submission, {
+              superseded: true
+            }) : state.submission,
             source: merge(state.source, {
               kind: "file",
               file: action.file,
+              // The recorded blob is cleared, not left beside the
+              // file. `handleSubmit()` reads `source.blob || source.file`,
+              // so a contributor who recorded and then attached a
+              // file uploaded the *recording* under the *file's*
+              // name, carrying the file's mime type, size and the
+              // `import` profile. That is a mislabelled contribution
+              // — the wrong audio described as something it is not —
+              // which for an archive is worse than an upload that
+              // fails outright.
+              blob: null,
+              // The live-transcript draft goes with it. It belongs to
+              // the recording that was just replaced, and
+              // `handleSubmit()` copies `source.transcript` into the
+              // upload metadata — so an imported file arrived at
+              // ingestion carrying another take's words, which is the
+              // same mislabelling by a different field.
+              transcript: "",
+              interimTranscript: "",
               fileName: action.file.name,
+              // An attached file is prerecorded material, which is
+              // exactly what ADR-035 calls the `import` profile:
+              // preserved unchanged, no transcode, resample or
+              // fold-down. Leaving the profile unset here sent a
+              // blank one to ingestion on the Tier C path — the very
+              // condition `AGENTS.md` lists as a build failure.
+              captureProfile: "import",
+              // Nothing was captured, so nothing was measured. The
+              // attainment says so rather than claiming the profile
+              // was met: `attained: null` is "not applicable", which
+              // is different from the `false` a missed constraint
+              // would give. The Spoken Audio Node probes the file
+              // itself and records what it actually is.
+              captureAttainment: {
+                // Kept identical to `describeAttainment("import",
+                // …)`, field for field. This module is an IIFE
+                // rather than an ES module, so it cannot call that
+                // helper; a test compares the two records instead,
+                // and fails if either moves.
+                //
+                // They had disagreed: this listed sampleRate and
+                // channelCount as unverified, while the helper
+                // reports neither — the import profile constrains
+                // neither, so there is nothing about it that went
+                // unchecked. A consumer read an unconstrained
+                // import as one whose constraints could not be
+                // verified, which is a different claim.
+                profile: "import",
+                requested: {
+                  sampleRate: null,
+                  channelCount: null,
+                  audioBitsPerSecond: null
+                },
+                actual: {},
+                attained: null,
+                exceeded: [],
+                unverified: [],
+                source: "file-attachment"
+              },
               metadata: {
                 duration: 0,
                 mimeType: action.file.type,
@@ -2947,30 +3241,155 @@
         case "starmus/submit-start":
           return merge(state, {
             status: "submitting",
-            error: null
-          });
-        case "starmus/submit-progress":
-          return merge(state, {
-            submission: merge(state.submission, {
-              progress: action.progress
+            error: null,
+            // Which submission is in flight. The file input stays usable
+            // during an upload, so without this a completion could land
+            // on a source it never uploaded.
+            //
+            // Replaced outright rather than merged. A `superseded` flag
+            // left over from a previous submission made the *next* one
+            // settle down the superseded path: a contributor whose first
+            // upload could not be queued, who then attached another file
+            // and submitted it successfully, was told it was still
+            // waiting to be sent. The progress and queued markers belong
+            // to the finished attempt for the same reason.
+            submission: settledSubmission({
+              activeId: action.submissionId || null
             })
           });
+        case "starmus/submit-progress":
+          {
+            var _state$submission$act2, _state$submission4, _action$uploadId;
+            // Progress from an upload that is no longer the one in flight
+            // is not this submission's progress. An upload continuing after
+            // its source was replaced drove the new submission's bar from
+            // the old one's bytes, which reads to a contributor as a
+            // transfer jumping backwards.
+            // Both named, equal, and something in flight. A one-sided
+            // null slipped through: progress arriving after the submission
+            // completed or failed, or from a callback that omits the id,
+            // still overwrote the bar.
+            var runningId = (_state$submission$act2 = (_state$submission4 = state.submission) === null || _state$submission4 === void 0 ? void 0 : _state$submission4.activeId) !== null && _state$submission$act2 !== void 0 ? _state$submission$act2 : null;
+            var reportingId = (_action$uploadId = action.uploadId) !== null && _action$uploadId !== void 0 ? _action$uploadId : null;
+            if (state.status !== "submitting" || runningId === null || reportingId === null) {
+              return state;
+            }
+            if (runningId !== reportingId) {
+              return state;
+            }
+            return merge(state, {
+              submission: merge(state.submission, {
+                progress: action.progress
+              })
+            });
+          }
         case "starmus/submit-complete":
-          return merge(state, {
-            status: "complete",
-            submission: {
-              progress: 1,
-              isQueued: false
+          {
+            var _state$submission$act3, _state$submission5, _action$submissionId, _state$submission6;
+            // Ignored when it does not belong to the submission in flight.
+            //
+            // A contributor who attaches a file while an upload is running
+            // replaces `source`; the earlier upload then finished and set
+            // *that* source to `complete`, disabling submit for a file
+            // which was never uploaded. The upload that started is the only
+            // one allowed to complete.
+            // Once a submission has announced itself, only that submission
+            // completes. An unidentified completion is not waved through
+            // either: it is indistinguishable from the stale one this
+            // guard exists to reject. A completion is only unconditional
+            // when nothing named itself as being in flight.
+            // Only while something is actually being submitted. After a
+            // terminal error the reducer clears `activeId` and returns to
+            // `ready_to_submit` — at which point an id check alone let a
+            // late completion through, because `null` matches anything,
+            // and marked the failed or replacement source complete.
+            if (state.status !== "submitting") {
+              return state;
             }
-          });
+
+            // Both must be named, and must agree. Treating `(null, null)`
+            // as a match let an unidentified completion settle an
+            // unidentified submission — which is every legacy caller and
+            // every stale one, exactly the pair least likely to be about
+            // the same upload.
+            var active = (_state$submission$act3 = (_state$submission5 = state.submission) === null || _state$submission5 === void 0 ? void 0 : _state$submission5.activeId) !== null && _state$submission$act3 !== void 0 ? _state$submission$act3 : null;
+            var finished = (_action$submissionId = action.submissionId) !== null && _action$submissionId !== void 0 ? _action$submissionId : null;
+            if (active === null || finished === null || active !== finished) {
+              return state;
+            }
+
+            // A submission whose source was replaced under it settles, but
+            // it does not settle *this* source. The upload that finished
+            // sent the earlier recording; marking the attachment that
+            // replaced it `complete` disabled submit for a file nothing
+            // had ever uploaded — the contributor was shown a delivery
+            // that never happened and given no way to send the real one.
+            // The UI goes back to submittable so the attachment can go.
+            if (((_state$submission6 = state.submission) === null || _state$submission6 === void 0 ? void 0 : _state$submission6.superseded) === true) {
+              return merge(state, {
+                status: "ready_to_submit",
+                submission: settledSubmission()
+              });
+            }
+            return merge(state, {
+              status: "complete",
+              // `completedId` records which submission this completion
+              // settled. `activeId` is cleared by this same transition, so
+              // anything asking afterwards which upload finished had
+              // nothing to read — and a delayed redirect from an older
+              // upload could not be told from the current one.
+              submission: settledSubmission({
+                progress: 1,
+                completedId: finished
+              })
+            });
+          }
         case "starmus/submit-queued":
-          return merge(state, {
-            status: "complete",
-            submission: {
-              progress: 0,
-              isQueued: true
+          {
+            var _state$submission$act4, _state$submission7, _action$uploadId2, _state$submission8;
+            // Ignored when it does not belong to the submission in flight.
+            // `queueSubmission()` is asynchronous, so a slow result from an
+            // earlier attempt could otherwise mark whatever is on screen as
+            // queued. Matched on `uploadId` — the same identifier
+            // `submit-start` records — and not on `submissionId`, which is
+            // the queue's own row id and would never match it.
+            var _inFlight = (_state$submission$act4 = (_state$submission7 = state.submission) === null || _state$submission7 === void 0 ? void 0 : _state$submission7.activeId) !== null && _state$submission$act4 !== void 0 ? _state$submission$act4 : null;
+            var queuedUpload = (_action$uploadId2 = action.uploadId) !== null && _action$uploadId2 !== void 0 ? _action$uploadId2 : null;
+            // An unnamed result is refused too, when something else is in
+            // flight. Requiring the id to be non-null before comparing let
+            // an older queue result with no id mark the current submission
+            // queued — the same hole the id check was added to close, left
+            // open for exactly the callers least likely to be current.
+            // And only while something is in flight. With `activeId`
+            // cleared — after a reset, or after a terminal failure — this
+            // accepted any delayed result, including one naming an upload
+            // from a submission that had already ended, and marked whatever
+            // was on screen queued.
+            if (state.status !== "submitting" || _inFlight === null) {
+              return state;
             }
-          });
+            if (_inFlight !== queuedUpload) {
+              return state;
+            }
+            // The recording that was queued is the one that was in flight,
+            // which is not what is on screen when the source has been
+            // replaced. Reporting "Queued" over the new attachment claimed
+            // the platform was holding a file it had never been given, and
+            // disabled the control that would have sent it. The queue entry
+            // for the earlier recording stands either way.
+            if (((_state$submission8 = state.submission) === null || _state$submission8 === void 0 ? void 0 : _state$submission8.superseded) === true) {
+              return merge(state, {
+                status: "ready_to_submit",
+                submission: settledSubmission()
+              });
+            }
+            return merge(state, {
+              status: "complete",
+              submission: settledSubmission({
+                isQueued: true
+              })
+            });
+          }
         case "starmus/reset":
           return merge(shallowClone(DEFAULT_INITIAL_STATE), {
             instanceId: state.instanceId,
@@ -3037,6 +3456,76 @@
    * @exports DEFAULT_INITIAL_STATE
    */
   runtimeGlobal.StarmusStore.DEFAULT_INITIAL_STATE;
+
+  var es_array_concat = {};
+
+  var hasRequiredEs_array_concat;
+
+  function requireEs_array_concat () {
+  	if (hasRequiredEs_array_concat) return es_array_concat;
+  	hasRequiredEs_array_concat = 1;
+  	var $ = require_export();
+  	var fails = requireFails();
+  	var isArray = requireIsArray();
+  	var isObject = requireIsObject();
+  	var toObject = requireToObject();
+  	var lengthOfArrayLike = requireLengthOfArrayLike();
+  	var doesNotExceedSafeInteger = requireDoesNotExceedSafeInteger();
+  	var createProperty = requireCreateProperty();
+  	var setArrayLength = requireArraySetLength();
+  	var arraySpeciesCreate = requireArraySpeciesCreate();
+  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
+  	var wellKnownSymbol = requireWellKnownSymbol();
+  	var V8_VERSION = requireEnvironmentV8Version();
+
+  	var IS_CONCAT_SPREADABLE = wellKnownSymbol('isConcatSpreadable');
+
+  	// We can't use this feature detection in V8 since it causes
+  	// deoptimization and serious performance degradation
+  	// https://github.com/zloirock/core-js/issues/679
+  	var IS_CONCAT_SPREADABLE_SUPPORT = V8_VERSION >= 51 || !fails(function () {
+  	  var array = [];
+  	  array[IS_CONCAT_SPREADABLE] = false;
+  	  return array.concat()[0] !== array;
+  	});
+
+  	var isConcatSpreadable = function (O) {
+  	  if (!isObject(O)) return false;
+  	  var spreadable = O[IS_CONCAT_SPREADABLE];
+  	  return spreadable !== undefined ? !!spreadable : isArray(O);
+  	};
+
+  	var FORCED = !IS_CONCAT_SPREADABLE_SUPPORT || !arrayMethodHasSpeciesSupport('concat');
+
+  	// `Array.prototype.concat` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.concat
+  	// with adding support of @@isConcatSpreadable and @@species
+  	$({ target: 'Array', proto: true, arity: 1, forced: FORCED }, {
+  	  // eslint-disable-next-line no-unused-vars -- required for `.length`
+  	  concat: function concat(arg) {
+  	    var O = toObject(this);
+  	    var A = arraySpeciesCreate(O, 0);
+  	    var n = 0;
+  	    var i, k, length, len, E;
+  	    for (i = -1, length = arguments.length; i < length; i++) {
+  	      E = i === -1 ? O : arguments[i];
+  	      if (isConcatSpreadable(E)) {
+  	        len = lengthOfArrayLike(E);
+  	        doesNotExceedSafeInteger(n + len);
+  	        for (k = 0; k < len; k++, n++) if (k in E) createProperty(A, n, E[k]);
+  	      } else {
+  	        doesNotExceedSafeInteger(n + 1);
+  	        createProperty(A, n++, E);
+  	      }
+  	    }
+  	    setArrayLength(A, n);
+  	    return A;
+  	  }
+  	});
+  	return es_array_concat;
+  }
+
+  requireEs_array_concat();
 
   var objectDefineProperties = {};
 
@@ -3662,7 +4151,7 @@
 
   requireEs_array_iterator();
 
-  var es_regexp_exec = {};
+  var es_string_iterator = {};
 
   var toString;
   var hasRequiredToString;
@@ -3680,262 +4169,6 @@
   	};
   	return toString;
   }
-
-  var regexpFlags;
-  var hasRequiredRegexpFlags;
-
-  function requireRegexpFlags () {
-  	if (hasRequiredRegexpFlags) return regexpFlags;
-  	hasRequiredRegexpFlags = 1;
-  	var anObject = requireAnObject();
-
-  	// `RegExp.prototype.flags` getter implementation
-  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
-  	regexpFlags = function () {
-  	  var that = anObject(this);
-  	  var result = '';
-  	  if (that.hasIndices) result += 'd';
-  	  if (that.global) result += 'g';
-  	  if (that.ignoreCase) result += 'i';
-  	  if (that.multiline) result += 'm';
-  	  if (that.dotAll) result += 's';
-  	  if (that.unicode) result += 'u';
-  	  if (that.unicodeSets) result += 'v';
-  	  if (that.sticky) result += 'y';
-  	  return result;
-  	};
-  	return regexpFlags;
-  }
-
-  var regexpStickyHelpers;
-  var hasRequiredRegexpStickyHelpers;
-
-  function requireRegexpStickyHelpers () {
-  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
-  	hasRequiredRegexpStickyHelpers = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	var UNSUPPORTED_Y = fails(function () {
-  	  var re = $RegExp('a', 'y');
-  	  re.lastIndex = 2;
-  	  return re.exec('abcd') !== null;
-  	});
-
-  	// UC Browser bug
-  	// https://github.com/zloirock/core-js/issues/1008
-  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
-  	  return !$RegExp('a', 'y').sticky;
-  	});
-
-  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
-  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
-  	  var re = $RegExp('^r', 'gy');
-  	  re.lastIndex = 2;
-  	  return re.exec('str') !== null;
-  	});
-
-  	regexpStickyHelpers = {
-  	  BROKEN_CARET: BROKEN_CARET,
-  	  MISSED_STICKY: MISSED_STICKY,
-  	  UNSUPPORTED_Y: UNSUPPORTED_Y
-  	};
-  	return regexpStickyHelpers;
-  }
-
-  var regexpUnsupportedDotAll;
-  var hasRequiredRegexpUnsupportedDotAll;
-
-  function requireRegexpUnsupportedDotAll () {
-  	if (hasRequiredRegexpUnsupportedDotAll) return regexpUnsupportedDotAll;
-  	hasRequiredRegexpUnsupportedDotAll = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('.', 's') -> /./s and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	regexpUnsupportedDotAll = fails(function () {
-  	  var re = $RegExp('.', 's');
-  	  return !(re.dotAll && re.test('\n') && re.flags === 's');
-  	});
-  	return regexpUnsupportedDotAll;
-  }
-
-  var regexpUnsupportedNcg;
-  var hasRequiredRegexpUnsupportedNcg;
-
-  function requireRegexpUnsupportedNcg () {
-  	if (hasRequiredRegexpUnsupportedNcg) return regexpUnsupportedNcg;
-  	hasRequiredRegexpUnsupportedNcg = 1;
-  	var fails = requireFails();
-  	var globalThis = requireGlobalThis();
-
-  	// babel-minify and Closure Compiler transpiles RegExp('(?<a>b)', 'g') -> /(?<a>b)/g and it causes SyntaxError
-  	var $RegExp = globalThis.RegExp;
-
-  	regexpUnsupportedNcg = fails(function () {
-  	  var re = $RegExp('(?<a>b)', 'g');
-  	  return re.exec('b').groups.a !== 'b' ||
-  	    'b'.replace(re, '$<a>c') !== 'bc';
-  	});
-  	return regexpUnsupportedNcg;
-  }
-
-  var regexpExec;
-  var hasRequiredRegexpExec;
-
-  function requireRegexpExec () {
-  	if (hasRequiredRegexpExec) return regexpExec;
-  	hasRequiredRegexpExec = 1;
-  	/* eslint-disable regexp/no-empty-capturing-group, regexp/no-empty-group, regexp/no-lazy-ends -- testing */
-  	/* eslint-disable regexp/no-useless-quantifier -- testing */
-  	var call = requireFunctionCall();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var toString = requireToString();
-  	var regexpFlags = requireRegexpFlags();
-  	var stickyHelpers = requireRegexpStickyHelpers();
-  	var shared = requireShared();
-  	var create = requireObjectCreate();
-  	var getInternalState = requireInternalState().get;
-  	var UNSUPPORTED_DOT_ALL = requireRegexpUnsupportedDotAll();
-  	var UNSUPPORTED_NCG = requireRegexpUnsupportedNcg();
-
-  	var nativeReplace = shared('native-string-replace', String.prototype.replace);
-  	var nativeExec = RegExp.prototype.exec;
-  	var patchedExec = nativeExec;
-  	var charAt = uncurryThis(''.charAt);
-  	var indexOf = uncurryThis(''.indexOf);
-  	var replace = uncurryThis(''.replace);
-  	var stringSlice = uncurryThis(''.slice);
-
-  	var UPDATES_LAST_INDEX_WRONG = (function () {
-  	  var re1 = /a/;
-  	  var re2 = /b*/g;
-  	  call(nativeExec, re1, 'a');
-  	  call(nativeExec, re2, 'a');
-  	  return re1.lastIndex !== 0 || re2.lastIndex !== 0;
-  	})();
-
-  	var UNSUPPORTED_Y = stickyHelpers.BROKEN_CARET;
-
-  	// nonparticipating capturing group, copied from es5-shim's String#split patch.
-  	var NPCG_INCLUDED = /()??/.exec('')[1] !== undefined;
-
-  	var PATCH = UPDATES_LAST_INDEX_WRONG || NPCG_INCLUDED || UNSUPPORTED_Y || UNSUPPORTED_DOT_ALL || UNSUPPORTED_NCG;
-
-  	var setGroups = function (re, groups) {
-  	  var object = re.groups = create(null);
-  	  for (var i = 0; i < groups.length; i++) {
-  	    var group = groups[i];
-  	    object[group[0]] = re[group[1]];
-  	  }
-  	};
-
-  	if (PATCH) {
-  	  patchedExec = function exec(string) {
-  	    var re = this;
-  	    var state = getInternalState(re);
-  	    var str = toString(string);
-  	    var raw = state.raw;
-  	    var result, reCopy, lastIndex;
-
-  	    if (raw) {
-  	      raw.lastIndex = re.lastIndex;
-  	      result = call(patchedExec, raw, str);
-  	      re.lastIndex = raw.lastIndex;
-
-  	      if (result && state.groups) setGroups(result, state.groups);
-
-  	      return result;
-  	    }
-
-  	    var groups = state.groups;
-  	    var sticky = UNSUPPORTED_Y && re.sticky;
-  	    var flags = call(regexpFlags, re);
-  	    var source = re.source;
-  	    var charsAdded = 0;
-  	    var strCopy = str;
-
-  	    if (sticky) {
-  	      flags = replace(flags, 'y', '');
-  	      if (indexOf(flags, 'g') === -1) {
-  	        flags += 'g';
-  	      }
-
-  	      strCopy = stringSlice(str, re.lastIndex);
-  	      // Support anchored sticky behavior.
-  	      var prevChar = re.lastIndex > 0 && charAt(str, re.lastIndex - 1);
-  	      if (re.lastIndex > 0 &&
-  	        (!re.multiline || re.multiline && prevChar !== '\n' && prevChar !== '\r' && prevChar !== '\u2028' && prevChar !== '\u2029')) {
-  	        source = '(?: (?:' + source + '))';
-  	        strCopy = ' ' + strCopy;
-  	        charsAdded++;
-  	      }
-  	      // ^(? + rx + ) is needed, in combination with some str slicing, to
-  	      // simulate the 'y' flag.
-  	      reCopy = new RegExp('^(?:' + source + ')', flags);
-  	    }
-
-  	    if (NPCG_INCLUDED) {
-  	      reCopy = new RegExp('^' + source + '$(?!\\s)', flags);
-  	    }
-  	    if (UPDATES_LAST_INDEX_WRONG) lastIndex = re.lastIndex;
-
-  	    var match = call(nativeExec, sticky ? reCopy : re, strCopy);
-
-  	    if (sticky) {
-  	      if (match) {
-  	        match.input = str;
-  	        match[0] = stringSlice(match[0], charsAdded);
-  	        match.index = re.lastIndex;
-  	        re.lastIndex += match[0].length;
-  	      } else re.lastIndex = 0;
-  	    } else if (UPDATES_LAST_INDEX_WRONG && match) {
-  	      re.lastIndex = re.global ? match.index + match[0].length : lastIndex;
-  	    }
-  	    if (NPCG_INCLUDED && match && match.length > 1) {
-  	      // Fix browsers whose `exec` methods don't consistently return `undefined`
-  	      // for NPCG, like IE8. NOTE: This doesn't work for /(.?)?/
-  	      call(nativeReplace, match[0], reCopy, function () {
-  	        for (var i = 1; i < arguments.length - 2; i++) {
-  	          if (arguments[i] === undefined) match[i] = undefined;
-  	        }
-  	      });
-  	    }
-
-  	    if (match && groups) setGroups(match, groups);
-
-  	    return match;
-  	  };
-  	}
-
-  	regexpExec = patchedExec;
-  	return regexpExec;
-  }
-
-  var hasRequiredEs_regexp_exec;
-
-  function requireEs_regexp_exec () {
-  	if (hasRequiredEs_regexp_exec) return es_regexp_exec;
-  	hasRequiredEs_regexp_exec = 1;
-  	var $ = require_export();
-  	var exec = requireRegexpExec();
-
-  	// `RegExp.prototype.exec` method
-  	// https://tc39.es/ecma262/#sec-regexp.prototype.exec
-  	$({ target: 'RegExp', proto: true, forced: /./.exec !== exec }, {
-  	  exec: exec
-  	});
-  	return es_regexp_exec;
-  }
-
-  requireEs_regexp_exec();
-
-  var es_string_iterator = {};
 
   var stringMultibyte;
   var hasRequiredStringMultibyte;
@@ -6497,108 +6730,31 @@
 
   requireWeb_urlSearchParams();
 
-  var es_array_concat = {};
+  var es_array_filter = {};
 
-  var hasRequiredEs_array_concat;
+  var hasRequiredEs_array_filter;
 
-  function requireEs_array_concat () {
-  	if (hasRequiredEs_array_concat) return es_array_concat;
-  	hasRequiredEs_array_concat = 1;
+  function requireEs_array_filter () {
+  	if (hasRequiredEs_array_filter) return es_array_filter;
+  	hasRequiredEs_array_filter = 1;
   	var $ = require_export();
-  	var fails = requireFails();
-  	var isArray = requireIsArray();
-  	var isObject = requireIsObject();
-  	var toObject = requireToObject();
-  	var lengthOfArrayLike = requireLengthOfArrayLike();
-  	var doesNotExceedSafeInteger = requireDoesNotExceedSafeInteger();
-  	var createProperty = requireCreateProperty();
-  	var setArrayLength = requireArraySetLength();
-  	var arraySpeciesCreate = requireArraySpeciesCreate();
+  	var $filter = requireArrayIteration().filter;
   	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
-  	var wellKnownSymbol = requireWellKnownSymbol();
-  	var V8_VERSION = requireEnvironmentV8Version();
 
-  	var IS_CONCAT_SPREADABLE = wellKnownSymbol('isConcatSpreadable');
+  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('filter');
 
-  	// We can't use this feature detection in V8 since it causes
-  	// deoptimization and serious performance degradation
-  	// https://github.com/zloirock/core-js/issues/679
-  	var IS_CONCAT_SPREADABLE_SUPPORT = V8_VERSION >= 51 || !fails(function () {
-  	  var array = [];
-  	  array[IS_CONCAT_SPREADABLE] = false;
-  	  return array.concat()[0] !== array;
-  	});
-
-  	var isConcatSpreadable = function (O) {
-  	  if (!isObject(O)) return false;
-  	  var spreadable = O[IS_CONCAT_SPREADABLE];
-  	  return spreadable !== undefined ? !!spreadable : isArray(O);
-  	};
-
-  	var FORCED = !IS_CONCAT_SPREADABLE_SUPPORT || !arrayMethodHasSpeciesSupport('concat');
-
-  	// `Array.prototype.concat` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.concat
-  	// with adding support of @@isConcatSpreadable and @@species
-  	$({ target: 'Array', proto: true, arity: 1, forced: FORCED }, {
-  	  // eslint-disable-next-line no-unused-vars -- required for `.length`
-  	  concat: function concat(arg) {
-  	    var O = toObject(this);
-  	    var A = arraySpeciesCreate(O, 0);
-  	    var n = 0;
-  	    var i, k, length, len, E;
-  	    for (i = -1, length = arguments.length; i < length; i++) {
-  	      E = i === -1 ? O : arguments[i];
-  	      if (isConcatSpreadable(E)) {
-  	        len = lengthOfArrayLike(E);
-  	        doesNotExceedSafeInteger(n + len);
-  	        for (k = 0; k < len; k++, n++) if (k in E) createProperty(A, n, E[k]);
-  	      } else {
-  	        doesNotExceedSafeInteger(n + 1);
-  	        createProperty(A, n++, E);
-  	      }
-  	    }
-  	    setArrayLength(A, n);
-  	    return A;
+  	// `Array.prototype.filter` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.filter
+  	// with adding support of @@species
+  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
+  	  filter: function filter(callbackfn /* , thisArg */) {
+  	    return $filter(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
   	  }
   	});
-  	return es_array_concat;
+  	return es_array_filter;
   }
 
-  requireEs_array_concat();
-
-  var es_array_find = {};
-
-  var hasRequiredEs_array_find;
-
-  function requireEs_array_find () {
-  	if (hasRequiredEs_array_find) return es_array_find;
-  	hasRequiredEs_array_find = 1;
-  	var $ = require_export();
-  	var $find = requireArrayIteration().find;
-  	var addToUnscopables = requireAddToUnscopables();
-
-  	var FIND = 'find';
-  	var SKIPS_HOLES = true;
-
-  	// Shouldn't skip holes
-  	// eslint-disable-next-line es/no-array-prototype-find -- testing
-  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
-
-  	// `Array.prototype.find` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.find
-  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
-  	  find: function find(callbackfn /* , that = undefined */) {
-  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-
-  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
-  	addToUnscopables(FIND);
-  	return es_array_find;
-  }
-
-  requireEs_array_find();
+  requireEs_array_filter();
 
   var es_array_from = {};
 
@@ -8534,6 +8690,262 @@
 
   requireEs_promise();
 
+  var es_regexp_exec = {};
+
+  var regexpFlags;
+  var hasRequiredRegexpFlags;
+
+  function requireRegexpFlags () {
+  	if (hasRequiredRegexpFlags) return regexpFlags;
+  	hasRequiredRegexpFlags = 1;
+  	var anObject = requireAnObject();
+
+  	// `RegExp.prototype.flags` getter implementation
+  	// https://tc39.es/ecma262/#sec-get-regexp.prototype.flags
+  	regexpFlags = function () {
+  	  var that = anObject(this);
+  	  var result = '';
+  	  if (that.hasIndices) result += 'd';
+  	  if (that.global) result += 'g';
+  	  if (that.ignoreCase) result += 'i';
+  	  if (that.multiline) result += 'm';
+  	  if (that.dotAll) result += 's';
+  	  if (that.unicode) result += 'u';
+  	  if (that.unicodeSets) result += 'v';
+  	  if (that.sticky) result += 'y';
+  	  return result;
+  	};
+  	return regexpFlags;
+  }
+
+  var regexpStickyHelpers;
+  var hasRequiredRegexpStickyHelpers;
+
+  function requireRegexpStickyHelpers () {
+  	if (hasRequiredRegexpStickyHelpers) return regexpStickyHelpers;
+  	hasRequiredRegexpStickyHelpers = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('a', 'y') -> /a/y and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	var UNSUPPORTED_Y = fails(function () {
+  	  var re = $RegExp('a', 'y');
+  	  re.lastIndex = 2;
+  	  return re.exec('abcd') !== null;
+  	});
+
+  	// UC Browser bug
+  	// https://github.com/zloirock/core-js/issues/1008
+  	var MISSED_STICKY = UNSUPPORTED_Y || fails(function () {
+  	  return !$RegExp('a', 'y').sticky;
+  	});
+
+  	var BROKEN_CARET = UNSUPPORTED_Y || fails(function () {
+  	  // https://bugzilla.mozilla.org/show_bug.cgi?id=773687
+  	  var re = $RegExp('^r', 'gy');
+  	  re.lastIndex = 2;
+  	  return re.exec('str') !== null;
+  	});
+
+  	regexpStickyHelpers = {
+  	  BROKEN_CARET: BROKEN_CARET,
+  	  MISSED_STICKY: MISSED_STICKY,
+  	  UNSUPPORTED_Y: UNSUPPORTED_Y
+  	};
+  	return regexpStickyHelpers;
+  }
+
+  var regexpUnsupportedDotAll;
+  var hasRequiredRegexpUnsupportedDotAll;
+
+  function requireRegexpUnsupportedDotAll () {
+  	if (hasRequiredRegexpUnsupportedDotAll) return regexpUnsupportedDotAll;
+  	hasRequiredRegexpUnsupportedDotAll = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('.', 's') -> /./s and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	regexpUnsupportedDotAll = fails(function () {
+  	  var re = $RegExp('.', 's');
+  	  return !(re.dotAll && re.test('\n') && re.flags === 's');
+  	});
+  	return regexpUnsupportedDotAll;
+  }
+
+  var regexpUnsupportedNcg;
+  var hasRequiredRegexpUnsupportedNcg;
+
+  function requireRegexpUnsupportedNcg () {
+  	if (hasRequiredRegexpUnsupportedNcg) return regexpUnsupportedNcg;
+  	hasRequiredRegexpUnsupportedNcg = 1;
+  	var fails = requireFails();
+  	var globalThis = requireGlobalThis();
+
+  	// babel-minify and Closure Compiler transpiles RegExp('(?<a>b)', 'g') -> /(?<a>b)/g and it causes SyntaxError
+  	var $RegExp = globalThis.RegExp;
+
+  	regexpUnsupportedNcg = fails(function () {
+  	  var re = $RegExp('(?<a>b)', 'g');
+  	  return re.exec('b').groups.a !== 'b' ||
+  	    'b'.replace(re, '$<a>c') !== 'bc';
+  	});
+  	return regexpUnsupportedNcg;
+  }
+
+  var regexpExec;
+  var hasRequiredRegexpExec;
+
+  function requireRegexpExec () {
+  	if (hasRequiredRegexpExec) return regexpExec;
+  	hasRequiredRegexpExec = 1;
+  	/* eslint-disable regexp/no-empty-capturing-group, regexp/no-empty-group, regexp/no-lazy-ends -- testing */
+  	/* eslint-disable regexp/no-useless-quantifier -- testing */
+  	var call = requireFunctionCall();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var toString = requireToString();
+  	var regexpFlags = requireRegexpFlags();
+  	var stickyHelpers = requireRegexpStickyHelpers();
+  	var shared = requireShared();
+  	var create = requireObjectCreate();
+  	var getInternalState = requireInternalState().get;
+  	var UNSUPPORTED_DOT_ALL = requireRegexpUnsupportedDotAll();
+  	var UNSUPPORTED_NCG = requireRegexpUnsupportedNcg();
+
+  	var nativeReplace = shared('native-string-replace', String.prototype.replace);
+  	var nativeExec = RegExp.prototype.exec;
+  	var patchedExec = nativeExec;
+  	var charAt = uncurryThis(''.charAt);
+  	var indexOf = uncurryThis(''.indexOf);
+  	var replace = uncurryThis(''.replace);
+  	var stringSlice = uncurryThis(''.slice);
+
+  	var UPDATES_LAST_INDEX_WRONG = (function () {
+  	  var re1 = /a/;
+  	  var re2 = /b*/g;
+  	  call(nativeExec, re1, 'a');
+  	  call(nativeExec, re2, 'a');
+  	  return re1.lastIndex !== 0 || re2.lastIndex !== 0;
+  	})();
+
+  	var UNSUPPORTED_Y = stickyHelpers.BROKEN_CARET;
+
+  	// nonparticipating capturing group, copied from es5-shim's String#split patch.
+  	var NPCG_INCLUDED = /()??/.exec('')[1] !== undefined;
+
+  	var PATCH = UPDATES_LAST_INDEX_WRONG || NPCG_INCLUDED || UNSUPPORTED_Y || UNSUPPORTED_DOT_ALL || UNSUPPORTED_NCG;
+
+  	var setGroups = function (re, groups) {
+  	  var object = re.groups = create(null);
+  	  for (var i = 0; i < groups.length; i++) {
+  	    var group = groups[i];
+  	    object[group[0]] = re[group[1]];
+  	  }
+  	};
+
+  	if (PATCH) {
+  	  patchedExec = function exec(string) {
+  	    var re = this;
+  	    var state = getInternalState(re);
+  	    var str = toString(string);
+  	    var raw = state.raw;
+  	    var result, reCopy, lastIndex;
+
+  	    if (raw) {
+  	      raw.lastIndex = re.lastIndex;
+  	      result = call(patchedExec, raw, str);
+  	      re.lastIndex = raw.lastIndex;
+
+  	      if (result && state.groups) setGroups(result, state.groups);
+
+  	      return result;
+  	    }
+
+  	    var groups = state.groups;
+  	    var sticky = UNSUPPORTED_Y && re.sticky;
+  	    var flags = call(regexpFlags, re);
+  	    var source = re.source;
+  	    var charsAdded = 0;
+  	    var strCopy = str;
+
+  	    if (sticky) {
+  	      flags = replace(flags, 'y', '');
+  	      if (indexOf(flags, 'g') === -1) {
+  	        flags += 'g';
+  	      }
+
+  	      strCopy = stringSlice(str, re.lastIndex);
+  	      // Support anchored sticky behavior.
+  	      var prevChar = re.lastIndex > 0 && charAt(str, re.lastIndex - 1);
+  	      if (re.lastIndex > 0 &&
+  	        (!re.multiline || re.multiline && prevChar !== '\n' && prevChar !== '\r' && prevChar !== '\u2028' && prevChar !== '\u2029')) {
+  	        source = '(?: (?:' + source + '))';
+  	        strCopy = ' ' + strCopy;
+  	        charsAdded++;
+  	      }
+  	      // ^(? + rx + ) is needed, in combination with some str slicing, to
+  	      // simulate the 'y' flag.
+  	      reCopy = new RegExp('^(?:' + source + ')', flags);
+  	    }
+
+  	    if (NPCG_INCLUDED) {
+  	      reCopy = new RegExp('^' + source + '$(?!\\s)', flags);
+  	    }
+  	    if (UPDATES_LAST_INDEX_WRONG) lastIndex = re.lastIndex;
+
+  	    var match = call(nativeExec, sticky ? reCopy : re, strCopy);
+
+  	    if (sticky) {
+  	      if (match) {
+  	        match.input = str;
+  	        match[0] = stringSlice(match[0], charsAdded);
+  	        match.index = re.lastIndex;
+  	        re.lastIndex += match[0].length;
+  	      } else re.lastIndex = 0;
+  	    } else if (UPDATES_LAST_INDEX_WRONG && match) {
+  	      re.lastIndex = re.global ? match.index + match[0].length : lastIndex;
+  	    }
+  	    if (NPCG_INCLUDED && match && match.length > 1) {
+  	      // Fix browsers whose `exec` methods don't consistently return `undefined`
+  	      // for NPCG, like IE8. NOTE: This doesn't work for /(.?)?/
+  	      call(nativeReplace, match[0], reCopy, function () {
+  	        for (var i = 1; i < arguments.length - 2; i++) {
+  	          if (arguments[i] === undefined) match[i] = undefined;
+  	        }
+  	      });
+  	    }
+
+  	    if (match && groups) setGroups(match, groups);
+
+  	    return match;
+  	  };
+  	}
+
+  	regexpExec = patchedExec;
+  	return regexpExec;
+  }
+
+  var hasRequiredEs_regexp_exec;
+
+  function requireEs_regexp_exec () {
+  	if (hasRequiredEs_regexp_exec) return es_regexp_exec;
+  	hasRequiredEs_regexp_exec = 1;
+  	var $ = require_export();
+  	var exec = requireRegexpExec();
+
+  	// `RegExp.prototype.exec` method
+  	// https://tc39.es/ecma262/#sec-regexp.prototype.exec
+  	$({ target: 'RegExp', proto: true, forced: /./.exec !== exec }, {
+  	  exec: exec
+  	});
+  	return es_regexp_exec;
+  }
+
+  requireEs_regexp_exec();
+
   var es_regexp_toString = {};
 
   var regexpFlagsDetection;
@@ -8649,6 +9061,558 @@
   }
 
   requireEs_regexp_toString();
+
+  var es_set = {};
+
+  var es_set_constructor = {};
+
+  var internalMetadata = {exports: {}};
+
+  var objectGetOwnPropertyNamesExternal = {};
+
+  var hasRequiredObjectGetOwnPropertyNamesExternal;
+
+  function requireObjectGetOwnPropertyNamesExternal () {
+  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
+  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
+  	/* eslint-disable es/no-object-getownpropertynames -- safe */
+  	var classof = requireClassofRaw();
+  	var toIndexedObject = requireToIndexedObject();
+  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+  	var arraySlice = requireArraySlice();
+
+  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
+  	  ? Object.getOwnPropertyNames(window) : [];
+
+  	var getWindowNames = function (it) {
+  	  try {
+  	    return $getOwnPropertyNames(it);
+  	  } catch (error) {
+  	    return arraySlice(windowNames);
+  	  }
+  	};
+
+  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
+  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
+  	  return windowNames && classof(it) === 'Window'
+  	    ? getWindowNames(it)
+  	    : $getOwnPropertyNames(toIndexedObject(it));
+  	};
+  	return objectGetOwnPropertyNamesExternal;
+  }
+
+  var arrayBufferNonExtensible;
+  var hasRequiredArrayBufferNonExtensible;
+
+  function requireArrayBufferNonExtensible () {
+  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
+  	hasRequiredArrayBufferNonExtensible = 1;
+  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
+  	var fails = requireFails();
+
+  	arrayBufferNonExtensible = fails(function () {
+  	  if (typeof ArrayBuffer == 'function') {
+  	    var buffer = new ArrayBuffer(8);
+  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
+  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
+  	  }
+  	});
+  	return arrayBufferNonExtensible;
+  }
+
+  var objectIsExtensible;
+  var hasRequiredObjectIsExtensible;
+
+  function requireObjectIsExtensible () {
+  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
+  	hasRequiredObjectIsExtensible = 1;
+  	var fails = requireFails();
+  	var isObject = requireIsObject();
+  	var classof = requireClassofRaw();
+  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
+
+  	// eslint-disable-next-line es/no-object-isextensible -- safe
+  	var $isExtensible = Object.isExtensible;
+  	var FAILS_ON_PRIMITIVES = fails(function () { });
+
+  	// `Object.isExtensible` method
+  	// https://tc39.es/ecma262/#sec-object.isextensible
+  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
+  	  if (!isObject(it)) return false;
+  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
+  	  return $isExtensible ? $isExtensible(it) : true;
+  	} : $isExtensible;
+  	return objectIsExtensible;
+  }
+
+  var freezing;
+  var hasRequiredFreezing;
+
+  function requireFreezing () {
+  	if (hasRequiredFreezing) return freezing;
+  	hasRequiredFreezing = 1;
+  	var fails = requireFails();
+
+  	freezing = !fails(function () {
+  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
+  	  return Object.isExtensible(Object.preventExtensions({}));
+  	});
+  	return freezing;
+  }
+
+  var hasRequiredInternalMetadata;
+
+  function requireInternalMetadata () {
+  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
+  	hasRequiredInternalMetadata = 1;
+  	var $ = require_export();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var hiddenKeys = requireHiddenKeys();
+  	var isObject = requireIsObject();
+  	var hasOwn = requireHasOwnProperty();
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
+  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
+  	var isExtensible = requireObjectIsExtensible();
+  	var uid = requireUid();
+  	var FREEZING = requireFreezing();
+
+  	var REQUIRED = false;
+  	var METADATA = uid('meta');
+  	var id = 0;
+
+  	var setMetadata = function (it) {
+  	  defineProperty(it, METADATA, { value: {
+  	    objectID: 'O' + id++, // object ID
+  	    weakData: {}          // weak collections IDs
+  	  } });
+  	};
+
+  	var fastKey = function (it, create) {
+  	  // return a primitive with prefix
+  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return 'F';
+  	    // not necessary to add metadata
+  	    if (!create) return 'E';
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return object ID
+  	  } return it[METADATA].objectID;
+  	};
+
+  	var getWeakData = function (it, create) {
+  	  if (!hasOwn(it, METADATA)) {
+  	    // can't set metadata to uncaught frozen object
+  	    if (!isExtensible(it)) return true;
+  	    // not necessary to add metadata
+  	    if (!create) return false;
+  	    // add missing metadata
+  	    setMetadata(it);
+  	  // return the store of weak collections IDs
+  	  } return it[METADATA].weakData;
+  	};
+
+  	// add metadata on freeze-family methods calling
+  	var onFreeze = function (it) {
+  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
+  	  return it;
+  	};
+
+  	var enable = function () {
+  	  meta.enable = function () { /* empty */ };
+  	  REQUIRED = true;
+  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
+  	  var splice = uncurryThis([].splice);
+  	  var test = {};
+  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
+  	  test[METADATA] = 1;
+
+  	  // prevent exposing of metadata key
+  	  if (getOwnPropertyNames(test).length) {
+  	    getOwnPropertyNamesModule.f = function (it) {
+  	      var result = getOwnPropertyNames(it);
+  	      for (var i = 0, length = result.length; i < length; i++) {
+  	        if (result[i] === METADATA) {
+  	          splice(result, i, 1);
+  	          break;
+  	        }
+  	      } return result;
+  	    };
+
+  	    $({ target: 'Object', stat: true, forced: true }, {
+  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
+  	    });
+  	  }
+  	};
+
+  	var meta = internalMetadata.exports = {
+  	  enable: enable,
+  	  fastKey: fastKey,
+  	  getWeakData: getWeakData,
+  	  onFreeze: onFreeze
+  	};
+
+  	hiddenKeys[METADATA] = true;
+  	return internalMetadata.exports;
+  }
+
+  var collection;
+  var hasRequiredCollection;
+
+  function requireCollection () {
+  	if (hasRequiredCollection) return collection;
+  	hasRequiredCollection = 1;
+  	var $ = require_export();
+  	var globalThis = requireGlobalThis();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var isForced = requireIsForced();
+  	var defineBuiltIn = requireDefineBuiltIn();
+  	var InternalMetadataModule = requireInternalMetadata();
+  	var iterate = requireIterate();
+  	var anInstance = requireAnInstance();
+  	var isCallable = requireIsCallable();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var isObject = requireIsObject();
+  	var fails = requireFails();
+  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
+  	var setToStringTag = requireSetToStringTag();
+  	var inheritIfRequired = requireInheritIfRequired();
+
+  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
+  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
+  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
+  	  var ADDER = IS_MAP ? 'set' : 'add';
+  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
+  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
+  	  var Constructor = NativeConstructor;
+  	  var exported = {};
+
+  	  var fixMethod = function (KEY) {
+  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
+  	    defineBuiltIn(NativePrototype, KEY,
+  	      KEY === 'add' ? function add(value) {
+  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
+  	        return this;
+  	      } : KEY === 'delete' ? function (key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'get' ? function get(key) {
+  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : KEY === 'has' ? function has(key) {
+  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
+  	      } : function set(key, value) {
+  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
+  	        return this;
+  	      }
+  	    );
+  	  };
+
+  	  var REPLACE = isForced(
+  	    CONSTRUCTOR_NAME,
+  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
+  	      new NativeConstructor().entries().next();
+  	    }))
+  	  );
+
+  	  if (REPLACE) {
+  	    // create collection constructor
+  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
+  	    InternalMetadataModule.enable();
+  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
+  	    var instance = new Constructor();
+  	    // early implementations not supports chaining
+  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
+  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
+  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
+  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
+  	    // eslint-disable-next-line no-new -- required for testing
+  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
+  	    // for early implementations -0 and +0 not the same
+  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
+  	      // V8 ~ Chromium 42- fails only with 5+ elements
+  	      var $instance = new NativeConstructor();
+  	      var index = 5;
+  	      while (index--) $instance[ADDER](index, index);
+  	      return !$instance.has(-0);
+  	    });
+
+  	    if (!ACCEPT_ITERABLES) {
+  	      Constructor = wrapper(function (dummy, iterable) {
+  	        anInstance(dummy, NativePrototype);
+  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
+  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	        return that;
+  	      });
+  	      Constructor.prototype = NativePrototype;
+  	      NativePrototype.constructor = Constructor;
+  	    }
+
+  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
+  	      fixMethod('delete');
+  	      fixMethod('has');
+  	      IS_MAP && fixMethod('get');
+  	    }
+
+  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
+
+  	    // weak collections should not contains .clear method
+  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
+  	  }
+
+  	  exported[CONSTRUCTOR_NAME] = Constructor;
+  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
+
+  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
+
+  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
+
+  	  return Constructor;
+  	};
+  	return collection;
+  }
+
+  var collectionStrong;
+  var hasRequiredCollectionStrong;
+
+  function requireCollectionStrong () {
+  	if (hasRequiredCollectionStrong) return collectionStrong;
+  	hasRequiredCollectionStrong = 1;
+  	var create = requireObjectCreate();
+  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
+  	var defineBuiltIns = requireDefineBuiltIns();
+  	var bind = requireFunctionBindContext();
+  	var anInstance = requireAnInstance();
+  	var isNullOrUndefined = requireIsNullOrUndefined();
+  	var iterate = requireIterate();
+  	var defineIterator = requireIteratorDefine();
+  	var createIterResultObject = requireCreateIterResultObject();
+  	var setSpecies = requireSetSpecies();
+  	var DESCRIPTORS = requireDescriptors();
+  	var fastKey = requireInternalMetadata().fastKey;
+  	var InternalStateModule = requireInternalState();
+
+  	var setInternalState = InternalStateModule.set;
+  	var internalStateGetterFor = InternalStateModule.getterFor;
+
+  	collectionStrong = {
+  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
+  	    var Constructor = wrapper(function (that, iterable) {
+  	      anInstance(that, Prototype);
+  	      setInternalState(that, {
+  	        type: CONSTRUCTOR_NAME,
+  	        index: create(null),
+  	        first: null,
+  	        last: null,
+  	        size: 0
+  	      });
+  	      if (!DESCRIPTORS) that.size = 0;
+  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
+  	    });
+
+  	    var Prototype = Constructor.prototype;
+
+  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
+
+  	    var define = function (that, key, value) {
+  	      var state = getInternalState(that);
+  	      var entry = getEntry(that, key);
+  	      var previous, index;
+  	      // change existing entry
+  	      if (entry) {
+  	        entry.value = value;
+  	      // create new entry
+  	      } else {
+  	        state.last = entry = {
+  	          index: index = fastKey(key, true),
+  	          key: key,
+  	          value: value,
+  	          previous: previous = state.last,
+  	          next: null,
+  	          removed: false
+  	        };
+  	        if (!state.first) state.first = entry;
+  	        if (previous) previous.next = entry;
+  	        if (DESCRIPTORS) state.size++;
+  	        else that.size++;
+  	        // add to index
+  	        if (index !== 'F') state.index[index] = entry;
+  	      } return that;
+  	    };
+
+  	    var getEntry = function (that, key) {
+  	      var state = getInternalState(that);
+  	      // fast case
+  	      var index = fastKey(key);
+  	      var entry;
+  	      if (index !== 'F') return state.index[index];
+  	      // frozen object case
+  	      for (entry = state.first; entry; entry = entry.next) {
+  	        if (entry.key === key) return entry;
+  	      }
+  	    };
+
+  	    defineBuiltIns(Prototype, {
+  	      // `{ Map, Set }.prototype.clear()` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
+  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
+  	      clear: function clear() {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = state.first;
+  	        while (entry) {
+  	          entry.removed = true;
+  	          if (entry.previous) entry.previous = entry.previous.next = null;
+  	          entry = entry.next;
+  	        }
+  	        state.first = state.last = null;
+  	        state.index = create(null);
+  	        if (DESCRIPTORS) state.size = 0;
+  	        else that.size = 0;
+  	      },
+  	      // `{ Map, Set }.prototype.delete(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
+  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
+  	      'delete': function (key) {
+  	        var that = this;
+  	        var state = getInternalState(that);
+  	        var entry = getEntry(that, key);
+  	        if (entry) {
+  	          var next = entry.next;
+  	          var prev = entry.previous;
+  	          delete state.index[entry.index];
+  	          entry.removed = true;
+  	          if (prev) prev.next = next;
+  	          if (next) next.previous = prev;
+  	          if (state.first === entry) state.first = next;
+  	          if (state.last === entry) state.last = prev;
+  	          if (DESCRIPTORS) state.size--;
+  	          else that.size--;
+  	        } return !!entry;
+  	      },
+  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
+  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
+  	      forEach: function forEach(callbackfn /* , that = undefined */) {
+  	        var state = getInternalState(this);
+  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	        var entry;
+  	        while (entry = entry ? entry.next : state.first) {
+  	          boundFunction(entry.value, entry.key, this);
+  	          // revert to the last existing entry
+  	          while (entry && entry.removed) entry = entry.previous;
+  	        }
+  	      },
+  	      // `{ Map, Set}.prototype.has(key)` methods
+  	      // https://tc39.es/ecma262/#sec-map.prototype.has
+  	      // https://tc39.es/ecma262/#sec-set.prototype.has
+  	      has: function has(key) {
+  	        return !!getEntry(this, key);
+  	      }
+  	    });
+
+  	    defineBuiltIns(Prototype, IS_MAP ? {
+  	      // `Map.prototype.get(key)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.get
+  	      get: function get(key) {
+  	        var entry = getEntry(this, key);
+  	        return entry && entry.value;
+  	      },
+  	      // `Map.prototype.set(key, value)` method
+  	      // https://tc39.es/ecma262/#sec-map.prototype.set
+  	      set: function set(key, value) {
+  	        return define(this, key === 0 ? 0 : key, value);
+  	      }
+  	    } : {
+  	      // `Set.prototype.add(value)` method
+  	      // https://tc39.es/ecma262/#sec-set.prototype.add
+  	      add: function add(value) {
+  	        return define(this, value = value === 0 ? 0 : value, value);
+  	      }
+  	    });
+  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
+  	      configurable: true,
+  	      get: function () {
+  	        return getInternalState(this).size;
+  	      }
+  	    });
+  	    return Constructor;
+  	  },
+  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
+  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
+  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
+  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
+  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
+  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-map.prototype.values
+  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
+  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
+  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
+  	    // https://tc39.es/ecma262/#sec-set.prototype.values
+  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
+  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
+  	      setInternalState(this, {
+  	        type: ITERATOR_NAME,
+  	        target: iterated,
+  	        state: getInternalCollectionState(iterated),
+  	        kind: kind,
+  	        last: null
+  	      });
+  	    }, function () {
+  	      var state = getInternalIteratorState(this);
+  	      var kind = state.kind;
+  	      var entry = state.last;
+  	      // revert to the last existing entry
+  	      while (entry && entry.removed) entry = entry.previous;
+  	      // get next entry
+  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
+  	        // or finish the iteration
+  	        state.target = null;
+  	        return createIterResultObject(undefined, true);
+  	      }
+  	      // return step by kind
+  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
+  	      if (kind === 'values') return createIterResultObject(entry.value, false);
+  	      return createIterResultObject([entry.key, entry.value], false);
+  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
+
+  	    // `{ Map, Set }.prototype[@@species]` accessors
+  	    // https://tc39.es/ecma262/#sec-get-map-@@species
+  	    // https://tc39.es/ecma262/#sec-get-set-@@species
+  	    setSpecies(CONSTRUCTOR_NAME);
+  	  }
+  	};
+  	return collectionStrong;
+  }
+
+  var hasRequiredEs_set_constructor;
+
+  function requireEs_set_constructor () {
+  	if (hasRequiredEs_set_constructor) return es_set_constructor;
+  	hasRequiredEs_set_constructor = 1;
+  	var collection = requireCollection();
+  	var collectionStrong = requireCollectionStrong();
+
+  	// `Set` constructor
+  	// https://tc39.es/ecma262/#sec-set-objects
+  	collection('Set', function (init) {
+  	  return function Set() { return init(this, arguments.length ? arguments[0] : undefined); };
+  	}, collectionStrong);
+  	return es_set_constructor;
+  }
+
+  var hasRequiredEs_set;
+
+  function requireEs_set () {
+  	if (hasRequiredEs_set) return es_set;
+  	hasRequiredEs_set = 1;
+  	// TODO: Remove this module from `core-js@4` since it's replaced to module below
+  	requireEs_set_constructor();
+  	return es_set;
+  }
+
+  requireEs_set();
 
   var es_string_padStart = {};
 
@@ -12906,6 +13870,116 @@
   /* ---- Config ---- */
 
   /**
+   * How long a transfer may make no progress at all before it is aborted.
+   *
+   * Exported because the offline queue's claim lease has to outlast it. The lease
+   * is renewed from progress callbacks, so a stalled transfer stops renewing —
+   * and if the lease expires before this watchdog fires, another tab claims a row
+   * whose first attempt is still running. The two were both 120000 and therefore
+   * raced exactly.
+   */
+  var UPLOAD_STALL_TIMEOUT_MS = 120000;
+
+  /**
+   * Resolve the authorization headers the host supplies for uploads.
+   *
+   * `bootstrap.nonce` was retired by ADR-034: the package used to read it and set
+   * a CMS authentication header itself, which made it hold a CMS header name. A
+   * host that has not migrated now passes `nonce` into a package that ignores it,
+   * and the result is an upload sent with no authorization at all — a 401 with
+   * nothing saying why, retried by the queue until the entry is held.
+   *
+   * So the misconfiguration is named where it happens. It is not fatal: a host
+   * whose ingestion needs no headers is legitimate, and refusing here would cost
+   * a recording (ADR-011) to enforce a convention the package cannot verify.
+   *
+   * @param {Object} bootstrap The host bootstrap object.
+   * @returns {Object} Headers to send, possibly empty.
+   */
+  /**
+   * RFC 7230 field-name token. Anything outside it is not a header name, and a
+   * value with CR or LF is a request-splitting attempt rather than a header.
+   */
+  var HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+  /**
+   * Names refused outright. All three are valid field-name tokens, so the
+   * pattern above admits them, and no real header is called any of them. They
+   * are refused because the bag does not stay null-prototype forever: anything
+   * downstream that does `Object.assign({}, headers)` — tus-js-client's own
+   * option merging included — restores `Object.prototype`, and there
+   * `__proto__` is an accessor again and `constructor` shadows a property the
+   * copy is expected to have.
+   */
+  var FORBIDDEN_HEADER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+  /**
+   * Reduce a host-supplied object to headers that are safe to send.
+   *
+   * The result has a null prototype and only own, string-valued properties whose
+   * names are field-name tokens. Three things this rules out, in the order they
+   * bite:
+   *
+   * 1. `__proto__`. `Object.assign({}, src)` copies with [[Set]], so that key
+   *    hits the accessor on `Object.prototype` instead of landing as an own
+   *    property: the header is silently dropped and the *copy* gets a different
+   *    prototype. (It does not pollute `Object.prototype` itself — the mutation
+   *    is confined to the copy — but a headers bag that quietly loses an entry
+   *    and gains a prototype is not one to hand to a transport.) A null
+   *    prototype removes the accessor, so the key is just a key, and the filter
+   *    below then drops it by name anyway.
+   * 2. Non-string values. An array or object reaches `setRequestHeader()` as
+   *    whatever `String()` makes of it — `[object Object]` for the auth header
+   *    is a request that fails at ingestion with nothing in it to explain why.
+   * 3. CR/LF in a value. Refused here rather than stripped: a value that has to
+   *    be rewritten to be sendable is not the value the host meant.
+   *
+   * A host that sets `window.STARMUS_BOOTSTRAP` already controls the page, so
+   * this is not a trust boundary — it is a guard against a host passing through
+   * unvalidated input of its own, and against failures that would otherwise show
+   * up as an unexplained rejection at ingestion.
+   *
+   * @param {*} source
+   * @returns {Object} Null-prototype object of string headers.
+   */
+  function sanitizeHeaders(source) {
+    var safe = Object.create(null);
+    if (!source || _typeof$9(source) !== "object") {
+      return safe;
+    }
+    for (var _i = 0, _Object$entries = Object.entries(source); _i < _Object$entries.length; _i++) {
+      var _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2),
+        name = _Object$entries$_i[0],
+        value = _Object$entries$_i[1];
+      if (!HEADER_NAME_PATTERN.test(name) || FORBIDDEN_HEADER_NAMES.has(name)) {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': not a valid header name."));
+        continue;
+      }
+      if (typeof value !== "string") {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': its value is ").concat(_typeof$9(value), ", not a string."));
+        continue;
+      }
+      if (/[\r\n]/.test(value)) {
+        console.warn("[TUS] Ignoring upload header '".concat(name, "': its value contains CR or LF."));
+        continue;
+      }
+      safe[name] = value;
+    }
+    return safe;
+  }
+  function resolveUploadHeaders(bootstrap) {
+    var headers = sanitizeHeaders(bootstrap && bootstrap.uploadHeaders);
+    if (bootstrap && bootstrap.nonce && Object.keys(headers).length === 0) {
+      // The remedy names no header: which one carries the nonce is the
+      // host's to know and ADR-034 keeps it out of this package entirely —
+      // as the build check that rejected an earlier draft of this very
+      // message enforces.
+      console.warn("[Starmus] bootstrap.nonce is no longer read (ADR-034) and no " + "bootstrap.uploadHeaders was supplied, so this upload carries no " + "authorization header. A host that previously relied on nonce must " + "now supply its own header for it in bootstrap.uploadHeaders.");
+    }
+    return headers;
+  }
+
+  /**
    * Returns a configuration object merged from tier-defaults and global overrides.
    *
    * @returns {Object} Upload configuration
@@ -12917,39 +13991,175 @@
     var defaults = {
       chunkSize: settings.uploadChunkSize || 512 * 1024,
       // max 512 KB per AGENTS.md
-      retryDelays: [0, 2000, 4000],
-      removeFingerprintOnSuccess: true,
+      // Two delays, not three. tus-js-client counts each entry as a retry
+      // *after* the initial request, so three entries permit four attempts and
+      // AGENTS.md states a maximum of three as a FAIL condition. Two entries
+      // give the initial request plus two retries.
+      //
+      // One caveat worth stating rather than engineering away: the client
+      // resets this counter when a transfer makes progress, so a long upload
+      // on a bad link can spend the budget again after each advance. That is
+      // the behaviour this package wants — a transfer that is moving should
+      // keep going, and the stall watchdog is what bounds one that is not —
+      // but it means the budget is per stalled stretch, not per upload.
+      retryDelays: [0, 2000],
+      // The resume fingerprint outlives the transfer, deliberately.
+      //
+      // Clearing it on success raced the durable record of that success. The
+      // queue writes `transferred: true` in a later IndexedDB transaction, so
+      // a page that died in between — an OS killing a backgrounded tab on a
+      // low-memory phone, which is the ordinary case here — left a row still
+      // marked untransferred and no fingerprint to resume by. The next drain
+      // could then do nothing but start a second TUS resource for a recording
+      // the server had already accepted, which is the duplicate ADR-038
+      // forbids and the contributor's data spent twice.
+      //
+      // Kept, the same crash resumes: `findPreviousUploads()` finds the
+      // resource, the server reports the offset already equals the size, and
+      // `onSuccess` fires without re-sending a byte. The row is then marked
+      // and removed as usual.
+      //
+      // The cost is that a completed upload's fingerprint stays in
+      // localStorage after its row is gone. Each entry is small and the queue
+      // is bounded, but nothing prunes them today. Removing one needs the
+      // `urlStorage` key, which tus-js-client returns publicly only for an
+      // upload found by `findPreviousUploads()` — never for a fresh one — so
+      // a cleanup pass has to look the entry up by fingerprint through an
+      // injected `urlStorage`. That is worth doing and is not done here.
+      removeFingerprintOnSuccess: false,
       maxChunkRetries: 3,
-      requestTimeoutMs: 5000,
+      // A stall watchdog, not a deadline. The old code aborted the whole
+      // upload after 5 s, which on a 2G link ends every upload of a real
+      // recording before it finishes and then discards the transferred
+      // bytes — the opposite of what a resumable client is for. What is
+      // actually a fault is *no progress at all* for this long; a slow but
+      // moving transfer is the normal case here and is left alone.
+      stallTimeoutMs: UPLOAD_STALL_TIMEOUT_MS,
       endpoint: bootstrap.restUrl ? "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus") : "",
-      nonce: bootstrap.nonce || "",
+      // Host-injected. ADR-034: this package sends no CMS nonce and knows no
+      // CMS header name. Whatever the host's ingestion needs to authorize the
+      // transfer, the host supplies here.
+      headers: resolveUploadHeaders(bootstrap),
       endpoints: bootstrap.restUrl ? {
-        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus"),
-        directUpload: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/upload-fallback")
+        tus: "".concat(bootstrap.restUrl.replace(/\/$/, ""), "/").concat(bootstrap.uploadEndpoint || "tus")
       } : {}
     };
     var globalCfg = typeof window !== "undefined" && (window.starmusTus || window.starmusConfig) || {};
     var merged = {};
-    for (var _i = 0, _Object$entries = Object.entries(defaults); _i < _Object$entries.length; _i++) {
-      var _Object$entries$_i = _slicedToArray$1(_Object$entries[_i], 2),
-        key = _Object$entries$_i[0],
-        val = _Object$entries$_i[1];
+    for (var _i2 = 0, _Object$entries2 = Object.entries(defaults); _i2 < _Object$entries2.length; _i2++) {
+      var _Object$entries2$_i = _slicedToArray$1(_Object$entries2[_i2], 2),
+        key = _Object$entries2$_i[0],
+        val = _Object$entries2$_i[1];
       merged[key] = val;
     }
-    for (var _i2 = 0, _Object$entries2 = Object.entries(globalCfg); _i2 < _Object$entries2.length; _i2++) {
-      var _Object$entries2$_i = _slicedToArray$1(_Object$entries2[_i2], 2),
-        _key = _Object$entries2$_i[0],
-        _val = _Object$entries2$_i[1];
+    for (var _i3 = 0, _Object$entries3 = Object.entries(globalCfg); _i3 < _Object$entries3.length; _i3++) {
+      var _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2),
+        _key = _Object$entries3$_i[0],
+        _val = _Object$entries3$_i[1];
       if (_key === "__proto__" || _key === "constructor" || _key === "prototype") {
         continue;
       }
       merged[_key] = _val;
     }
-    merged.chunkSize = Math.min(Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024, 512 * 1024);
+    // Bounded at both ends. The upper cap is AGENTS.md's 512 KB; the lower one
+    // matters just as much, because a host value of 0 or a negative number
+    // reaches tus-js-client as a slice length and produces chunks that never
+    // advance — an upload that runs forever without moving, on exactly the
+    // links where that is hardest to notice.
+    var requestedChunk = Number.isFinite(merged.chunkSize) ? merged.chunkSize : 512 * 1024;
+    merged.chunkSize = requestedChunk >= 1 ? Math.min(Math.floor(requestedChunk), 512 * 1024) : 512 * 1024;
+
+    // Two values a host does not get to set, because they are not preferences.
+    //
+    // `removeFingerprintOnSuccess` false is what makes a crash between a
+    // successful transfer and the queue's durable mark recoverable. A host
+    // setting it true reopens that window and the recording is uploaded a
+    // second time — a cost paid by the contributor, from a config key.
+    merged.removeFingerprintOnSuccess = false;
+
+    // Nor more attempts than the package allows. tus-js-client counts every
+    // entry as a retry, so a host array of any length buys as many, and
+    // AGENTS.md's three-attempt maximum is a FAIL condition rather than a
+    // preference. Kept to two finite, non-negative delays.
+    var hostDelays = Array.isArray(merged.retryDelays) ? merged.retryDelays : [];
+    var usableDelays = hostDelays.filter(function (delay) {
+      return Number.isFinite(delay) && delay >= 0;
+    }).slice(0, 2);
+    merged.retryDelays = usableDelays.length > 0 ? usableDelays : [0, 2000];
+
+    // The stall watchdog must stay inside the offline queue's claim lease,
+    // which is this constant plus a minute. A host raising the timeout past
+    // that lets the watchdog run after the claim has expired, so a second tab
+    // takes a row whose transfer is still alive — the exact race the lease was
+    // derived from this constant to prevent. A lower value is harmless and is
+    // left alone.
+    // A non-positive value is refused as firmly as an over-long one: the
+    // watchdog is a `setTimeout`, so zero aborts every transfer the moment it
+    // is armed — before a byte moves, on every device.
+    if (!Number.isFinite(merged.stallTimeoutMs) || merged.stallTimeoutMs <= 0 || merged.stallTimeoutMs > UPLOAD_STALL_TIMEOUT_MS) {
+      if (Number.isFinite(merged.stallTimeoutMs)) {
+        console.warn(merged.stallTimeoutMs <= 0 ? "[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms is not a usable watchdog \u2014 it would abort every transfer the moment it is armed; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms.") : "[TUS] stallTimeoutMs ".concat(merged.stallTimeoutMs, "ms exceeds the ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms the offline queue's claim lease covers; using ").concat(UPLOAD_STALL_TIMEOUT_MS, "ms. A longer watchdog would let another tab claim a row whose upload is still running."));
+      }
+      merged.stallTimeoutMs = UPLOAD_STALL_TIMEOUT_MS;
+    }
+
+    // `globalCfg` can replace `headers` wholesale, so the bag that reaches the
+    // transport is not necessarily the one `resolveUploadHeaders()` built.
+    // Re-reduced here, where every other host-settable value is clamped, so
+    // there is one place that decides what a header is.
+    merged.headers = sanitizeHeaders(merged.headers);
     return merged;
   }
 
   /* ---- Helpers ---- */
+
+  /**
+   * Metadata keys this module owns that are only set *conditionally*.
+   *
+   * Everything else reserved is derived from what was actually assigned (see
+   * `reservedMetadataKeys()`), so the list cannot drift from the code. These two
+   * have to be named explicitly because an absent capture profile must still be
+   * unsettable by a host form field — otherwise a form named `captureProfile`
+   * could supply one for an asset that has none, which is a claim about how the
+   * audio was captured made by something that did not capture it.
+   */
+  var CONDITIONAL_MODULE_KEYS = ["captureProfile", "captureAttainment"];
+
+  /**
+   * The metadata keys a host form field must not overwrite.
+   *
+   * Derived from the object the module has already populated rather than kept as
+   * a second list beside it. A hand-maintained set had drifted: `upload_uuid`,
+   * `captureProfile`, `captureAttainment`, `filename` and `filetype` were
+   * protected while `instanceId`, `tier`, `transcript`, `calibration` and `env`
+   * — assigned in the same object literal — were not, so a host form field named
+   * `tier` silently replaced the resolved device tier on its way to ingestion.
+   *
+   * @param {Object} assigned The metadata this module has set.
+   * @returns {Set<string>}
+   */
+  function reservedMetadataKeys(assigned) {
+    return new Set([].concat(_toConsumableArray(Object.keys(assigned)), CONDITIONAL_MODULE_KEYS));
+  }
+
+  /** RFC 4122 version 4, the shape the capture-to-ingestion contract fixes. */
+  var UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  /**
+   * Whether a value is usable as an upload identifier.
+   *
+   * Exported because the offline queue has to ask the same question and get the
+   * same answer. It decides whether a stored id survives to the next attempt,
+   * and this module decides whether a supplied one is sent — if those two
+   * disagree, the queue keeps an id the upload silently replaces, and every
+   * retry gets a new fingerprint and cannot resume the partial before it.
+   *
+   * @param {*} value
+   * @returns {boolean}
+   */
+  function isUploadId(value) {
+    return typeof value === "string" && UUID_V4_PATTERN.test(value.trim());
+  }
 
   /**
    * Sanitises a metadata value for TUS header transmission.
@@ -12972,6 +14182,17 @@
   function normalizeFormFields(fields) {
     return fields && _typeof$9(fields) === "object" ? fields : {};
   }
+
+  /**
+   * Mint a UUID v4, refusing to run where secure randomness is unavailable.
+   *
+   * Exported so `starmus-core.js` mints the submission's id the same way rather
+   * than keeping a second, weaker copy: its own version used `crypto.randomUUID`
+   * only, which is absent on browsers this package supports, and there the
+   * submission silently lost its stable identity across retries.
+   *
+   * @returns {string}
+   */
   function createUploadId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
@@ -12989,24 +14210,8 @@
     throw new Error("Secure UUID generation is not available in this runtime");
   }
 
-  /* ---- Direct Upload (fallback) ---- */
-
-  /**
-   * Uploads a recording blob directly to the WordPress REST API using FormData.
-   * Used when TUS is unavailable or the endpoint is not configured.
-   *
-   * @param {Blob} blob - Audio blob
-   * @param {string} fileName - File name for the upload
-   * @param {Object} [formFields={}] - Form fields (language, consent, etc.)
-   * @param {Object} [metadata={}] - Additional metadata
-   * @param {string} [instanceId=''] - Recorder instance ID
-   * @param {function} [onProgress] - Progress callback (loaded, total)
-   * @returns {Promise<Object>} Server response
-   */
-  function uploadDirect(_x2, _x3) {
-    return _uploadDirect.apply(this, arguments);
-  }
   /* ---- TUS Upload ---- */
+
   /**
    * Uploads a recording blob using the TUS resumable-upload protocol.
    *
@@ -13018,149 +14223,25 @@
    * @param {function} [onProgress] - Progress callback (bytesUploaded, bytesTotal)
    * @returns {Promise<Object>} Server response
    */
-  function _uploadDirect() {
-    _uploadDirect = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
-      var _cfg$endpoints;
-      var formFields,
-        metadata,
-        instanceId,
-        onProgress,
-        cfg,
-        nonce,
-        requestTimeoutMs,
-        endpoint,
-        fields,
-        fd,
-        uploadId,
-        _i3,
-        _Object$entries3,
-        _Object$entries3$_i,
-        key,
-        val,
-        _args2 = arguments;
-      return _regenerator().w(function (_context2) {
-        while (1) switch (_context2.n) {
-          case 0:
-            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
-            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
-            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
-            onProgress = _args2.length > 5 ? _args2[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || "";
-            requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000; // ADR-034: this package holds no CMS path. The host injects the endpoint
-            // via STARMUS_BOOTSTRAP; a hard-coded WordPress route here made the
-            // package silently CMS-coupled and contradicted its own architecture doc.
-            // Failing loudly is correct — a default that posts a speaker's recording
-            // to a guessed URL is worse than not uploading it.
-            endpoint = (_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.directUpload;
-            if (endpoint) {
-              _context2.n = 1;
-              break;
-            }
-            throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
-          case 1:
-            fields = normalizeFormFields(formFields);
-            if (blob instanceof Blob) {
-              _context2.n = 2;
-              break;
-            }
-            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
-          case 2:
-            fd = new FormData();
-            uploadId = createUploadId();
-            fd.append("audio_file", blob, fileName);
-            fd.append("upload_uuid", uploadId);
-            for (_i3 = 0, _Object$entries3 = Object.entries(fields); _i3 < _Object$entries3.length; _i3++) {
-              _Object$entries3$_i = _slicedToArray$1(_Object$entries3[_i3], 2), key = _Object$entries3$_i[0], val = _Object$entries3$_i[1];
-              fd.append(key, String(val));
-            }
-            if (metadata.transcript) {
-              fd.append("transcription", metadata.transcript);
-            }
-            if (metadata.calibration) {
-              fd.append("_starmus_calibration", JSON.stringify(metadata.calibration));
-            }
-            if (metadata.env) {
-              fd.append("_starmus_env", JSON.stringify(metadata.env));
-            }
-            if (metadata.tier) {
-              fd.append("tier", metadata.tier);
-            }
-            if (instanceId) {
-              fd.append("instanceId", instanceId);
-            }
-            return _context2.a(2, new Promise(function (resolve, reject) {
-              var xhr = new XMLHttpRequest();
-              var timeout = setTimeout(function () {
-                xhr.abort();
-                reject(new Error("Direct upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
-              xhr.upload.addEventListener("progress", function (e) {
-                if (onProgress && e.lengthComputable) {
-                  onProgress(e.loaded, e.total);
-                }
-              });
-              xhr.addEventListener("load", function () {
-                clearTimeout(timeout);
-                if (xhr.status >= 200 && xhr.status < 300) {
-                  try {
-                    var _parsed$data, _parsed$data2;
-                    var parsed = JSON.parse(xhr.responseText);
-                    // Default successful HTTP responses to success: true, while
-                    // still allowing an explicit server-provided success value
-                    // (including false) to override the default.
-                    var success = Object.prototype.hasOwnProperty.call(parsed, "success") ? parsed.success : true;
-                    // The server's identifier wins over the client-generated
-                    // one, in whichever spelling it arrives. Checking only
-                    // `uploadId` and writing the local id into that field made
-                    // the local id outrank a server `upload_id` downstream,
-                    // because completion reads `uploadId` first.
-                    var parsedUploadId = [parsed.uploadId, parsed.upload_id, (_parsed$data = parsed.data) === null || _parsed$data === void 0 ? void 0 : _parsed$data.uploadId, (_parsed$data2 = parsed.data) === null || _parsed$data2 === void 0 ? void 0 : _parsed$data2.upload_id].find(function (value) {
-                      return typeof value === "string" && value.trim() !== "";
-                    }) || uploadId;
-                    resolve(_objectSpread2(_objectSpread2({}, parsed), {}, {
-                      success: success,
-                      uploadId: parsedUploadId
-                    }));
-                  } catch (_unused) {
-                    resolve({
-                      success: true,
-                      uploadId: uploadId,
-                      raw: xhr.responseText
-                    });
-                  }
-                } else {
-                  reject(new Error("Direct upload failed: HTTP ".concat(xhr.status, " \u2014 ").concat(xhr.responseText)));
-                }
-              });
-              xhr.addEventListener("error", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload network error"));
-              });
-              xhr.addEventListener("abort", function () {
-                clearTimeout(timeout);
-                reject(new Error("Direct upload aborted"));
-              });
-              xhr.open("POST", endpoint);
-              if (nonce) {
-                xhr.setRequestHeader("X-WP-Nonce", nonce);
-              }
-              xhr.send(fd);
-            }));
-        }
-      }, _callee2);
-    }));
-    return _uploadDirect.apply(this, arguments);
-  }
-  function uploadTus(_x4, _x5) {
+  function uploadTus(_x2, _x3) {
     return _uploadTus.apply(this, arguments);
   }
 
-  /* ---- Priority Upload (TUS → Direct fallback) ---- */
+  /* ---- Upload entry point ---- */
 
   /**
-   * Attempts TUS upload first; falls back to direct upload on failure.
-   * Wrapped in circuit breaker to prevent repeated hammering.
+   * Uploads a recording over the resumable chunked path, wrapped in the circuit
+   * breaker so a broken endpoint is not hammered.
+   *
+   * There is no second path. When this rejects, the caller keeps the recording:
+   * `starmus-core.js` and the offline queue both hold the blob and retry later,
+   * which is what ADR-011's unconditional capture requires and what resumption
+   * is for. The previous full-file fallback did the opposite — it discarded
+   * every transferred byte and re-sent the whole recording over the link that
+   * had just failed.
+   *
+   * The name is kept because it is this module's public surface; the priority
+   * it once expressed no longer has anything to rank.
    *
    * @param {Object} options - Upload options
    * @param {Blob} options.blob - Audio blob
@@ -13172,43 +14253,68 @@
    * @returns {Promise<Object>} Upload result
    */
   function _uploadTus() {
-    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(blob, fileName) {
-      var _cfg$endpoints2;
+    _uploadTus = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee2(blob, fileName) {
+      var _cfg$endpoints;
       var formFields,
         metadata,
         instanceId,
         _onProgress,
         cfg,
-        nonce,
         tusEndpoint,
         fields,
+        suppliedId,
         uploadId,
         tusMetadata,
+        rawProfile,
+        captureProfile,
+        reserved,
         _i4,
         _Object$entries4,
         _Object$entries4$_i,
         key,
         val,
         headers,
-        _args3 = arguments;
-      return _regenerator().w(function (_context3) {
-        while (1) switch (_context3.n) {
+        stallTimeoutMs,
+        _args2 = arguments;
+      return _regenerator().w(function (_context2) {
+        while (1) switch (_context2.n) {
           case 0:
-            formFields = _args3.length > 2 && _args3[2] !== undefined ? _args3[2] : {};
-            metadata = _args3.length > 3 && _args3[3] !== undefined ? _args3[3] : {};
-            instanceId = _args3.length > 4 && _args3[4] !== undefined ? _args3[4] : "";
-            _onProgress = _args3.length > 5 ? _args3[5] : undefined;
-            cfg = getConfig();
-            nonce = cfg.nonce || ""; // ADR-034: host-injected, never a CMS path held by this package.
-            tusEndpoint = cfg.endpoint || ((_cfg$endpoints2 = cfg.endpoints) === null || _cfg$endpoints2 === void 0 ? void 0 : _cfg$endpoints2.tus);
+            formFields = _args2.length > 2 && _args2[2] !== undefined ? _args2[2] : {};
+            metadata = _args2.length > 3 && _args2[3] !== undefined ? _args2[3] : {};
+            instanceId = _args2.length > 4 && _args2[4] !== undefined ? _args2[4] : "";
+            _onProgress = _args2.length > 5 ? _args2[5] : undefined;
+            cfg = getConfig(); // ADR-034: host-injected, never a CMS path held by this package.
+            tusEndpoint = cfg.endpoint || ((_cfg$endpoints = cfg.endpoints) === null || _cfg$endpoints === void 0 ? void 0 : _cfg$endpoints.tus);
             if (tusEndpoint) {
-              _context3.n = 1;
+              _context2.n = 1;
               break;
             }
             throw new Error("NO_UPLOAD_ENDPOINT: set STARMUS_BOOTSTRAP.restUrl (and optionally uploadEndpoint). This package ships no default.");
           case 1:
-            fields = normalizeFormFields(formFields);
-            uploadId = createUploadId(); // Flatten all metadata into TUS metadata (strings only)
+            if (blob instanceof Blob) {
+              _context2.n = 2;
+              break;
+            }
+            throw new Error("INVALID_BLOB_TYPE: blob must be a Blob instance");
+          case 2:
+            fields = normalizeFormFields(formFields); // One logical upload, one id, across every attempt.
+            //
+            // Minting a fresh UUID per call meant a resumed transfer carried the id
+            // from its first attempt on the server while `starmus:complete` announced
+            // the id from its last — an identifier matching no resource anywhere. The
+            // caller supplies the id it will keep (the offline queue persists it with
+            // the blob); a direct first attempt that has none gets one minted here.
+            // A caller-supplied id is used only if it is actually a UUID v4. This is a
+            // public function, and the id becomes both the TUS `upload_uuid` and the
+            // resume fingerprint — an arbitrary string there would let two submissions
+            // collide on a resume key, which is the bug the fingerprint change fixed.
+            suppliedId = typeof metadata.uploadId === "string" ? metadata.uploadId.trim() : "";
+            uploadId = isUploadId(suppliedId) ? suppliedId : createUploadId();
+            if (suppliedId !== "" && uploadId !== suppliedId) {
+              console.warn("[TUS] Ignoring a supplied upload id that is not a UUID v4.");
+            }
+
+            // Flatten all metadata into TUS metadata (strings only)
             tusMetadata = {
               upload_uuid: sanitizeMetadata(uploadId),
               filename: sanitizeMetadata(fileName),
@@ -13218,46 +14324,169 @@
               transcript: sanitizeMetadata(metadata.transcript || ""),
               calibration: sanitizeMetadata(metadata.calibration || ""),
               env: sanitizeMetadata(metadata.env || "")
-            }; // Merge form fields into TUS metadata
-            for (_i4 = 0, _Object$entries4 = Object.entries(fields); _i4 < _Object$entries4.length; _i4++) {
-              _Object$entries4$_i = _slicedToArray$1(_Object$entries4[_i4], 2), key = _Object$entries4$_i[0], val = _Object$entries4$_i[1];
-              tusMetadata[key] = sanitizeMetadata(val);
+              // ADR-035 and the capture-to-ingestion contract: the capture profile
+              // travels with the asset, so a later reader can tell whether a
+              // measurement taken from it is admissible. It was being built in
+              // starmus-core.js and then dropped here, which meant it reached
+              // ingestion on no path at all.
+              //
+              // The key *name* is owed jointly by both sides of that contract and is
+              // not this package's to settle, so this reuses the name already fixed
+              // by `starmus:complete` rather than inventing a second one. When the
+              // seam names the key, this changes with it.
+            }; // The profile key is present with a value, or absent. Never present and
+            // empty: the Spoken Audio Node distinguishes "arrived with no profile"
+            // (stored, flagged, not a measurement source) from a profile it cannot
+            // read, and an empty string collapses the two. ADR-011 still holds — the
+            // recording goes either way; what it does not do is misdescribe itself.
+            //
+            // Sanitised and trimmed *before* the test, not after it. A value of only
+            // spaces or control separators is truthy, so testing the raw property sent
+            // a present-but-blank profile — the exact state this rule exists to
+            // prevent, passing the build check while violating the rule that check
+            // enforces.
+            // Only a non-empty string counts. `sanitizeMetadata()` routes anything of
+            // type `object` through `JSON.stringify`, and `typeof null === "object"` —
+            // so the documented "no profile" value, `null`, came back as the *string*
+            // `"null"`, which is truthy and was sent on the wire. That is precisely the
+            // present-but-meaningless profile this rule exists to prevent, it made the
+            // wire metadata disagree with the completion event (which reports `null`),
+            // and it satisfied the build check while breaking the rule the check
+            // enforces.
+            rawProfile = metadata.captureProfile;
+            captureProfile = typeof rawProfile === "string" ? sanitizeMetadata(rawProfile).trim() : "";
+            if (captureProfile) {
+              tusMetadata.captureProfile = captureProfile;
+            } else {
+              console.warn("[TUS] Uploading with no capture profile; the asset will not be admissible as a measurement source.");
+              sparxstarIntegration.reportError("upload_without_capture_profile", {
+                instanceId: instanceId,
+                tier: metadata.tier
+              });
             }
-            headers = {};
-            if (nonce) {
-              headers["X-WP-Nonce"] = nonce;
+            if (metadata.captureAttainment) {
+              tusMetadata.captureAttainment = sanitizeMetadata(metadata.captureAttainment);
             }
-            return _context3.a(2, new Promise(function (resolve, reject) {
+
+            // Merge form fields into TUS metadata — but never over a reserved key.
+            //
+            // The profile and the upload id are validated above and then were merged
+            // over by whatever the host's form happened to be named. A field called
+            // `captureProfile` could replace the validated value with an empty string,
+            // satisfying the build check and violating the rule it enforces.
+            //
+            // The reserved set is computed here, after every module-owned key has been
+            // assigned, so it covers them all by construction.
+            reserved = reservedMetadataKeys(tusMetadata);
+            _i4 = 0, _Object$entries4 = Object.entries(fields);
+          case 3:
+            if (!(_i4 < _Object$entries4.length)) {
+              _context2.n = 6;
+              break;
+            }
+            _Object$entries4$_i = _slicedToArray$1(_Object$entries4[_i4], 2), key = _Object$entries4$_i[0], val = _Object$entries4$_i[1];
+            if (!reserved.has(key)) {
+              _context2.n = 4;
+              break;
+            }
+            console.warn("[TUS] Ignoring form field '".concat(key, "': it is reserved capture metadata and the host does not set it."));
+            return _context2.a(3, 5);
+          case 4:
+            tusMetadata[key] = sanitizeMetadata(val);
+          case 5:
+            _i4++;
+            _context2.n = 3;
+            break;
+          case 6:
+            // Host-injected only (ADR-034). A CMS nonce header used to be set here.
+            // Reduced again at the use site: `uploadTus()` is exported, so a caller can
+            // reach here with a `cfg` that never passed through `getConfig()`.
+            headers = sanitizeHeaders(cfg.headers);
+            stallTimeoutMs = Number.isFinite(cfg.stallTimeoutMs) ? cfg.stallTimeoutMs : UPLOAD_STALL_TIMEOUT_MS;
+            return _context2.a(2, new Promise(function (resolve, reject) {
               var settled = false;
-              var timeoutId = null;
+              var stallTimer = null;
+              function clearStallWatchdog() {
+                if (stallTimer) {
+                  clearTimeout(stallTimer);
+                  stallTimer = null;
+                }
+              }
+
+              /**
+               * Restart the no-progress window. Called once before `start()` and
+               * again on every progress event, so the deadline only ever fires when
+               * the transfer has genuinely stopped moving — not because the whole
+               * upload is taking a long time, which on these networks is normal.
+               *
+               * The abort deliberately leaves the TUS fingerprint in place
+               * (`removeFingerprintOnSuccess` only clears it on success). The next
+               * attempt then finds the stored upload — see the resume lookup before
+               * `start()` below — and continues from the last acknowledged offset
+               * instead of re-sending the original from byte zero, which ADR-038
+               * forbids.
+               */
+              function armStallWatchdog() {
+                clearStallWatchdog();
+                stallTimer = setTimeout(function () {
+                  if (settled) {
+                    return;
+                  }
+                  settled = true;
+                  upload.abort();
+                  reject(new Error("TUS_UPLOAD_STALLED: no progress for ".concat(stallTimeoutMs, "ms; resumable from the last acknowledged offset")));
+                }, stallTimeoutMs);
+              }
               var upload = new Upload(blob, {
                 endpoint: tusEndpoint,
                 chunkSize: cfg.chunkSize,
                 retryDelays: cfg.retryDelays,
                 removeFingerprintOnSuccess: cfg.removeFingerprintOnSuccess,
                 checksumAlgorithm: "sha256",
+                // Resume by this upload's own id, not by the blob's shape.
+                //
+                // tus-js-client's default fingerprint is derived from name, type,
+                // size and lastModified. A recording is handed over as a bare Blob,
+                // which has no name and no modification time, so two recordings of
+                // the same type and size — a plausible pair on a fixed-length
+                // prompt — collide on one URL-storage key and the second resumes
+                // into the first's half-finished resource. Keying on the id makes
+                // that impossible.
+                //
+                // Returns a Promise, and must. tus-js-client calls this as
+                // `this.options.fingerprint(file, options).then(…)` — verified in
+                // the installed 4.3.1 — so a plain string has no `.then` and throws
+                // where the resume lookup happens. Review has suggested simplifying
+                // it to a string on the grounds that the option is "commonly
+                // synchronous"; that would break resumption, which is the property
+                // this fingerprint exists to protect.
+                fingerprint: function fingerprint() {
+                  return Promise.resolve("starmus-upload-".concat(uploadId));
+                },
                 metadata: tusMetadata,
                 headers: headers,
                 onProgress: function onProgress(bytesUploaded, bytesTotal) {
+                  armStallWatchdog();
                   if (_onProgress) {
                     _onProgress(bytesUploaded, bytesTotal);
                   }
                 },
                 onSuccess: function onSuccess() {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
+                  // No storage URL is returned. `upload.url` is the TUS
+                  // resource handle; tus-js-client keeps it for resumption and
+                  // nothing here needs to hand it onward. ADR-038 keeps durable
+                  // storage URLs out of events, records and evidence fields —
+                  // assets are referenced by id — and the cheapest way to honor
+                  // that is not to emit a URL at all.
                   resolve({
                     success: true,
-                    url: upload.url,
                     uploadId: uploadId
                   });
                 },
                 onError: function onError(err) {
-                  if (timeoutId) {
-                    clearTimeout(timeoutId);
-                  }
+                  clearStallWatchdog();
                   settled = true;
                   console.error("[TUS] Upload error:", err);
                   sparxstarIntegration.reportError("tus_upload_error", {
@@ -13268,67 +14497,125 @@
                   reject(err);
                 }
               });
-              var requestTimeoutMs = Number.isFinite(cfg.requestTimeoutMs) ? cfg.requestTimeoutMs : 5000;
-              timeoutId = setTimeout(function () {
+
+              // Resume before starting, or the fingerprint is a key nobody reads.
+              //
+              // `upload.start()` does not consult URL storage on its own: tus-js-client
+              // requires findPreviousUploads() then resumeFromPreviousUpload() first.
+              // Without this the stall watchdog's abort left a half-finished resource
+              // on the server and the next attempt began a new one from byte zero —
+              // exactly the re-upload-from-scratch ADR-038 forbids, and the opposite
+              // of what the comment above it claimed.
+              //
+              // A storage read that fails rejects rather than starting over; see the
+              // `catch` below. An earlier version of this comment said the opposite,
+              // describing behaviour the fix beneath it had already replaced — which
+              // is how a resumability guarantee gets undone by someone trusting the
+              // comment over the code.
+              // Which half of the chain failed is tracked, because the two need
+              // different handling. A *lookup* failure means we cannot establish
+              // whether a partial exists, so the attempt is deferred and retried. A
+              // *setup or start* failure — a malformed endpoint, a browser refusing
+              // the request — is not going to fix itself on the next drain, and
+              // labelling it as a lookup failure had the queue retrying it while the
+              // telemetry blamed storage.
+              var stage = "lookup";
+              upload.findPreviousUploads().then(function (previous) {
+                stage = "start";
+                if (Array.isArray(previous) && previous.length > 0) {
+                  // The most recent match: an earlier attempt on this exact
+                  // submission, since the fingerprint is the submission id.
+                  upload.resumeFromPreviousUpload(previous[previous.length - 1]);
+                }
+                if (settled) {
+                  return;
+                }
+                armStallWatchdog();
+                // Inside the chain, not a `finally` after it: a synchronous
+                // throw from `start()` — a malformed endpoint, a browser that
+                // refuses the request — would otherwise reject only the
+                // internal chain, leaving the promise this function returned
+                // pending forever with the watchdog armed and the caller with
+                // no error and no result.
+                upload.start();
+              }).catch(function (err) {
+                // A storage read that failed is not permission to start over.
+                // Without the lookup this cannot establish that no partial
+                // transfer exists, and starting fresh would re-send from byte
+                // zero and orphan whatever is already on the server — the
+                // re-upload ADR-038 forbids. Rejecting hands it back to the
+                // offline queue, which keeps the recording and tries again;
+                // the earlier behaviour here traded the contributor's
+                // bandwidth for the convenience of not failing.
                 if (settled) {
                   return;
                 }
                 settled = true;
-                upload.abort();
-                reject(new Error("TUS upload timed out after ".concat(requestTimeoutMs, "ms")));
-              }, requestTimeoutMs);
-              upload.start();
+                clearStallWatchdog();
+                try {
+                  upload.abort();
+                } catch (_unused) {
+                  // Never started, or already aborted. Nothing to undo.
+                }
+                reject(new Error(stage === "lookup" ? "TUS_RESUME_LOOKUP_FAILED: could not determine whether a partial upload exists (".concat(err.message, "). Not starting over.") : "TUS_UPLOAD_START_FAILED: the upload could not be started (".concat(err.message, ").")));
+              });
+            }));
+        }
+      }, _callee2);
+    }));
+    return _uploadTus.apply(this, arguments);
+  }
+  function uploadWithPriority(_x4) {
+    return _uploadWithPriority.apply(this, arguments);
+  }
+  function _uploadWithPriority() {
+    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee3(_ref) {
+      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress;
+      return _regenerator().w(function (_context3) {
+        while (1) switch (_context3.n) {
+          case 0:
+            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
+            return _context3.a(2, uploadCircuitBreaker.execute(function () {
+              return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
             }));
         }
       }, _callee3);
     }));
-    return _uploadTus.apply(this, arguments);
-  }
-  function uploadWithPriority(_x6) {
     return _uploadWithPriority.apply(this, arguments);
   }
-  function _uploadWithPriority() {
-    _uploadWithPriority = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(_ref) {
-      var _cfg$endpoints3;
-      var blob, fileName, _ref$formFields, formFields, _ref$metadata, metadata, _ref$instanceId, instanceId, onProgress, cfg, hasTusEndpoint;
-      return _regenerator().w(function (_context5) {
-        while (1) switch (_context5.n) {
-          case 0:
-            blob = _ref.blob, fileName = _ref.fileName, _ref$formFields = _ref.formFields, formFields = _ref$formFields === void 0 ? {} : _ref$formFields, _ref$metadata = _ref.metadata, metadata = _ref$metadata === void 0 ? {} : _ref$metadata, _ref$instanceId = _ref.instanceId, instanceId = _ref$instanceId === void 0 ? "" : _ref$instanceId, onProgress = _ref.onProgress;
-            cfg = getConfig();
-            hasTusEndpoint = !!(cfg.endpoint || (_cfg$endpoints3 = cfg.endpoints) !== null && _cfg$endpoints3 !== void 0 && _cfg$endpoints3.tus);
-            return _context5.a(2, uploadCircuitBreaker.execute(/*#__PURE__*/_asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4() {
-              var _t2;
-              return _regenerator().w(function (_context4) {
-                while (1) switch (_context4.p = _context4.n) {
-                  case 0:
-                    if (!hasTusEndpoint) {
-                      _context4.n = 4;
-                      break;
-                    }
-                    _context4.p = 1;
-                    _context4.n = 2;
-                    return uploadTus(blob, fileName, formFields, metadata, instanceId, onProgress);
-                  case 2:
-                    return _context4.a(2, _context4.v);
-                  case 3:
-                    _context4.p = 3;
-                    _t2 = _context4.v;
-                    console.warn("[TUS] Falling back to direct upload:", _t2.message);
-                    sparxstarIntegration.reportError("tus_fallback_to_direct", {
-                      error: _t2.message,
-                      instanceId: instanceId
-                    });
-                  case 4:
-                    return _context4.a(2, uploadDirect(blob, fileName, formFields, metadata, instanceId, onProgress));
-                }
-              }, _callee4, null, [[1, 3]]);
-            }))));
-        }
-      }, _callee5);
-    }));
-    return _uploadWithPriority.apply(this, arguments);
+
+  var es_array_find = {};
+
+  var hasRequiredEs_array_find;
+
+  function requireEs_array_find () {
+  	if (hasRequiredEs_array_find) return es_array_find;
+  	hasRequiredEs_array_find = 1;
+  	var $ = require_export();
+  	var $find = requireArrayIteration().find;
+  	var addToUnscopables = requireAddToUnscopables();
+
+  	var FIND = 'find';
+  	var SKIPS_HOLES = true;
+
+  	// Shouldn't skip holes
+  	// eslint-disable-next-line es/no-array-prototype-find -- testing
+  	if (FIND in []) Array(1)[FIND](function () { SKIPS_HOLES = false; });
+
+  	// `Array.prototype.find` method
+  	// https://tc39.es/ecma262/#sec-array.prototype.find
+  	$({ target: 'Array', proto: true, forced: SKIPS_HOLES }, {
+  	  find: function find(callbackfn /* , that = undefined */) {
+  	    return $find(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
+  	  }
+  	});
+
+  	// https://tc39.es/ecma262/#sec-array.prototype-@@unscopables
+  	addToUnscopables(FIND);
+  	return es_array_find;
   }
+
+  requireEs_array_find();
 
   var es_array_includes = {};
 
@@ -13491,11 +14778,59 @@
     var type = String(mimeType || "").trim().toLowerCase();
     var name = String(fileName || "").trim().toLowerCase();
     var ext = name.includes(".") ? name.split(".").pop() : "";
-    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || type.includes("audio/aac") || type.includes("aac") || type.includes("mp4a") || ext === "m4a" || ext === "mp4" || ext === "aac") {
+
+    // A codec, only when the codec is actually stated. `audio/aac`, an `.aac`
+    // file and an explicit `mp4a.40.2` codec parameter each name AAC; a bare
+    // `audio/mp4` or `.m4a` names a *container*, which may hold HE-AAC, ALAC or
+    // something else. Reporting `aac-lc` for those was a codec claim this
+    // client cannot establish — the same misdescription the `webm` case was
+    // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
+    // `mp4a` alone is not AAC-LC. The object-type indicates the profile:
+    // `mp4a.40.2` is AAC-LC, `mp4a.40.5` is HE-AAC, `mp4a.40.29` HE-AACv2.
+    // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
+    // cannot establish — the same overclaim as calling a container its codec,
+    // one level down.
+    // Matched at a token boundary, not by substring. `includes("mp4a.40.2")`
+    // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
+    // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
+    // was written to exclude.
+    // The media type is matched as a whole token too. `includes("audio/aac")`
+    // is also true of `audio/aacp` — HE-AAC, the profile this branch exists to
+    // exclude — so the substring test reported the very codec the token-boundary
+    // fix above was written to keep out, by the other half of the condition.
+    // A codecs parameter naming a non-LC profile settles it before the base
+    // media type is consulted. `audio/aac; codecs=mp4a.40.5` matched the
+    // `audio/aac` branch and returned `aac-lc`, so the parameter that says
+    // HE-AAC was read as confirmation of the thing it rules out.
+    // `audio/aacp` counts here too, not only an `mp4a.40.x` parameter. The
+    // media type names HE-AAC on its own, and an asset carrying it with a
+    // `.aac` filename reached the extension alternative below and was reported
+    // AAC-LC — the profile guard bypassed by the very branch it sits beside.
+    var statesNonLcProfile = /\bmp4a\.40\.(?!2\b)\d+\b/.test(type) || /\baudio\/aacp\b/.test(type);
+    if (!statesNonLcProfile && (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac")) {
       return "aac-lc";
     }
-    if (type.includes("audio/ogg") || type.includes("audio/opus") || type.includes("opus") || ext === "opus" || ext === "ogg") {
+
+    // The container, named as itself, for the Node to identify the codec from
+    // the bytes — exactly as WAV, MP3 and WebM are handled below.
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || ext === "m4a" || ext === "mp4") {
+      return "mp4";
+    }
+
+    // Opus only when Opus is stated. `audio/opus`, a `codecs=opus` parameter and
+    // an `.opus` file each name the codec; a bare `audio/ogg` or `.ogg` names a
+    // *container*, which may hold Vorbis, FLAC or Speex. This is the same
+    // container-for-codec substitution the mp4 branch above was corrected for,
+    // and imported material is exactly where it would misdescribe an asset.
+    // Token-matched, like the AAC branch above. `includes("opus")` is also true
+    // of `audio/ogg; codecs=notopus` and of any future parameter containing the
+    // word, so the substring test could name a codec the value explicitly is
+    // not.
+    if (/\baudio\/opus(?![\w+.-])/.test(type) || /\bopus\b/.test(type) || ext === "opus") {
       return "opus";
+    }
+    if (type.includes("audio/ogg") || ext === "ogg") {
+      return "ogg";
     }
 
     // WAV and MP3 are reported as themselves. ADR-035 holds the container and
@@ -13508,6 +14843,21 @@
     }
     if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
       return "mp3";
+    }
+
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+      return "webm";
     }
     return null;
   }
@@ -13531,12 +14881,12 @@
    * arrived, or an empty string when the result carries none.
    *
    * This cannot tell a server-issued identifier from a client-generated one:
-   * `uploadDirect` already writes the client's UUID into `uploadId` when the
-   * server returns no identifier of its own, so by the time a result reaches
-   * here the two are indistinguishable. That fallback is deliberate — the same
-   * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
-   * handle rather than a guess — but this function does not verify the origin,
-   * and callers must not assume it did.
+   * the upload path resolves `uploadId` to the client's UUID when the server
+   * returns no identifier of its own, so by the time a result reaches here the
+   * two are indistinguishable. That fallback is deliberate — the same UUID
+   * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+   * rather than a guess — but this function does not verify the origin, and
+   * callers must not assume it did.
    *
    * @param {Object} result
    * @returns {string}
@@ -13567,28 +14917,65 @@
    * @param {string} [input.contributorId]
    * @param {boolean} [input.calibrationApplied]
    * @param {number} [input.durationMs]
-   * @returns {Object|null} null when the format cannot be named.
+   * @returns {Object} Always a detail object. An accepted upload always gets its
+   *          boundary event; see the `format` note below.
    */
   function buildCompletionDetail(input) {
     var _input$metadata, _input$durationMs, _attainment$actual$sa, _attainment$actual, _attainment$actual$ch, _attainment$actual2, _input$metadata2, _attainment$attained, _input$formFields;
-    var format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-      return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    var format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
     var attainment = ((_input$metadata = input.metadata) === null || _input$metadata === void 0 ? void 0 : _input$metadata.captureAttainment) || null;
     var consent = readContributorConsent();
     return {
       sessionId: input.instanceId,
+      // What this event actually witnesses.
+      //
+      // `transferred` means the media ingest service acknowledged the last
+      // chunk. It does **not** mean the Spoken Audio Node accepted the asset:
+      // ADR-038 splits transport from acceptance, and no acknowledgement
+      // contract exists on that seam yet, so nothing reaching this client can
+      // observe acceptance. Consumers that need acceptance must wait for the
+      // Node's own signal once that contract is defined; reading this event
+      // as acceptance would treat "the bytes arrived" as "the platform has
+      // it", which is exactly the confusion the three-party split exists to
+      // prevent.
+      //
+      // The field is present from the start, with one value, so that adding
+      // `accepted` later is an extension rather than a breaking change to a
+      // shape consumers had to infer.
+      stage: "transferred",
       uploadId: resolveUploadId(input.result),
       durationMs: (_input$durationMs = input.durationMs) !== null && _input$durationMs !== void 0 ? _input$durationMs : 0,
       sampleRate: (_attainment$actual$sa = attainment === null || attainment === void 0 || (_attainment$actual = attainment.actual) === null || _attainment$actual === void 0 ? void 0 : _attainment$actual.sampleRate) !== null && _attainment$actual$sa !== void 0 ? _attainment$actual$sa : null,
       channels: (_attainment$actual$ch = attainment === null || attainment === void 0 || (_attainment$actual2 = attainment.actual) === null || _attainment$actual2 === void 0 ? void 0 : _attainment$actual2.channelCount) !== null && _attainment$actual$ch !== void 0 ? _attainment$actual$ch : null,
-      captureProfile: ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) || null,
+      // Normalised at the boundary, to the same rule `uploadTus()` applies
+      // before putting it on the wire: a non-empty string after trimming, or
+      // absent. A legacy queue row carrying `"  "` — or a number — is truthy
+      // here and omitted there, so the completion event described a capture
+      // profile that the metadata accompanying the asset did not carry. Two
+      // records of one upload disagreeing is worse than neither having it.
+      captureProfile: typeof ((_input$metadata2 = input.metadata) === null || _input$metadata2 === void 0 ? void 0 : _input$metadata2.captureProfile) === "string" && input.metadata.captureProfile.trim() !== "" ? input.metadata.captureProfile.trim() : null,
       captureProfileAttained: (_attainment$attained = attainment === null || attainment === void 0 ? void 0 : attainment.attained) !== null && _attainment$attained !== void 0 ? _attainment$attained : null,
       format: format,
       language: input.language || ((_input$formFields = input.formFields) === null || _input$formFields === void 0 ? void 0 : _input$formFields.language) || "",
       contributorId: input.contributorId || "",
-      consentGranted: !!(consent && consent.granted),
+      // Strictly `true`, not merely truthy. A stored record of
+      // `{ granted: "false" }` or `{ granted: 1 }` — a malformed write, an
+      // older schema, a host that stringified it — coerced to
+      // `consentGranted: true` under `!!`. Consent is the one field where a
+      // permissive read is indefensible: it asserts that a contributor agreed.
+      consentGranted: (consent === null || consent === void 0 ? void 0 : consent.granted) === true,
       calibrationApplied: !!input.calibrationApplied
     };
   }
@@ -13610,31 +14997,145 @@
     return true;
   }
 
-  var es_array_map = {};
+  var es_number_constructor = {};
 
-  var hasRequiredEs_array_map;
+  var thisNumberValue;
+  var hasRequiredThisNumberValue;
 
-  function requireEs_array_map () {
-  	if (hasRequiredEs_array_map) return es_array_map;
-  	hasRequiredEs_array_map = 1;
-  	var $ = require_export();
-  	var $map = requireArrayIteration().map;
-  	var arrayMethodHasSpeciesSupport = requireArrayMethodHasSpeciesSupport();
+  function requireThisNumberValue () {
+  	if (hasRequiredThisNumberValue) return thisNumberValue;
+  	hasRequiredThisNumberValue = 1;
+  	var uncurryThis = requireFunctionUncurryThis();
 
-  	var HAS_SPECIES_SUPPORT = arrayMethodHasSpeciesSupport('map');
-
-  	// `Array.prototype.map` method
-  	// https://tc39.es/ecma262/#sec-array.prototype.map
-  	// with adding support of @@species
-  	$({ target: 'Array', proto: true, forced: !HAS_SPECIES_SUPPORT }, {
-  	  map: function map(callbackfn /* , thisArg */) {
-  	    return $map(this, callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	  }
-  	});
-  	return es_array_map;
+  	// `thisNumberValue` abstract operation
+  	// https://tc39.es/ecma262/#sec-thisnumbervalue
+  	thisNumberValue = uncurryThis(1.1.valueOf);
+  	return thisNumberValue;
   }
 
-  requireEs_array_map();
+  var hasRequiredEs_number_constructor;
+
+  function requireEs_number_constructor () {
+  	if (hasRequiredEs_number_constructor) return es_number_constructor;
+  	hasRequiredEs_number_constructor = 1;
+  	var $ = require_export();
+  	var IS_PURE = requireIsPure();
+  	var DESCRIPTORS = requireDescriptors();
+  	var globalThis = requireGlobalThis();
+  	var path = requirePath();
+  	var uncurryThis = requireFunctionUncurryThis();
+  	var isForced = requireIsForced();
+  	var hasOwn = requireHasOwnProperty();
+  	var inheritIfRequired = requireInheritIfRequired();
+  	var isPrototypeOf = requireObjectIsPrototypeOf();
+  	var isSymbol = requireIsSymbol();
+  	var toPrimitive = requireToPrimitive();
+  	var fails = requireFails();
+  	var getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
+  	var getOwnPropertyDescriptor = requireObjectGetOwnPropertyDescriptor().f;
+  	var defineProperty = requireObjectDefineProperty().f;
+  	var thisNumberValue = requireThisNumberValue();
+  	var trim = requireStringTrim().trim;
+
+  	var NUMBER = 'Number';
+  	var NativeNumber = globalThis[NUMBER];
+  	var PureNumberNamespace = path[NUMBER];
+  	var NumberPrototype = NativeNumber.prototype;
+  	var TypeError = globalThis.TypeError;
+  	var stringSlice = uncurryThis(''.slice);
+  	var charCodeAt = uncurryThis(''.charCodeAt);
+
+  	// `ToNumeric` abstract operation
+  	// https://tc39.es/ecma262/#sec-tonumeric
+  	var toNumeric = function (value) {
+  	  var primValue = toPrimitive(value, 'number');
+  	  return typeof primValue == 'bigint' ? primValue : toNumber(primValue);
+  	};
+
+  	// `ToNumber` abstract operation
+  	// https://tc39.es/ecma262/#sec-tonumber
+  	var toNumber = function (argument) {
+  	  var it = toPrimitive(argument, 'number');
+  	  var first, third, radix, maxCode, digits, length, index, code;
+  	  if (isSymbol(it)) throw new TypeError('Cannot convert a Symbol value to a number');
+  	  if (typeof it == 'string' && it.length > 2) {
+  	    it = trim(it);
+  	    first = charCodeAt(it, 0);
+  	    if (first === 43 || first === 45) {
+  	      third = charCodeAt(it, 2);
+  	      if (third === 88 || third === 120) return NaN; // Number('+0x1') should be NaN, old V8 fix
+  	    } else if (first === 48) {
+  	      switch (charCodeAt(it, 1)) {
+  	        // fast equal of /^0b[01]+$/i
+  	        case 66:
+  	        case 98:
+  	          radix = 2;
+  	          maxCode = 49;
+  	          break;
+  	        // fast equal of /^0o[0-7]+$/i
+  	        case 79:
+  	        case 111:
+  	          radix = 8;
+  	          maxCode = 55;
+  	          break;
+  	        default:
+  	          return +it;
+  	      }
+  	      digits = stringSlice(it, 2);
+  	      length = digits.length;
+  	      for (index = 0; index < length; index++) {
+  	        code = charCodeAt(digits, index);
+  	        // parseInt parses a string to a first unavailable symbol
+  	        // but ToNumber should return NaN if a string contains unavailable symbols
+  	        if (code < 48 || code > maxCode) return NaN;
+  	      } return parseInt(digits, radix);
+  	    }
+  	  } return +it;
+  	};
+
+  	var FORCED = isForced(NUMBER, !NativeNumber(' 0o1') || !NativeNumber('0b1') || NativeNumber('+0x1'));
+
+  	var calledWithNew = function (dummy) {
+  	  // includes check on 1..constructor(foo) case
+  	  return isPrototypeOf(NumberPrototype, dummy) && fails(function () { thisNumberValue(dummy); });
+  	};
+
+  	// `Number` constructor
+  	// https://tc39.es/ecma262/#sec-number-constructor
+  	var NumberWrapper = function Number(value) {
+  	  var n = arguments.length < 1 ? 0 : NativeNumber(toNumeric(value));
+  	  return calledWithNew(this) ? inheritIfRequired(Object(n), this, NumberWrapper) : n;
+  	};
+
+  	NumberWrapper.prototype = NumberPrototype;
+  	if (FORCED && !IS_PURE) NumberPrototype.constructor = NumberWrapper;
+
+  	$({ global: true, constructor: true, wrap: true, forced: FORCED }, {
+  	  Number: NumberWrapper
+  	});
+
+  	// Use `internal/copy-constructor-properties` helper in `core-js@4`
+  	var copyConstructorProperties = function (target, source) {
+  	  for (var keys = DESCRIPTORS ? getOwnPropertyNames(source) : (
+  	    // ES3:
+  	    'MAX_VALUE,MIN_VALUE,NaN,NEGATIVE_INFINITY,POSITIVE_INFINITY,' +
+  	    // ES2015 (in case, if modules with ES2015 Number statics required before):
+  	    'EPSILON,MAX_SAFE_INTEGER,MIN_SAFE_INTEGER,isFinite,isInteger,isNaN,isSafeInteger,parseFloat,parseInt,' +
+  	    // ESNext
+  	    'fromString,range'
+  	  ).split(','), j = 0, key; keys.length > j; j++) {
+  	    if (hasOwn(source, key = keys[j]) && !hasOwn(target, key)) {
+  	      defineProperty(target, key, getOwnPropertyDescriptor(source, key));
+  	    }
+  	  }
+  	};
+
+  	if (IS_PURE && PureNumberNamespace) copyConstructorProperties(path[NUMBER], PureNumberNamespace);
+  	if (FORCED || IS_PURE) copyConstructorProperties(path[NUMBER], NativeNumber);
+  	return es_number_constructor;
+  }
+
+  requireEs_number_constructor();
 
   /**
    * Copyright (c) Starisian Technologies. All rights reserved.
@@ -13652,6 +15153,66 @@
 
 
   /** @type {Object} Queue configuration constants */
+  /**
+   * Whether an upload failure is one that retrying cannot fix.
+   *
+   * A stall is not such a failure. This is the decision that most directly
+   * decides whether a recording made on a slow link survives, so it is a named
+   * function rather than an expression buried in the drain: it can be stated,
+   * read, and tested against the message families that actually occur.
+   *
+   * The status match is structured — `response code 404`, `HTTP 413`, `status:
+   * 400` — and not a bare number. `/400/` matched any message containing those
+   * digits, "TUS_UPLOAD_STALLED: no progress for 4000ms" among them, so a stall
+   * was read as a server rejection and held on its first occurrence instead of
+   * being retried. Stalls are the normal case on the links this platform exists
+   * for, which makes that the worst possible thing to misread.
+   *
+   * Nothing here decides whether the recording is *kept*: it is kept either way
+   * (ADR-011). This decides only whether the queue keeps trying.
+   *
+   * @param {string} message Failure message from the transfer attempt.
+   * @returns {boolean} True when the queue should stop retrying and hold it.
+   */
+  function isNonRetryableUploadFailure(message) {
+    var msg = typeof message === "string" ? message : String(message !== null && message !== void 0 ? message : "");
+
+    // Configuration, not conditions. `starmus-tus.js` separates a *lookup*
+    // failure from a *setup or start* failure precisely because the two need
+    // different handling, and says of the second: "not going to fix itself on
+    // the next drain". A missing endpoint is the same kind of fact. Retrying
+    // either spends three attempts to learn what the first one already
+    // established, and then holds the row anyway — later, with the reason
+    // buried under two more failures.
+    //
+    // Held is not dropped. ADR-011 keeps the recording; what this decides is
+    // whether the queue keeps trying or surfaces it through
+    // `getHeldSubmissions()` now, where a person can act on it.
+    var misconfigured = /NO_UPLOAD_ENDPOINT|TUS_UPLOAD_START_FAILED/i.test(msg);
+    if (misconfigured) {
+      return true;
+    }
+
+    // Transient by nature: a stalled transfer, a resume lookup that failed, a
+    // device that went offline before the attempt began.
+    var stalled = /TUS_UPLOAD_STALLED|TUS_RESUME_LOOKUP_FAILED|OFFLINE_FAST_PATH/i.test(msg);
+    if (stalled) {
+      return false;
+    }
+    var status = /(?:response code|status|HTTP)\D{0,3}(4\d\d)/i.exec(msg);
+    if (status) {
+      // Not every 4xx is the server's final word. 408 Request Timeout and 425
+      // Too Early describe a request that did not complete in time, and 429
+      // Too Many Requests is a server explicitly asking for the retry this
+      // would refuse to make — on a shared or rate-limited connection it is
+      // an ordinary occurrence, and holding a recording on the first one
+      // strands it waiting for a person over a wait the queue could have sat
+      // out on its own.
+      var transient = new Set([408, 425, 429]);
+      return !transient.has(Number(status[1]));
+    }
+    return /Invalid JSON|QuotaExceeded/i.test(msg);
+  }
   var CONFIG = {
     dbName: "StarmusSubmissions",
     storeName: "pendingSubmissions",
@@ -13665,11 +15226,71 @@
       // 10 MB — Tier B
       C: 5 * 1024 * 1024 // 5 MB  — Tier C (default)
     },
-    defaultMaxBlobSize: 5 * 1024 * 1024
+    defaultMaxBlobSize: 5 * 1024 * 1024,
+    /**
+     * Total queue budget, from the platform's IndexedDB standard (20 MB).
+     *
+     * How it is spent is the part that needed deciding. The standard also says
+     * LRU, and LRU here means silently deleting the oldest recording to make
+     * room — which is the behaviour ADR-011 exists to prevent, and the one this
+     * queue was just changed to stop doing.
+     *
+     * So the budget is enforced at the door, not by eviction. When a new
+     * recording will not fit, the add is refused with an error naming what is
+     * occupying the space. The contributor is present and can act; a held
+     * recording from last week cannot advocate for itself.
+     *
+     * **Which recording loses when storage is genuinely full is not this
+     * module's call to make** — it is a sovereignty question about whose
+     * material is expendable, and it routes to the platform owner. Until it is
+     * ruled on, nothing is deleted automatically.
+     */
+    maxTotalBytes: 20 * 1024 * 1024,
+    /**
+     * How long a drain's claim on a row stays valid without renewal.
+     *
+     * `isProcessing` is an in-memory flag, so it says nothing about the tab
+     * next door: two tabs read the same rows and both start uploading. Because
+     * the TUS fingerprint is the submission id, the second tab *resumes* the
+     * same resource rather than creating a second one — so the server does not
+     * end up with two copies — but both tabs still spend the contributor's
+     * bandwidth on one recording, both fire `starmus:complete`, and both race
+     * to delete the row.
+     *
+     * A fixed lease cannot be sized out of this problem, and an earlier version
+     * of this comment claimed otherwise. The recorder permits captures of
+     * `MAX_DURATION_SECONDS` (20 minutes), and the stall watchdog deliberately
+     * lets any *continuously progressing* upload run as long as it needs — so
+     * on the links this platform exists for, a legitimate transfer outlives any
+     * lease short enough to be useful when a tab dies.
+     *
+     * So the claim is **renewed while the transfer progresses** and carries an
+     * **owner token**: every mutation checks that this drain still owns the row
+     * before writing. A lease that lapses hands the row over cleanly; it never
+     * lets a late failure from the previous owner overwrite the new one's work.
+     */
+    // Strictly longer than the upload stall watchdog, and derived from it
+    // rather than written beside it.
+    //
+    // The lease is renewed from progress callbacks, so a transfer that stalls
+    // stops renewing. Both values were 120000, which meant the lease expired at
+    // the exact moment the watchdog would abort the attempt — a dead heat, and
+    // on the losing side of it another tab claims a row whose first transfer is
+    // still alive. Two attempts then run on one recording, spending the
+    // contributor's data twice and racing each other's completion.
+    //
+    // The margin is what makes the ordering hold rather than tie: a stalled
+    // attempt is always aborted, and its claim released, before the lease it
+    // holds can lapse.
+    leaseMs: UPLOAD_STALL_TIMEOUT_MS + 60 * 1000,
+    /** Renew no more often than this, so progress does not hammer IndexedDB. */
+    leaseRenewMs: 30 * 1000
   };
 
   /** Tracks whether the singleton queue has installed its network listener. */
   var networkListenerInstalled = false;
+  /** Tracks whether the singleton queue has installed its battery listener. */
+  var batteryListenerInstalled = false;
 
   /**
    * Resolves the maximum blob size permitted for the given metadata's tier.
@@ -13686,6 +15307,31 @@
     }
     return CONFIG.defaultMaxBlobSize;
   }
+
+  /**
+   * Whether `token` still holds this row, *now*.
+   *
+   * Ownership is the token and the time together. Every guard in this module
+   * checked only the token, which made the lease unbounded in practice: a tab
+   * suspended past its expiry — a backgrounded phone, a laptop lid — could resume
+   * and write as though it still owned the row, provided no other tab had happened
+   * to claim it in the meantime. The window the lease defines was therefore
+   * enforced only when someone else competed for it, which is precisely when a
+   * lease is least needed and least likely to be tested.
+   *
+   * A row whose lease has lapsed belongs to nobody. It is free for a fresh claim,
+   * and the drain that let it lapse has to take it again like anyone else.
+   *
+   * @param {Object|undefined} item
+   * @param {string|null} token
+   * @returns {boolean}
+   */
+  function holdsClaim(item, token) {
+    return Boolean(item) && item.leaseOwner === token && typeof item.leaseUntil === "number" && item.leaseUntil > Date.now();
+  }
+
+  /** Monotonic within a page, so the fallback below cannot collide with itself. */
+  var offlineIdCounter = 0;
   function createOfflineSubmissionId() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return "starmus-offline-".concat(crypto.randomUUID());
@@ -13701,7 +15347,21 @@
       var suffix = "".concat(hex.slice(0, 8), "-").concat(hex.slice(8, 12), "-").concat(hex.slice(12, 16), "-").concat(hex.slice(16, 20), "-").concat(hex.slice(20));
       return "starmus-offline-".concat(suffix);
     }
-    throw new Error("Secure UUID generation is not available in this runtime");
+    // No secure randomness. This id is a **local IndexedDB key** — it has to be
+    // unique within one device's queue and nothing more. It is not the
+    // `upload_uuid` the ingestion contract fixes (that is `createUploadId()`,
+    // which still refuses rather than invent one), it never leaves the device,
+    // and nothing downstream reads it.
+    //
+    // So it falls back rather than throwing. Throwing here meant that on a
+    // runtime without `crypto` — an insecure origin on an old Android, which is
+    // exactly this package's device — `queueSubmission()` threw, the catch in
+    // `starmus-core.js` dispatched an error, and the recording was gone. ADR-011
+    // keeps the material unconditionally: a device that cannot generate a
+    // strong key can still hold a contributor's recording until it can be sent.
+    offlineIdCounter += 1;
+    var entropy = Math.floor(Math.random() * 0xffffffff).toString(16);
+    return "starmus-offline-local-".concat(Date.now().toString(36), "-").concat(offlineIdCounter, "-").concat(entropy);
   }
 
   /**
@@ -13709,14 +15369,30 @@
    * Offline submission queue backed by IndexedDB.
    *
    * Eviction policy (currently implemented):
-   * - Entries are removed on successful upload.
-   * - Entries that exceed {@link CONFIG.maxRetries} failures are removed at the
-   *   next processQueue run (they are not left orphaned indefinitely).
+   * - Entries are removed on successful upload, and only on successful upload.
+   * - An entry that exhausts {@link CONFIG.maxRetries}, or fails with an error
+   *   retrying cannot fix, is marked `held` rather than deleted. It stops being
+   *   retried and starts needing a person. ADR-011 keeps the material
+   *   unconditionally: a contributor does not lose a recording because the
+   *   server said 400 four times, and the bytes are the only copy once the page
+   *   is closed.
+   * - Held is a state, not a slower deletion: `releaseHold()` puts an entry back
+   *   in the queue and `discardHeld()` removes it on an explicit instruction.
+   *   Without those a device fills with entries nobody can clear until `add()`
+   *   refuses every new recording — trading one lost recording for the loss of
+   *   recording itself.
    *
-   * Target eviction policy (Phase 3 — not yet implemented):
-   * - LRU, 20 MB maximum total queue size.
-   * - Entries older than 7 days are eligible for automatic eviction.
-   * - Eviction will run on queue initialization and after each successful upload.
+   * - The queue as a whole is capped at {@link CONFIG.maxTotalBytes}. The cap is
+   *   enforced at `add()`: a recording that will not fit is refused with an error
+   *   naming what is occupying the space. Nothing is evicted to make room.
+   *
+   * That last point is a deliberate departure from the platform standard's "LRU".
+   * LRU here means deleting a contributor's older recording so a newer one fits,
+   * which is the behaviour ADR-011 forbids and the one this queue was changed to
+   * stop. Whose material is expendable when a device is genuinely full is a
+   * sovereignty question for the platform owner, not a default this module picks.
+   * Until it is ruled on, the person standing in front of the device is told, and
+   * nothing already recorded is lost without someone deciding so.
    *
    * Storage: IndexedDB, database "StarmusSubmissions", store "pendingSubmissions".
    */
@@ -13862,13 +15538,79 @@
                   metadata: metadata,
                   retryCount: 0,
                   lastAttempt: null,
-                  error: null
-                };
+                  error: null,
+                  held: false,
+                  heldReason: null
+                }; // The whole-queue budget is counted and the record inserted inside one
+                // readwrite transaction.
+                //
+                // Per-blob was the only bound before; the platform standard also caps
+                // the queue as a whole, and without that, repeated failures accumulate
+                // held entries until IndexedDB refuses the transaction — a quota error
+                // at `add()` loses the recording being made right now, which is the
+                // worst possible moment to find out.
+                //
+                // Counting in a separate transaction and inserting in another let two
+                // adds each see room and then both insert. A promise chain fixed that
+                // only within one tab's queue instance; a second tab has its own, reads
+                // the same store, and the 20 MB cap is exceeded anyway. IndexedDB
+                // serializes overlapping readwrite transactions on a store across every
+                // tab of the origin, so doing both here is the guarantee itself rather
+                // than an approximation of it — and it is the only mechanism, so there
+                // is no question which one is load-bearing.
                 return _context2.a(2, new Promise(function (resolve, reject) {
                   var tx = _this2.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
-                  store.add(item);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  /** @type {Error|null} Set when the queue is full, to reject with. */
+                  var refusal = null;
+                  var settled = false;
+
+                  /**
+                   * @param {Error} error
+                   * @returns {void}
+                   */
+                  var fail = function fail(error) {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
+                    reject(error);
+                  };
+                  var cursorReq = store.openCursor();
+                  cursorReq.onerror = function (ev) {
+                    return fail(ev.target.error);
+                  };
+                  cursorReq.onsuccess = function (event) {
+                    var cursor = event.target.result;
+                    if (cursor) {
+                      var _cursor$value, _cursor$value2;
+                      var size = ((_cursor$value = cursor.value) === null || _cursor$value === void 0 || (_cursor$value = _cursor$value.audioBlob) === null || _cursor$value === void 0 ? void 0 : _cursor$value.size) || 0;
+                      totalBytes += size;
+                      if (((_cursor$value2 = cursor.value) === null || _cursor$value2 === void 0 ? void 0 : _cursor$value2.held) === true) {
+                        heldBytes += size;
+                        heldCount += 1;
+                      }
+                      cursor.continue();
+                      return;
+                    }
+
+                    // The store is counted and this transaction still holds it.
+                    if (totalBytes + safeBlob.size > CONFIG.maxTotalBytes) {
+                      var heldNote = heldCount > 0 ? " ".concat(heldCount, " held recording(s) occupy ").concat((heldBytes / 1024 / 1024).toFixed(2), " MB and need attention before more will fit.") : "";
+                      refusal = new Error("QueueFull: the offline queue holds ".concat((totalBytes / 1024 / 1024).toFixed(2), " MB of ") + "".concat((CONFIG.maxTotalBytes / 1024 / 1024).toFixed(2), " MB and this recording needs ") + "".concat((safeBlob.size / 1024 / 1024).toFixed(2), " MB.").concat(heldNote, " ") + "Nothing is deleted to make room.");
+                      tx.abort();
+                      return;
+                    }
+                    store.add(item);
+                  };
                   tx.oncomplete = function () {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
                     debugLog("[Offline] Queued:", item.id);
                     _this2._notifyQueueUpdate();
                     if (navigator.onLine) {
@@ -13876,8 +15618,11 @@
                     }
                     resolve(item.id);
                   };
+                  tx.onabort = function (ev) {
+                    return fail(refusal || ev.target.error || new Error("OfflineQueue: the add transaction was aborted."));
+                  };
                   tx.onerror = function (ev) {
-                    return reject(ev.target.error);
+                    return fail(refusal || ev.target.error);
                   };
                 }));
             }
@@ -13917,6 +15662,13 @@
                   req.onerror = function () {
                     return reject(req.error);
                   };
+                  // The transaction can end without the request ever failing — a
+                  // quota abort, a version change, a close under it — and with only
+                  // the request handlers above this promise then never settled at
+                  // all. A caller awaiting it waits for the life of the page.
+                  tx.onabort = function () {
+                    return reject(tx.error || new Error("QueueReadAborted"));
+                  };
                 }));
             }
           }, _callee3, this);
@@ -13938,9 +15690,12 @@
       value: (function () {
         var _remove = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee4(id) {
           var _this4 = this;
+          var token,
+            _args4 = arguments;
           return _regenerator().w(function (_context4) {
             while (1) switch (_context4.n) {
               case 0:
+                token = _args4.length > 1 && _args4[1] !== undefined ? _args4[1] : null;
                 if (this.db) {
                   _context4.n = 1;
                   break;
@@ -13949,12 +15704,35 @@
               case 1:
                 return _context4.a(2, new Promise(function (resolve, reject) {
                   var tx = _this4.db.transaction([CONFIG.storeName], "readwrite");
-                  tx.objectStore(CONFIG.storeName).delete(id);
+                  var store = tx.objectStore(CONFIG.storeName);
+                  if (token === null) {
+                    // An unclaimed removal, for callers that never took a claim.
+                    store.delete(id);
+                  } else {
+                    // Read and delete in the same transaction, so a drain whose
+                    // lease lapsed cannot delete a row another tab has since
+                    // claimed and may be uploading. An unconditional delete here
+                    // was the last place an expired owner could still destroy the
+                    // new owner's work.
+                    var req = store.get(id);
+                    req.onsuccess = function () {
+                      var item = req.result;
+                      if (holdsClaim(item, token)) {
+                        store.delete(id);
+                      }
+                    };
+                    req.onerror = function (ev) {
+                      return reject(ev.target.error);
+                    };
+                  }
                   tx.oncomplete = function () {
                     _this4._notifyQueueUpdate();
                     resolve();
                   };
                   tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
                     return reject(ev.target.error);
                   };
                 }));
@@ -13965,11 +15743,26 @@
           return _remove.apply(this, arguments);
         }
         return remove;
-      }() /** @private */)
+      }()
+      /**
+       * Record that the server has accepted these bytes.
+       *
+       * Written under the claim, before any completion handling, so that a tab
+       * which dies afterwards leaves a row the next drain *reconciles* rather
+       * than uploads again.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token The claim this drain holds.
+       * @returns {Promise<boolean|null>} True written, false the row is no longer
+       *   this drain's and nothing after the transfer belongs to it, null when
+       *   storage could not say — which is not permission to upload again.
+       */
+      )
     }, {
-      key: "_updateRetry",
+      key: "_markTransferred",
       value: (function () {
-        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, retryCount, error) {
+        var _markTransferred2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee5(id, token) {
           var _this5 = this;
           return _regenerator().w(function (_context5) {
             while (1) switch (_context5.n) {
@@ -13980,16 +15773,970 @@
                 }
                 return _context5.a(2);
               case 1:
-                return _context5.a(2, new Promise(function (resolve, reject) {
-                  var tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
+                return _context5.a(2, new Promise(function (resolve) {
+                  var tx;
+                  var store;
+                  try {
+                    tx = _this5.db.transaction([CONFIG.storeName], "readwrite");
+                    store = tx.objectStore(CONFIG.storeName);
+                  } catch (_unused) {
+                    // A closed or unusable connection answers "unknown" like every
+                    // other storage failure here. Throwing instead would reject
+                    // into the drain's catch, where `uploaded` is already true and
+                    // the row would be held as a completion failure rather than as
+                    // a transfer that could not be recorded — the same outcome by
+                    // accident, but with a reason that misdescribes what happened.
+                    resolve(null);
+                    return;
+                  }
+                  var req = store.get(id);
+                  var committed = false;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (holdsClaim(item, token)) {
+                      item.transferred = true;
+                      store.put(item);
+                      committed = true;
+                    }
+                  };
+
+                  // Resolves with whether the marker was actually written. Resolving
+                  // identically either way let the caller continue into the
+                  // completion event and cleanup after losing the row — emitting a
+                  // duplicate boundary event while another tab owned it — and left a
+                  // `transferred: false` row behind, which the next drain then
+                  // attempted again. The fingerprint is now kept until the transfer
+                  // is recorded, so such an attempt resumes the accepted resource
+                  // rather than creating a second one; the row still needs marking,
+                  // and this still has to say whether the marking happened.
+                  // Storage could not answer, which is not the same as the row
+                  // belonging to someone else — the distinction `_renewClaim()` also
+                  // draws, and it matters more here. This runs *after* the bytes
+                  // landed, so reading a failed write as "not ours" left the row
+                  // `transferred: false` for a recording the server had accepted —
+                  // and before the fingerprint was kept past this point, the next
+                  // drain had no way to resume it and started a second TUS resource.
+                  req.onerror = function () {
+                    return resolve(null);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(committed);
+                  };
+                  tx.onerror = function () {
+                    return resolve(null);
+                  };
+                  tx.onabort = function () {
+                    return resolve(null);
+                  };
+                }));
+            }
+          }, _callee5, this);
+        }));
+        function _markTransferred(_x5, _x6) {
+          return _markTransferred2.apply(this, arguments);
+        }
+        return _markTransferred;
+      }()
+      /**
+       * Record that `starmus:complete` has been announced for this submission.
+       *
+       * Written *after* the event is emitted, and the ordering is deliberate. The
+       * marker is what stops a second boundary event for one upload; writing it
+       * first traded a duplicate event for a lost one, because a page that died
+       * between the write and the dispatch left the row recorded as announced and
+       * the next drain removed it without ever emitting the event — an asset on
+       * the server that nothing downstream was told about. A duplicate carries the
+       * same `uploadId` and is dedupable by the consumer; a missing one is not.
+       *
+       * The JSDoc here used to describe the opposite order. That is worth saying
+       * plainly: a future change made against the comment rather than the code
+       * would reintroduce exactly the lost-event window the code is arranged to
+       * avoid.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token The claim this drain holds.
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "_markCompletionEmitted",
+      value: (function () {
+        var _markCompletionEmitted2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6(id, token) {
+          var _this6 = this;
+          return _regenerator().w(function (_context6) {
+            while (1) switch (_context6.n) {
+              case 0:
+                if (this.db) {
+                  _context6.n = 1;
+                  break;
+                }
+                return _context6.a(2);
+              case 1:
+                return _context6.a(2, new Promise(function (resolve) {
+                  var tx = _this6.db.transaction([CONFIG.storeName], "readwrite");
                   var store = tx.objectStore(CONFIG.storeName);
                   var req = store.get(id);
                   req.onsuccess = function () {
                     var item = req.result;
+                    if (holdsClaim(item, token)) {
+                      item.completionEmitted = true;
+                      store.put(item);
+                    }
+                  };
+                  req.onerror = function () {
+                    return resolve();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve();
+                  };
+                  tx.onerror = function () {
+                    return resolve();
+                  };
+                  tx.onabort = function () {
+                    return resolve();
+                  };
+                }));
+            }
+          }, _callee6, this);
+        }));
+        function _markCompletionEmitted(_x7, _x8) {
+          return _markCompletionEmitted2.apply(this, arguments);
+        }
+        return _markCompletionEmitted;
+      }())
+    }, {
+      key: "_hold",
+      value: function () {
+        var _hold2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7(id, reason) {
+          var _this7 = this;
+          var transferred,
+            token,
+            _args7 = arguments;
+          return _regenerator().w(function (_context7) {
+            while (1) switch (_context7.n) {
+              case 0:
+                transferred = _args7.length > 2 && _args7[2] !== undefined ? _args7[2] : false;
+                token = _args7.length > 3 && _args7[3] !== undefined ? _args7[3] : null;
+                if (this.db) {
+                  _context7.n = 1;
+                  break;
+                }
+                return _context7.a(2);
+              case 1:
+                return _context7.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this7.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    // The *whole* mutation is gated on ownership, not only the
+                    // lease clear below. Guarding just the clear meant a late hold
+                    // from a drain whose lease had lapsed could still mark the new
+                    // owner's active attempt held — or mark it transferred — while
+                    // that upload was running.
+                    if (token !== null && !holdsClaim(item, token)) {
+                      return;
+                    }
+                    if (item) {
+                      item.held = true;
+                      item.heldReason = reason;
+                      item.lastAttempt = Date.now();
+                      // Whether the server already has these bytes.
+                      //
+                      // An entry held *after* a completed transfer — completion
+                      // handling threw, or the local delete failed — must not be
+                      // uploaded again when someone releases it: the platform
+                      // already has these bytes. The flag is what lets the drain
+                      // finish the job rather than redo it. It mattered more
+                      // sharply when the resume fingerprint was dropped on
+                      // success and such an entry had no resume identity at all;
+                      // the fingerprint is kept now, but resuming a completed
+                      // resource to rediscover that it is complete is still the
+                      // long way round.
+                      if (transferred) {
+                        item.transferred = true;
+                      }
+                      // Holding ends this drain's interest in the row, so the
+                      // claim goes with it — otherwise a held entry stays
+                      // unclaimable until the lease lapses, for no purpose. Only
+                      // this drain's own claim is cleared.
+                      if (token !== null && holdsClaim(item, token)) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
+                      }
+                      store.put(item);
+                    }
+                  };
+                  tx.oncomplete = function () {
+                    console.warn("[Offline] Held:", id, reason);
+                    sparxstarIntegration.reportError("submission_held", {
+                      submissionId: id,
+                      reason: reason
+                    });
+                    _this7._notifyQueueUpdate();
+                    resolve();
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee7, this);
+        }));
+        function _hold(_x9, _x0) {
+          return _hold2.apply(this, arguments);
+        }
+        return _hold;
+      }()
+      /**
+       * What the queue is currently holding, in bytes and in entries.
+       *
+       * Exported through `getQueueUsage()` so a host can show the contributor how
+       * full the device is before they find out by being refused.
+       *
+       * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+       */
+    }, {
+      key: "usage",
+      value: (function () {
+        var _usage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
+          var _this8 = this;
+          return _regenerator().w(function (_context8) {
+            while (1) switch (_context8.n) {
+              case 0:
+                if (this.db) {
+                  _context8.n = 1;
+                  break;
+                }
+                return _context8.a(2, {
+                  totalBytes: 0,
+                  count: 0,
+                  heldBytes: 0,
+                  heldCount: 0,
+                  maxTotalBytes: CONFIG.maxTotalBytes
+                });
+              case 1:
+                return _context8.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this8.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var totalBytes = 0;
+                  var heldBytes = 0;
+                  var heldCount = 0;
+                  var count = 0;
+                  var req = store.openCursor();
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  req.onsuccess = function (event) {
+                    var _cursor$value3, _cursor$value4;
+                    var cursor = event.target.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var size = ((_cursor$value3 = cursor.value) === null || _cursor$value3 === void 0 || (_cursor$value3 = _cursor$value3.audioBlob) === null || _cursor$value3 === void 0 ? void 0 : _cursor$value3.size) || 0;
+                    totalBytes += size;
+                    count += 1;
+                    if (((_cursor$value4 = cursor.value) === null || _cursor$value4 === void 0 ? void 0 : _cursor$value4.held) === true) {
+                      heldBytes += size;
+                      heldCount += 1;
+                    }
+                    cursor.continue();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve({
+                      totalBytes: totalBytes,
+                      count: count,
+                      heldBytes: heldBytes,
+                      heldCount: heldCount,
+                      maxTotalBytes: CONFIG.maxTotalBytes
+                    });
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee8, this);
+        }));
+        function usage() {
+          return _usage.apply(this, arguments);
+        }
+        return usage;
+      }()
+      /**
+       * Put a held submission back in the queue.
+       *
+       * The counterpart to `_hold()`, and the reason holding is a state rather
+       * than a slow deletion. Without a way out, held entries accumulate against
+       * the queue's byte budget until `add()` refuses every new recording — which
+       * would trade "lose one old recording" for "lose the ability to record at
+       * all", a worse outcome than the deletion holding replaced.
+       *
+       * The retry count resets, because a person releasing an entry is saying the
+       * condition that stopped it has changed.
+       *
+       * @param {string} id
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "releaseHold",
+      value: (function () {
+        var _releaseHold = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(id) {
+          var _this9 = this;
+          return _regenerator().w(function (_context9) {
+            while (1) switch (_context9.n) {
+              case 0:
+                if (this.db) {
+                  _context9.n = 1;
+                  break;
+                }
+                return _context9.a(2);
+              case 1:
+                _context9.n = 2;
+                return new Promise(function (resolve, reject) {
+                  var tx = _this9.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  /** @type {Error|null} */
+                  var refusal = null;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!item) {
+                      // Nothing by that id. Resolving quietly let a host believe
+                      // it had made a recording retryable when the row was
+                      // already gone — and then scheduled a drain on the strength
+                      // of it. `discardHeld()` refuses an unknown id; this is the
+                      // same state machine and refuses it too.
+                      refusal = new Error("ReleaseRefused: no queued submission with id ".concat(id, "."));
+                      // Aborted, because the promise rejects from `onabort` —
+                      // setting `refusal` and returning let the transaction
+                      // complete and the call resolve as a success, which is the
+                      // behaviour this branch was added to stop.
+                      tx.abort();
+                      return;
+                    }
+                    // Only a held entry. Releasing clears `retryCount`,
+                    // `lastAttempt` and `error` and schedules an immediate drain,
+                    // so calling it on an entry that is merely waiting out its
+                    // backoff discarded that backoff — a host with a stale id
+                    // could push a failing upload straight back onto a bad link,
+                    // repeatedly, at the contributor's expense. `discardHeld()`
+                    // guards the same way; this is the same state machine.
+                    if (item.held !== true) {
+                      refusal = new Error("ReleaseRefused: ".concat(id, " is not held. Only a held submission can be released; the queue manages its own retries."));
+                      tx.abort();
+                      return;
+                    }
+                    item.held = false;
+                    item.heldReason = null;
+                    item.retryCount = 0;
+                    item.lastAttempt = null;
+                    item.error = null;
+                    // And the drain claim from whatever attempt led to the hold, so
+                    // the next drain can pick this up now rather than waiting out a
+                    // lease left by an attempt that is long over. Both fields:
+                    // clearing only the expiry left the old owner token in place,
+                    // so a late `_renewClaim()` from that drain could renew a row
+                    // it no longer had any business holding.
+                    item.leaseOwner = null;
+                    item.leaseUntil = null;
+                    store.put(item);
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    _this9._notifyQueueUpdate();
+                    resolve();
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                });
+              case 2:
+                this._scheduleProcessQueue(0);
+              case 3:
+                return _context9.a(2);
+            }
+          }, _callee9, this);
+        }));
+        function releaseHold(_x1) {
+          return _releaseHold.apply(this, arguments);
+        }
+        return releaseHold;
+      }()
+      /**
+       * Delete a held submission, on a person's explicit instruction.
+       *
+       * The only deletion in this module that is not a successful upload, and it
+       * exists because the alternative is a device that fills with recordings
+       * nobody can clear. It is deliberately not reachable from any automatic
+       * path: ADR-011 forbids this module deciding a contributor's material is
+       * expendable, and nothing here decides. Someone does, and says why.
+       *
+       * @param {string} id
+       * @param {string} reason Required, and recorded before the entry goes.
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "discardHeld",
+      value: (function () {
+        var _discardHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0(id, reason) {
+          var _this0 = this;
+          var given, heldReason;
+          return _regenerator().w(function (_context0) {
+            while (1) switch (_context0.n) {
+              case 0:
+                // Required, not merely recorded. This is the one deletion here that is
+                // not a successful upload, and the reason is what makes it a decision
+                // someone took rather than something that happened. Accepting a blank
+                // one and logging "(no reason given)" left the only non-upload
+                // deletion path in the module able to run with no rationale at all —
+                // the audit trail this method exists to produce, absent from the one
+                // event that needs it.
+                given = typeof reason === "string" ? reason.trim() : "";
+                if (!(given === "")) {
+                  _context0.n = 1;
+                  break;
+                }
+                throw new Error("DiscardRefused: ".concat(id, " needs a reason. Deleting a contributor's recording is an explicit decision and is recorded as one."));
+              case 1:
+                if (this.db) {
+                  _context0.n = 2;
+                  break;
+                }
+                return _context0.a(2);
+              case 2:
+                _context0.n = 3;
+                return new Promise(function (resolve, reject) {
+                  var tx = _this0.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  /** @type {Error|null} */
+                  var refusal = null;
+                  var found = null;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!item) {
+                      // Nothing was deleted, so nothing is reported as deleted.
+                      // Falling through here logged the discard and emitted the
+                      // `submission_discarded` audit event for a row that did not
+                      // exist — an audit trail recording a deletion that never
+                      // happened is worse than one with a gap.
+                      refusal = new Error("DiscardRefused: ".concat(id, " is not in the queue."));
+                      tx.abort();
+                      return;
+                    }
+                    if (item.held !== true) {
+                      refusal = new Error("DiscardRefused: ".concat(id, " is not held. Only a held submission can be discarded, and only on an explicit instruction."));
+                      tx.abort();
+                      return;
+                    }
+                    found = item.heldReason || null;
+                    store.delete(id);
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(found);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(refusal || ev.target.error);
+                  };
+                });
+              case 3:
+                heldReason = _context0.v;
+                // Reported after the delete commits, not before. An audit line for a
+                // deletion that then failed to happen is a different kind of wrong
+                // record from no line at all.
+                console.warn("[Offline] Discarded on instruction:", id, given);
+                sparxstarIntegration.reportError("submission_discarded", {
+                  submissionId: id,
+                  reason: given,
+                  heldReason: heldReason
+                });
+                this._notifyQueueUpdate();
+              case 4:
+                return _context0.a(2);
+            }
+          }, _callee0, this);
+        }));
+        function discardHeld(_x10, _x11) {
+          return _discardHeld.apply(this, arguments);
+        }
+        return discardHeld;
+      }()
+      /**
+       * Submissions that are kept but will not be retried without intervention.
+       *
+       * Surfaced so a host can show them rather than let them sit invisibly: a
+       * held recording that nobody is told about is a lost one with extra steps.
+       *
+       * Summaries, not records. `getAll()` materialises every queued entry
+       * *including its audio Blob*, so a host listing held items to draw a panel
+       * pulled the whole queue — up to the 20 MB cap — into memory to render a
+       * few lines of text, on devices with far less headroom than that. Nothing a
+       * host needs in order to describe a held recording lives in the bytes, so
+       * the bytes do not come along. A cursor visits the rows; only the fields
+       * that describe them are kept.
+       *
+       * @returns {Promise<Array<Object>>} One summary per held submission.
+       */
+      )
+    }, {
+      key: "getHeld",
+      value: (function () {
+        var _getHeld = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee1() {
+          var _this1 = this;
+          return _regenerator().w(function (_context1) {
+            while (1) switch (_context1.n) {
+              case 0:
+                if (this.db) {
+                  _context1.n = 1;
+                  break;
+                }
+                return _context1.a(2, []);
+              case 1:
+                return _context1.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this1.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var held = [];
+                  var req = store.openCursor();
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  req.onsuccess = function (event) {
+                    var cursor = event.target.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var item = cursor.value;
+                    if ((item === null || item === void 0 ? void 0 : item.held) === true) {
+                      var _item$retryCount, _item$lastAttempt, _item$error, _item$audioBlob, _item$audioBlob2, _item$metadata, _item$metadata2, _item$metadata3;
+                      held.push({
+                        id: item.id,
+                        instanceId: item.instanceId,
+                        fileName: item.fileName,
+                        timestamp: item.timestamp,
+                        heldReason: item.heldReason || null,
+                        retryCount: (_item$retryCount = item.retryCount) !== null && _item$retryCount !== void 0 ? _item$retryCount : 0,
+                        lastAttempt: (_item$lastAttempt = item.lastAttempt) !== null && _item$lastAttempt !== void 0 ? _item$lastAttempt : null,
+                        error: (_item$error = item.error) !== null && _item$error !== void 0 ? _item$error : null,
+                        sizeBytes: ((_item$audioBlob = item.audioBlob) === null || _item$audioBlob === void 0 ? void 0 : _item$audioBlob.size) || 0,
+                        mimeType: ((_item$audioBlob2 = item.audioBlob) === null || _item$audioBlob2 === void 0 ? void 0 : _item$audioBlob2.type) || ((_item$metadata = item.metadata) === null || _item$metadata === void 0 ? void 0 : _item$metadata.mimeType) || "",
+                        captureProfile: ((_item$metadata2 = item.metadata) === null || _item$metadata2 === void 0 ? void 0 : _item$metadata2.captureProfile) || null,
+                        // Whether the server already has these bytes. A host
+                        // showing this entry needs to know that releasing it
+                        // finishes the job rather than sending it again.
+                        transferred: item.transferred === true,
+                        // And under which identifier, because `transferred`
+                        // alone cannot be acted on. When the bytes have landed
+                        // this is the only handle the two sides share: without
+                        // it a host can see that an asset is on the server and
+                        // still have no way to say which one, so a
+                        // post-transfer failure cannot be reconciled or even
+                        // reported. Canonicalised the same way the drain
+                        // canonicalises it, and null rather than a malformed
+                        // string when there is nothing usable to give.
+                        uploadId: isUploadId((_item$metadata3 = item.metadata) === null || _item$metadata3 === void 0 ? void 0 : _item$metadata3.uploadId) ? item.metadata.uploadId.trim() : null
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(held);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee1, this);
+        }));
+        function getHeld() {
+          return _getHeld.apply(this, arguments);
+        }
+        return getHeld;
+      }()
+      /**
+       * Replace a submission's metadata in place.
+       *
+       * @private
+       * @param {string} id
+       * @param {Object} metadata
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "_setMetadata",
+      value: (function () {
+        var _setMetadata2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee10(id, metadata) {
+          var _this10 = this;
+          var token,
+            _args10 = arguments;
+          return _regenerator().w(function (_context10) {
+            while (1) switch (_context10.n) {
+              case 0:
+                token = _args10.length > 2 && _args10[2] !== undefined ? _args10[2] : null;
+                if (this.db) {
+                  _context10.n = 1;
+                  break;
+                }
+                return _context10.a(2);
+              case 1:
+                return _context10.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this10.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  var wrote = false;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    // Claim-checked like every other write. A drain suspended after
+                    // claiming, whose lease then lapsed and whose row another tab
+                    // took, could otherwise overwrite the new owner's metadata —
+                    // its upload UUID included, which is the fingerprint its
+                    // in-flight transfer resumes against.
+                    if (token !== null && !holdsClaim(item, token)) {
+                      return;
+                    }
+                    if (item) {
+                      item.metadata = metadata;
+                      store.put(item);
+                      wrote = true;
+                    }
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  // Whether the metadata is actually stored, resolved after the
+                  // transaction commits. The caller is about to transfer bytes
+                  // identified by what this was asked to persist; told nothing, it
+                  // proceeded under an id no row records.
+                  tx.oncomplete = function () {
+                    return resolve(wrote);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee10, this);
+        }));
+        function _setMetadata(_x12, _x13) {
+          return _setMetadata2.apply(this, arguments);
+        }
+        return _setMetadata;
+      }()
+      /** @private */
+      /**
+       * Claim a row for this drain, or report that someone else holds it.
+       *
+       * One readwrite transaction, so two tabs cannot both see the row free. The
+       * returned token identifies this claim: every later mutation presents it,
+       * and a mutation from a drain that no longer owns the row does nothing.
+       *
+       * `held` is re-checked here rather than trusted from the caller's snapshot,
+       * which was taken before this transaction and may be stale — another tab
+       * can put a row on hold in that gap, and claiming it anyway would upload a
+       * submission a person had explicitly stopped.
+       *
+       * Returns the row as it stands *inside* the claiming transaction, not as
+       * the caller's snapshot had it. `processQueue()` lists ids with
+       * `_pendingSummaries()` and claims them one at a time, so by the time a row
+       * is claimed
+       * another tab may have recorded a failed attempt against it and released
+       * it. Working from the snapshot then used a stale `retryCount` and
+       * `lastAttempt` — bypassing the backoff and overwriting the newer state —
+       * and a stale `metadata`, which is where the upload identity lives.
+       *
+       * @private
+       * @param {string} id
+       * @returns {Promise<{token: string, row: Object}|null>} Null if not claimable.
+       */
+      )
+    }, {
+      key: "_claim",
+      value: (function () {
+        var _claim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee11(id) {
+          var _this11 = this;
+          var token;
+          return _regenerator().w(function (_context11) {
+            while (1) switch (_context11.n) {
+              case 0:
+                if (this.db) {
+                  _context11.n = 1;
+                  break;
+                }
+                return _context11.a(2, null);
+              case 1:
+                token = createOfflineSubmissionId();
+                return _context11.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this11.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  /** @type {Object|null} */
+                  var claimed = null;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!item) {
+                      // Gone since the snapshot — another drain finished it.
+                      return;
+                    }
+                    if (item.held === true) {
+                      return;
+                    }
+                    var now = Date.now();
+                    if (typeof item.leaseUntil === "number" && item.leaseUntil > now) {
+                      return;
+                    }
+                    item.leaseOwner = token;
+                    item.leaseUntil = now + CONFIG.leaseMs;
+                    store.put(item);
+                    claimed = item;
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(claimed ? {
+                      token: token,
+                      row: claimed
+                    } : null);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee11, this);
+        }));
+        function _claim(_x14) {
+          return _claim2.apply(this, arguments);
+        }
+        return _claim;
+      }()
+      /**
+       * Extend a claim this drain still owns.
+       *
+       * Called as the transfer reports progress. A transfer that is moving keeps
+       * its row; one that has stopped moving lets the lease lapse, and another
+       * tab — or this one, later — can pick it up.
+       *
+       * @private
+       * Three outcomes, not two. A storage failure is not evidence that the row
+       * changed hands, and reporting it as such was how a *successful* upload got
+       * abandoned: the drain saw `false`, stood down, and left the row
+       * `transferred: false` for bytes the server had accepted — which, before
+       * the resume fingerprint was kept past the transfer, meant the next drain
+       * created a second TUS resource rather than reconciling the first. That is
+       * the duplicate this whole mechanism exists to prevent, produced by the
+       * mechanism itself.
+       *
+       * Nothing here is authoritative about ownership. `_markTransferred()` runs a
+       * claim-checked write after the transfer and reports what actually landed,
+       * so an unknown answer costs a renewal, not a recording.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token
+       * @returns {Promise<boolean|null>} True renewed, false the row is no longer
+       *   this drain's, null when storage could not answer.
+       */
+      )
+    }, {
+      key: "_renewClaim",
+      value: (function () {
+        var _renewClaim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee12(id, token) {
+          var _this12 = this;
+          return _regenerator().w(function (_context12) {
+            while (1) switch (_context12.n) {
+              case 0:
+                if (this.db) {
+                  _context12.n = 1;
+                  break;
+                }
+                return _context12.a(2, null);
+              case 1:
+                return _context12.a(2, new Promise(function (resolve) {
+                  var tx;
+                  var store;
+                  try {
+                    tx = _this12.db.transaction([CONFIG.storeName], "readwrite");
+                    store = tx.objectStore(CONFIG.storeName);
+                  } catch (_unused2) {
+                    // A closed or unusable connection. Unknown, not lost.
+                    resolve(null);
+                    return;
+                  }
+                  var req = store.get(id);
+                  var renewed = false;
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (!holdsClaim(item, token)) {
+                      return;
+                    }
+                    item.leaseUntil = Date.now() + CONFIG.leaseMs;
+                    store.put(item);
+                    renewed = true;
+                  };
+
+                  // Storage could not answer. Distinct from an answer of "not yours".
+                  req.onerror = function () {
+                    return resolve(null);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(renewed);
+                  };
+                  tx.onerror = function () {
+                    return resolve(null);
+                  };
+                  tx.onabort = function () {
+                    return resolve(null);
+                  };
+                }));
+            }
+          }, _callee12, this);
+        }));
+        function _renewClaim(_x15, _x16) {
+          return _renewClaim2.apply(this, arguments);
+        }
+        return _renewClaim;
+      }()
+      /**
+       * Give up a claim, so the row is retryable before the lease would lapse.
+       *
+       * Only if this drain still owns it. Clearing unconditionally meant that a
+       * drain whose lease had already lapsed — and whose row another tab had
+       * since claimed — could release the *new* owner's claim on its way out,
+       * and then overwrite the state of an upload that was actively running.
+       *
+       * @private
+       * @param {string} id
+       * @param {string} token
+       * @returns {Promise<void>}
+       */
+      )
+    }, {
+      key: "_releaseClaim",
+      value: (function () {
+        var _releaseClaim2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee13(id, token) {
+          var _this13 = this;
+          return _regenerator().w(function (_context13) {
+            while (1) switch (_context13.n) {
+              case 0:
+                if (this.db) {
+                  _context13.n = 1;
+                  break;
+                }
+                return _context13.a(2);
+              case 1:
+                return _context13.a(2, new Promise(function (resolve) {
+                  var tx = _this13.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    if (holdsClaim(item, token)) {
+                      item.leaseOwner = null;
+                      item.leaseUntil = null;
+                      store.put(item);
+                    }
+                  };
+
+                  // A claim that cannot be released is not an error worth failing a
+                  // drain over: the lease lapses on its own. That is why every
+                  // ending here resolves — including the abort, which was the one
+                  // ending with no handler. `processQueue()` awaits this, so an
+                  // abort stopped the drain where it stood rather than letting it
+                  // move to the next row.
+                  req.onerror = function () {
+                    return resolve();
+                  };
+                  tx.oncomplete = function () {
+                    return resolve();
+                  };
+                  tx.onerror = function () {
+                    return resolve();
+                  };
+                  tx.onabort = function () {
+                    return resolve();
+                  };
+                }));
+            }
+          }, _callee13, this);
+        }));
+        function _releaseClaim(_x17, _x18) {
+          return _releaseClaim2.apply(this, arguments);
+        }
+        return _releaseClaim;
+      }())
+    }, {
+      key: "_updateRetry",
+      value: function () {
+        var _updateRetry2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee14(id, retryCount, error) {
+          var _this14 = this;
+          var token,
+            _args14 = arguments;
+          return _regenerator().w(function (_context14) {
+            while (1) switch (_context14.n) {
+              case 0:
+                token = _args14.length > 3 && _args14[3] !== undefined ? _args14[3] : null;
+                if (this.db) {
+                  _context14.n = 1;
+                  break;
+                }
+                return _context14.a(2);
+              case 1:
+                return _context14.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this14.db.transaction([CONFIG.storeName], "readwrite");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.get(id);
+                  req.onsuccess = function () {
+                    var item = req.result;
+                    // Ownership gates the whole write, as in `_hold()`: a late
+                    // failure from an expired drain must not rewrite the retry
+                    // state of an attempt another tab now owns.
+                    if (token !== null && !holdsClaim(item, token)) {
+                      return;
+                    }
                     if (item) {
                       item.retryCount = retryCount;
                       item.lastAttempt = Date.now();
                       item.error = error || null;
+                      // The backoff state and the claim release are one write.
+                      // Releasing first left a window in which the row was
+                      // claimable while still carrying the *previous* attempt's
+                      // retryCount and lastAttempt — so another tab could take it
+                      // immediately, with no backoff, and race this update.
+                      if (token !== null && holdsClaim(item, token)) {
+                        item.leaseOwner = null;
+                        item.leaseUntil = null;
+                      }
                       store.put(item);
                     }
                   };
@@ -13999,11 +16746,25 @@
                   tx.oncomplete = function () {
                     return resolve();
                   };
+                  // Settled on failure too. Without these the promise stayed pending
+                  // forever when the transaction aborted — a quota error, a closing
+                  // connection — and `processQueue()` awaits it with
+                  // `isProcessing = true` already set. The flag then never cleared,
+                  // so every later drain returned at its first line and every queued
+                  // recording was stranded for the life of the page. A rejection here
+                  // is caught by the drain and rescheduled; silence was the only
+                  // outcome that could not recover.
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error || new Error("OfflineQueue: the retry update was aborted."));
+                  };
                 }));
             }
-          }, _callee5, this);
+          }, _callee14, this);
         }));
-        function _updateRetry(_x5, _x6, _x7) {
+        function _updateRetry(_x19, _x20, _x21) {
           return _updateRetry2.apply(this, arguments);
         }
         return _updateRetry;
@@ -14014,191 +16775,619 @@
        *
        * @returns {Promise<void>}
        */
-      )
     }, {
       key: "processQueue",
       value: (function () {
-        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee6() {
-          var _sparxstarIntegration;
-          var pending, _iterator, _step, item, id, audioBlob, fileName, formFields, metadata, retryCount, instanceId, delay, _metadata$durationMs, _metadata$env2, result, detail, msg, nonRetryable, nextRetryCount, nextDelay, _t, _t2, _t3, _t4;
-          return _regenerator().w(function (_context6) {
-            while (1) switch (_context6.p = _context6.n) {
+        var _processQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee15() {
+          var _sparxstarIntegration,
+            _this15 = this;
+          var pending, msg, _iterator, _step, _loop, _ret, nextDelay, _t6, _t7, _t8, _t9;
+          return _regenerator().w(function (_context16) {
+            while (1) switch (_context16.p = _context16.n) {
               case 0:
                 if (!(this.isProcessing || !navigator.onLine)) {
-                  _context6.n = 1;
+                  _context16.n = 1;
                   break;
                 }
-                return _context6.a(2);
+                return _context16.a(2);
               case 1:
                 this._clearScheduledProcessQueue();
-                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
-                  _context6.n = 2;
-                  break;
-                }
-                this._scheduleProcessQueue(CONFIG.retryDelays[1]);
-                return _context6.a(2);
-              case 2:
-                this.isProcessing = true;
-                _context6.p = 3;
-                _context6.n = 4;
-                return this.getAll();
+
+                // Guarded, and it reschedules. The drain is invoked as
+                // `void this.processQueue()` from a timer, so a storage failure here —
+                // before the try below, before `isProcessing` is set — became an
+                // unhandled rejection *and* left no wake scheduled, stranding every
+                // queued recording until a reload or an unrelated online event.
+                /** @type {Array<Object>} */
+                _context16.p = 2;
+                _context16.n = 3;
+                return this._pendingSummaries();
+              case 3:
+                pending = _context16.v;
+                _context16.n = 5;
+                break;
               case 4:
-                pending = _context6.v;
+                _context16.p = 4;
+                _t6 = _context16.v;
+                msg = _t6 && _t6.message ? _t6.message : String(_t6);
+                console.error("[Offline] Could not list the queue:", msg);
+                this._reportStorageFailure("queue_listing_failed", _t6);
+                // A bounded retry rather than silence. If storage is failing for
+                // good this costs one wake per interval; if it was transient the
+                // queue resumes on its own, which is the case worth surviving.
+                this._scheduleProcessQueue(CONFIG.retryDelays[CONFIG.retryDelays.length - 1]);
+                return _context16.a(2);
+              case 5:
                 if (!(pending.length === 0)) {
-                  _context6.n = 5;
+                  _context16.n = 6;
                   break;
                 }
-                return _context6.a(2);
-              case 5:
+                return _context16.a(2);
+              case 6:
+                if (!((_sparxstarIntegration = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration !== void 0 && _sparxstarIntegration.call(sparxstarIntegration))) {
+                  _context16.n = 7;
+                  break;
+                }
+                return _context16.a(2);
+              case 7:
+                this.isProcessing = true;
+                _context16.p = 8;
                 debugLog("[Offline] Processing ".concat(pending.length, " items"));
                 _iterator = _createForOfIteratorHelper$1(pending);
-                _context6.p = 6;
+                _context16.p = 9;
+                _loop = /*#__PURE__*/_regenerator().m(function _loop() {
+                  var _current$retryCount;
+                  var item, id, retryCount, metadata, uploaded, _metadata, _metadata2, _metadata$durationMs, _metadata3, _metadata4, _metadata5, _metadata6, reconcileClaim, reconcileToken, row, _audioBlob, _fileName, _formFields, _instanceId, detail, _msg, claim, claimToken, current, audioBlob, fileName, formFields, instanceId, delay, heldForReconciliation, uploadIdUnrecorded, _metadata7, _metadata8, storedId, backfilled, _msg2, _metadata9, _metadata$durationMs2, _metadata0, _metadata1, _metadata10, _metadata11, lastRenewal, renewalInFlight, claimLost, result, recorded, _detail, _metadata12, _metadata13, _msg3, _msg4, nextRetryCount, _msg5, _t, _t2, _t4, _t5;
+                  return _regenerator().w(function (_context15) {
+                    while (1) switch (_context15.p = _context15.n) {
+                      case 0:
+                        item = _step.value;
+                        // Only the id. Everything this attempt needs — the recording
+                        // included — comes from the row the claim transaction reads,
+                        // which has been the authoritative copy since the claim was
+                        // introduced and is now the only copy loaded at all.
+                        id = item.id;
+                        /** @type {number} */
+                        retryCount = 0;
+                        /** @type {Object|undefined} Replaced wholesale by the backfill
+                         * below for a row that has no metadata object at all. */
+                        // Whether the bytes reached the server on this attempt.
+                        uploaded = false;
+                        if (!item.held) {
+                          _context15.n = 1;
+                          break;
+                        }
+                        return _context15.a(2, 0);
+                      case 1:
+                        if (!(item.transferred === true)) {
+                          _context15.n = 12;
+                          break;
+                        }
+                        _context15.n = 2;
+                        return _this15._claim(id);
+                      case 2:
+                        reconcileClaim = _context15.v;
+                        if (reconcileClaim) {
+                          _context15.n = 3;
+                          break;
+                        }
+                        return _context15.a(2, 0);
+                      case 3:
+                        reconcileToken = reconcileClaim.token; // The row as the claim transaction saw it, not the snapshot.
+                        row = reconcileClaim.row;
+                        if (!(row.transferred !== true)) {
+                          _context15.n = 5;
+                          break;
+                        }
+                        _context15.n = 4;
+                        return _this15._releaseClaim(id, reconcileToken);
+                      case 4:
+                        return _context15.a(2, 0);
+                      case 5:
+                        metadata = row.metadata;
+                        _audioBlob = row.audioBlob, _fileName = row.fileName, _formFields = row.formFields, _instanceId = row.instanceId; // The server already has these bytes; what failed was
+                        // afterwards. Uploading again would hand the platform a
+                        // second copy of a recording it accepted. So this entry is
+                        // finished rather than resent: the completion event that
+                        // never fired is emitted now, and the entry goes. (Before
+                        // the fingerprint was kept past the transfer, it could not
+                        // even have resumed the first — there was no resume
+                        // identity left to try.)
+                        //
+                        // Reached only after a release, since holding is what put
+                        // the flag here. Before this existed, releasing such an
+                        // entry duplicated the recording.
+                        detail = buildCompletionDetail({
+                          instanceId: _instanceId,
+                          result: {
+                            success: true,
+                            uploadId: (_metadata = metadata) === null || _metadata === void 0 ? void 0 : _metadata.uploadId
+                          },
+                          metadata: metadata,
+                          formFields: _formFields,
+                          fileName: _fileName,
+                          mimeType: ((_metadata2 = metadata) === null || _metadata2 === void 0 ? void 0 : _metadata2.mimeType) || _audioBlob.type || "",
+                          durationMs: (_metadata$durationMs = (_metadata3 = metadata) === null || _metadata3 === void 0 ? void 0 : _metadata3.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                          language: ((_metadata4 = metadata) === null || _metadata4 === void 0 ? void 0 : _metadata4.language) || (_formFields === null || _formFields === void 0 ? void 0 : _formFields.language),
+                          contributorId: ((_metadata5 = metadata) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.env) === null || _metadata5 === void 0 || (_metadata5 = _metadata5.identifiers) === null || _metadata5 === void 0 ? void 0 : _metadata5.visitorId) || "",
+                          calibrationApplied: !!((_metadata6 = metadata) !== null && _metadata6 !== void 0 && _metadata6.calibration)
+                        }); // At-least-once, and the ordering says so: the event is
+                        // emitted first and the marker written after. An earlier
+                        // revision did the reverse and this comment still described
+                        // it. Marking first traded a duplicate for a *lost* event —
+                        // a page dying in between left the entry recorded as
+                        // announced and the next drain removed it without ever
+                        // emitting the boundary. A duplicate carries the same
+                        // `uploadId` and is dedupable; a missing one is not.
+                        if (!(row.completionEmitted !== true)) {
+                          _context15.n = 7;
+                          break;
+                        }
+                        // Emit, then mark — see the success path for why
+                        // at-least-once is the right side to err on.
+                        emitCompletionEvent(detail);
+                        _context15.n = 6;
+                        return _this15._markCompletionEmitted(id, reconcileToken);
+                      case 6:
+                        _context15.n = 8;
+                        break;
+                      case 7:
+                      case 8:
+                        _context15.p = 8;
+                        _context15.n = 9;
+                        return _this15.remove(id, reconcileToken);
+                      case 9:
+                        _context15.n = 11;
+                        break;
+                      case 10:
+                        _context15.p = 10;
+                        _t = _context15.v;
+                        _msg = _t && _t.message ? _t.message : String(_t);
+                        _context15.n = 11;
+                        return _this15._hold(id, "Reconciled; local cleanup failed: ".concat(_msg), true, reconcileToken);
+                      case 11:
+                        return _context15.a(2, 0);
+                      case 12:
+                        _context15.n = 13;
+                        return _this15._claim(id);
+                      case 13:
+                        claim = _context15.v;
+                        if (claim) {
+                          _context15.n = 14;
+                          break;
+                        }
+                        return _context15.a(2, 0);
+                      case 14:
+                        claimToken = claim.token; // From here on the row is the one the claim transaction read,
+                        // not the `_pendingSummaries()` listing this loop is iterating.
+                        // Another
+                        // tab can record a failed attempt and release a row between the
+                        // two, and continuing from the snapshot then reused a stale
+                        // `retryCount` and `lastAttempt` — skipping the backoff — and a
+                        // stale `metadata`, which carries the upload identity.
+                        current = claim.row;
+                        retryCount = (_current$retryCount = current.retryCount) !== null && _current$retryCount !== void 0 ? _current$retryCount : 0;
+                        metadata = current.metadata;
+                        audioBlob = current.audioBlob, fileName = current.fileName, formFields = current.formFields, instanceId = current.instanceId;
+                        if (!(current.transferred === true)) {
+                          _context15.n = 16;
+                          break;
+                        }
+                        _context15.n = 15;
+                        return _this15._releaseClaim(id, claimToken);
+                      case 15:
+                        return _context15.a(2, 0);
+                      case 16:
+                        if (!(retryCount >= CONFIG.maxRetries)) {
+                          _context15.n = 18;
+                          break;
+                        }
+                        _context15.n = 17;
+                        return _this15._hold(id, "Upload failed ".concat(retryCount, " times; the recording is held here and needs attention."), false, claimToken);
+                      case 17:
+                        return _context15.a(2, 0);
+                      case 18:
+                        if (!(current.lastAttempt !== null && current.lastAttempt !== undefined)) {
+                          _context15.n = 20;
+                          break;
+                        }
+                        delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
+                        if (!(Date.now() - current.lastAttempt < delay)) {
+                          _context15.n = 20;
+                          break;
+                        }
+                        _context15.n = 19;
+                        return _this15._releaseClaim(id, claimToken);
+                      case 19:
+                        return _context15.a(2, 0);
+                      case 20:
+                        // Entries queued before the submission id existed have no
+                        // `metadata.uploadId`, so every retry would mint a new one and
+                        // start a new TUS resource instead of resuming the partial it
+                        // already has. Backfilled once and persisted, so the
+                        // one-id-per-submission rule reaches recordings already sitting
+                        // on devices rather than only new ones.
+                        //
+                        // The test is the one the upload module applies, not merely "is
+                        // something there": `uploadTus()` replaces any id that is not a
+                        // UUID v4, so an entry carrying a non-empty invalid id was left
+                        // alone here and then silently re-identified on every attempt —
+                        // a different fingerprint each time, never able to resume the
+                        // partial the previous attempt left on the server.
+                        // Set when the transfer landed but could not be recorded, so
+                        // the row is held for reconciliation and must survive cleanup.
+                        heldForReconciliation = false; // Set when the upload id could not be written back, because
+                        // this drain no longer holds the row. Named for what it means
+                        // rather than for the lease, so it cannot be confused with
+                        // `claimLost` below, which tracks ownership during the transfer
+                        // itself — two similarly named booleans in one function is how
+                        // the next edit goes wrong.
+                        uploadIdUnrecorded = false;
+                        _context15.p = 21;
+                        // Canonicalised, not merely accepted. `isUploadId()` allows
+                        // surrounding whitespace and `uploadTus()` trims before
+                        // deriving the fingerprint and `upload_uuid` — so an id
+                        // stored with whitespace made the reconciliation path
+                        // announce a different string from the one the server knows
+                        // the resource by.
+                        storedId = (_metadata7 = metadata) === null || _metadata7 === void 0 ? void 0 : _metadata7.uploadId;
+                        if (!(isUploadId(storedId) && storedId !== storedId.trim())) {
+                          _context15.n = 23;
+                          break;
+                        }
+                        metadata = _objectSpread2(_objectSpread2({}, metadata), {}, {
+                          uploadId: storedId.trim()
+                        });
+                        _context15.n = 22;
+                        return _this15._setMetadata(id, metadata, claimToken);
+                      case 22:
+                        if (_context15.v) {
+                          _context15.n = 23;
+                          break;
+                        }
+                        uploadIdUnrecorded = true;
+                      case 23:
+                        if (isUploadId((_metadata8 = metadata) === null || _metadata8 === void 0 ? void 0 : _metadata8.uploadId)) {
+                          _context15.n = 26;
+                          break;
+                        }
+                        backfilled = createUploadId(); // The local variable is replaced, not just the stored
+                        // row. Guarding this on `metadata` being truthy left a
+                        // row with no metadata at all still passing `undefined`
+                        // into this first attempt, which then minted a
+                        // *different* id — so the next drain, reading the
+                        // persisted one, could not resume the partial that
+                        // first attempt had left on the server.
+                        metadata = _objectSpread2(_objectSpread2({}, metadata || {}), {}, {
+                          uploadId: backfilled
+                        });
+                        _context15.n = 24;
+                        return _this15._setMetadata(id, metadata, claimToken);
+                      case 24:
+                        if (_context15.v) {
+                          _context15.n = 25;
+                          break;
+                        }
+                        uploadIdUnrecorded = true;
+                      case 25:
+                      case 26:
+                        _context15.n = 29;
+                        break;
+                      case 27:
+                        _context15.p = 27;
+                        _t2 = _context15.v;
+                        // `createUploadId()` throws where there is no secure
+                        // randomness. Unguarded, that threw out of the whole loop:
+                        // the drain stopped, every later entry went untried, and
+                        // the `finally` below rescheduled with this item's retry
+                        // state untouched — so the next delay was zero and the
+                        // queue span the same failure for as long as the page
+                        // lived. One unusable row must cost one row.
+                        _msg2 = _t2 && _t2.message ? _t2.message : String(_t2);
+                        console.error("[Offline] Could not assign an upload id:", id, _msg2);
+                        _context15.n = 28;
+                        return _this15._hold(id, "No upload identifier could be assigned: ".concat(_msg2), false, claimToken);
+                      case 28:
+                        return _context15.a(2, 0);
+                      case 29:
+                        if (!uploadIdUnrecorded) {
+                          _context15.n = 30;
+                          break;
+                        }
+                        return _context15.a(2, 0);
+                      case 30:
+                        _context15.p = 30;
+                        // The claim is renewed as bytes move, not sized to outlast
+                        // the upload. A capture may run to MAX_DURATION_SECONDS and
+                        // a progressing transfer is deliberately unbounded, so no
+                        // fixed lease is both long enough for a real upload and
+                        // short enough to free a row from a tab that died.
+                        lastRenewal = Date.now();
+                        /** @type {Promise<boolean>|null} The renewal still in flight. */
+                        renewalInFlight = null; // Set when a renewal reports that this drain no longer owns
+                        // the row. Ignoring the result meant a drain kept going
+                        // after another tab had taken over: it would emit the
+                        // completion event and run cleanup against a row it did not
+                        // own, which is what made every stale-owner race below
+                        // reachable in the first place.
+                        claimLost = false;
+                        _context15.n = 31;
+                        return uploadWithPriority({
+                          blob: audioBlob,
+                          fileName: fileName,
+                          formFields: formFields,
+                          metadata: metadata,
+                          instanceId: instanceId,
+                          onProgress: function onProgress() {
+                            var now = Date.now();
+                            if (now - lastRenewal < CONFIG.leaseRenewMs) {
+                              return;
+                            }
+                            lastRenewal = now;
+                            renewalInFlight = _this15._renewClaim(id, claimToken).then(function (ok) {
+                              // Only an actual "not yours" stands the drain
+                              // down. A null — storage could not answer — is
+                              // left to `_markTransferred()`, which checks the
+                              // claim as it writes and cannot be wrong about
+                              // it. Treating the two alike abandoned uploads
+                              // that had already succeeded.
+                              if (ok === false) {
+                                claimLost = true;
+                              }
+                              return ok;
+                            });
+                          }
+                        });
+                      case 31:
+                        result = _context15.v;
+                        // Set here, the moment the bytes are known to have landed —
+                        // not at the end of the block. Setting it last made the
+                        // `if (uploaded)` guard below unreachable: everything that
+                        // can throw between here and there threw first, so the
+                        // protection against re-uploading an accepted asset did
+                        // nothing at all.
+                        uploaded = true;
+
+                        // The last renewal is allowed to land before ownership is
+                        // judged. It is an IndexedDB round-trip started from a
+                        // progress callback, so it could still be pending — or
+                        // resolve false moments after `onSuccess` — leaving this
+                        // drain to emit the boundary event and run cleanup for a row
+                        // another tab had already taken.
+                        if (!renewalInFlight) {
+                          _context15.n = 35;
+                          break;
+                        }
+                        _context15.p = 32;
+                        _context15.n = 33;
+                        return renewalInFlight;
+                      case 33:
+                        _context15.n = 35;
+                        break;
+                      case 34:
+                        _context15.p = 34;
+                        _context15.v;
+                      case 35:
+                        if (!claimLost) {
+                          _context15.n = 36;
+                          break;
+                        }
+                        // Another tab owns this row now. Everything after a
+                        // transfer — the boundary event, the removal — belongs
+                        // to whoever holds the claim, and doing it here would
+                        // double the event and race the owner's cleanup. The
+                        // bytes are not wasted: the fingerprint is the
+                        // submission id, so the owner resumes the same TUS
+                        // resource rather than starting a second one.
+                        console.warn("[Offline] Lost the claim during transfer; leaving completion to the current owner:", id);
+                        return _context15.a(2, 0);
+                      case 36:
+                        _context15.n = 37;
+                        return _this15._markTransferred(id, claimToken);
+                      case 37:
+                        recorded = _context15.v;
+                        if (!(recorded === false)) {
+                          _context15.n = 38;
+                          break;
+                        }
+                        // The row is not ours any more. Everything after a
+                        // transfer belongs to whoever holds the claim.
+                        console.warn("[Offline] Lost the claim before the transfer could be recorded; leaving completion to the current owner:", id);
+                        return _context15.a(2, 0);
+                      case 38:
+                        if (!(recorded === null)) {
+                          _context15.n = 40;
+                          break;
+                        }
+                        // Storage could not record the transfer, and the bytes
+                        // are on the server. Treated as neither success nor
+                        // loss of the row, because it is neither.
+                        //
+                        // The boundary event still fires below: it is the only
+                        // thing that tells anything downstream this asset
+                        // exists, it carries the upload id so a duplicate is
+                        // dedupable, and a missing one is not recoverable. What
+                        // does *not* happen is the removal — a row deleted here
+                        // would take the only local record with it — and the
+                        // entry is held instead, so no later drain reads
+                        // `transferred: false` and uploads an accepted
+                        // recording a second time.
+                        console.error("[Offline] Transfer succeeded but could not be recorded; holding:", id);
+                        _context15.n = 39;
+                        return _this15._hold(id, "Uploaded; the transfer could not be recorded locally. Do not re-upload — reconcile by upload id.", true, claimToken);
+                      case 39:
+                        heldForReconciliation = true;
+                      case 40:
+                        // `starmus:complete` is the boundary before any
+                        // server-side processing (ADR-034). A queued upload that
+                        // drains is as complete as an immediate one, so it fires
+                        // here too — and it fires before `remove()`, because
+                        // removal destroys the metadata the event is built from.
+                        _detail = buildCompletionDetail({
+                          instanceId: instanceId,
+                          result: result,
+                          metadata: metadata,
+                          formFields: formFields,
+                          fileName: fileName,
+                          mimeType: ((_metadata9 = metadata) === null || _metadata9 === void 0 ? void 0 : _metadata9.mimeType) || audioBlob.type || "",
+                          durationMs: (_metadata$durationMs2 = (_metadata0 = metadata) === null || _metadata0 === void 0 ? void 0 : _metadata0.durationMs) !== null && _metadata$durationMs2 !== void 0 ? _metadata$durationMs2 : 0,
+                          language: ((_metadata1 = metadata) === null || _metadata1 === void 0 ? void 0 : _metadata1.language) || (formFields === null || formFields === void 0 ? void 0 : formFields.language),
+                          contributorId: ((_metadata10 = metadata) === null || _metadata10 === void 0 || (_metadata10 = _metadata10.env) === null || _metadata10 === void 0 || (_metadata10 = _metadata10.identifiers) === null || _metadata10 === void 0 ? void 0 : _metadata10.visitorId) || "",
+                          calibrationApplied: !!((_metadata11 = metadata) !== null && _metadata11 !== void 0 && _metadata11.calibration)
+                        }); // Always emitted. A format this client cannot name is
+                        // reported as `unknown` rather than suppressing the event:
+                        // `starmus:complete` is the boundary before any server-side
+                        // processing (ADR-034), and withholding it left the asset on
+                        // the server with nobody told it existed, recoverable only
+                        // by a person noticing a held entry. The Node rules on the
+                        // format, where refusing does not cost the recording.
+                        // Emitted first, then marked. At-least-once, deliberately.
+                        //
+                        // Marking first traded a duplicate event for a *lost* one:
+                        // a page that died between the write and the dispatch left
+                        // the entry recorded as announced, so the next drain removed
+                        // it without ever emitting the boundary — an asset on the
+                        // server that nothing downstream was told about, which is
+                        // unrecoverable. A duplicate `starmus:complete` carries the
+                        // same `uploadId` and is dedupable by the consumer; a
+                        // missing one is not. Losing the event is the worse failure,
+                        // so the ordering favours repeating it.
+                        emitCompletionEvent(_detail);
+                        _context15.n = 41;
+                        return _this15._markCompletionEmitted(id, claimToken);
+                      case 41:
+                        if (_detail.format === "unknown") {
+                          sparxstarIntegration.reportError("upload_format_unnamed", {
+                            submissionId: id,
+                            instanceId: instanceId,
+                            fileName: fileName,
+                            mimeType: ((_metadata12 = metadata) === null || _metadata12 === void 0 ? void 0 : _metadata12.mimeType) || audioBlob.type || "",
+                            captureProfile: ((_metadata13 = metadata) === null || _metadata13 === void 0 ? void 0 : _metadata13.captureProfile) || null
+                          });
+                        }
+                        _context15.n = 48;
+                        break;
+                      case 42:
+                        _context15.p = 42;
+                        _t4 = _context15.v;
+                        if (!uploaded) {
+                          _context15.n = 44;
+                          break;
+                        }
+                        // Reaching here after a successful transfer means the
+                        // completion handling threw, not the upload. Re-queuing
+                        // or retrying would send an asset the server already
+                        // has. Hold it instead, so a person can see it and the
+                        // next drain does not upload it again.
+                        _msg3 = _t4 && _t4.message ? _t4.message : String(_t4);
+                        console.error("[Offline] Uploaded, but completion failed:", id, _msg3);
+                        _context15.n = 43;
+                        return _this15._hold(id, "Uploaded; completion handling failed: ".concat(_msg3), true, claimToken);
+                      case 43:
+                        return _context15.a(2, 0);
+                      case 44:
+                        _msg4 = _t4 && _t4.message ? _t4.message : String(_t4); // The claim is dropped by the same write that records the
+                        // outcome, below — never before it. A separate release
+                        // first made the row claimable while it still carried the
+                        // previous attempt's backoff state.
+                        if (!isNonRetryableUploadFailure(_msg4)) {
+                          _context15.n = 46;
+                          break;
+                        }
+                        _context15.n = 45;
+                        return _this15._hold(id, "Upload rejected and not retryable: ".concat(_msg4), false, claimToken);
+                      case 45:
+                        _context15.n = 47;
+                        break;
+                      case 46:
+                        nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
+                        _context15.n = 47;
+                        return _this15._updateRetry(id, nextRetryCount, _msg4, claimToken);
+                      case 47:
+                        return _context15.a(2, 0);
+                      case 48:
+                        if (!heldForReconciliation) {
+                          _context15.n = 49;
+                          break;
+                        }
+                        return _context15.a(2, 0);
+                      case 49:
+                        _context15.p = 49;
+                        _context15.n = 50;
+                        return _this15.remove(id, claimToken);
+                      case 50:
+                        _context15.n = 52;
+                        break;
+                      case 51:
+                        _context15.p = 51;
+                        _t5 = _context15.v;
+                        _msg5 = _t5 && _t5.message ? _t5.message : String(_t5);
+                        console.error("[Offline] Uploaded but could not clear the entry:", id, _msg5);
+                        _context15.n = 52;
+                        return _this15._hold(id, "Uploaded; local cleanup failed: ".concat(_msg5), true, claimToken);
+                      case 52:
+                        return _context15.a(2);
+                    }
+                  }, _loop, null, [[49, 51], [32, 34], [30, 42], [21, 27], [8, 10]]);
+                });
                 _iterator.s();
-              case 7:
-                if ((_step = _iterator.n()).done) {
-                  _context6.n = 17;
-                  break;
-                }
-                item = _step.value;
-                id = item.id, audioBlob = item.audioBlob, fileName = item.fileName, formFields = item.formFields, metadata = item.metadata, retryCount = item.retryCount, instanceId = item.instanceId;
-                if (!(retryCount >= CONFIG.maxRetries)) {
-                  _context6.n = 9;
-                  break;
-                }
-                _context6.n = 8;
-                return this.remove(id);
-              case 8:
-                return _context6.a(3, 16);
-              case 9:
-                if (!(item.lastAttempt !== null)) {
-                  _context6.n = 10;
-                  break;
-                }
-                delay = CONFIG.retryDelays[Math.min(retryCount, CONFIG.retryDelays.length - 1)];
-                if (!(Date.now() - item.lastAttempt < delay)) {
-                  _context6.n = 10;
-                  break;
-                }
-                return _context6.a(3, 16);
               case 10:
-                _context6.p = 10;
-                _context6.n = 11;
-                return uploadWithPriority({
-                  blob: audioBlob,
-                  fileName: fileName,
-                  formFields: formFields,
-                  metadata: metadata,
-                  instanceId: instanceId
-                });
-              case 11:
-                result = _context6.v;
-                // `starmus:complete` is the boundary before any
-                // server-side processing (ADR-034). A queued upload that
-                // drains is as complete as an immediate one, so it fires
-                // here too — and it fires before `remove()`, because
-                // removal destroys the metadata the event is built from.
-                detail = buildCompletionDetail({
-                  instanceId: instanceId,
-                  result: result,
-                  metadata: metadata,
-                  formFields: formFields,
-                  fileName: fileName,
-                  mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                  durationMs: (_metadata$durationMs = metadata === null || metadata === void 0 ? void 0 : metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
-                  language: formFields === null || formFields === void 0 ? void 0 : formFields.language,
-                  contributorId: (metadata === null || metadata === void 0 || (_metadata$env2 = metadata.env) === null || _metadata$env2 === void 0 || (_metadata$env2 = _metadata$env2.identifiers) === null || _metadata$env2 === void 0 ? void 0 : _metadata$env2.visitorId) || "",
-                  calibrationApplied: !!(metadata !== null && metadata !== void 0 && metadata.calibration)
-                });
-                if (detail) {
-                  emitCompletionEvent(detail);
-                } else {
-                  // The upload succeeded but the format cannot be named,
-                  // so no consumer can be told this asset exists. The
-                  // entry is still removed — the asset is on the server
-                  // and re-uploading it on every future drain would burn
-                  // bandwidth the contributor is paying for without ever
-                  // producing a nameable format. What must not happen is
-                  // this passing in silence, so it is reported.
-                  console.error("[Offline] Uploaded but could not build starmus:complete:", {
-                    id: id,
-                    fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || ""
-                  });
-                  sparxstarIntegration.reportError("completion_detail_unbuildable", {
-                    submissionId: id,
-                    instanceId: instanceId,
-                    fileName: fileName,
-                    mimeType: (metadata === null || metadata === void 0 ? void 0 : metadata.mimeType) || audioBlob.type || "",
-                    captureProfile: (metadata === null || metadata === void 0 ? void 0 : metadata.captureProfile) || null
-                  });
+                if ((_step = _iterator.n()).done) {
+                  _context16.n = 13;
+                  break;
                 }
-                _context6.n = 12;
-                return this.remove(id);
+                return _context16.d(_regeneratorValues(_loop()), 11);
+              case 11:
+                _ret = _context16.v;
+                if (!(_ret === 0)) {
+                  _context16.n = 12;
+                  break;
+                }
+                return _context16.a(3, 12);
               case 12:
-                _context6.n = 16;
+                _context16.n = 10;
                 break;
               case 13:
-                _context6.p = 13;
-                _t = _context6.v;
-                msg = _t && _t.message ? _t.message : String(_t);
-                nonRetryable = /400|Invalid JSON|QuotaExceeded/i.test(msg);
-                if (!nonRetryable) {
-                  _context6.n = 15;
-                  break;
-                }
-                _context6.n = 14;
-                return this.remove(id);
-              case 14:
-                _context6.n = 16;
+                _context16.n = 15;
                 break;
+              case 14:
+                _context16.p = 14;
+                _t7 = _context16.v;
+                _iterator.e(_t7);
               case 15:
-                nextRetryCount = Math.min(retryCount + 1, CONFIG.maxRetries);
-                _context6.n = 16;
-                return this._updateRetry(id, nextRetryCount, msg);
+                _context16.p = 15;
+                _iterator.f();
+                return _context16.f(15);
               case 16:
-                _context6.n = 7;
+                _context16.n = 18;
                 break;
               case 17:
-                _context6.n = 19;
-                break;
+                _context16.p = 17;
+                _t8 = _context16.v;
+                console.error("[Offline] Queue fatal:", _t8);
               case 18:
-                _context6.p = 18;
-                _t2 = _context6.v;
-                _iterator.e(_t2);
-              case 19:
-                _context6.p = 19;
-                _iterator.f();
-                return _context6.f(19);
-              case 20:
-                _context6.n = 22;
-                break;
-              case 21:
-                _context6.p = 21;
-                _t3 = _context6.v;
-                console.error("[Offline] Queue fatal:", _t3);
-              case 22:
-                _context6.p = 22;
+                _context16.p = 18;
                 this.isProcessing = false;
-                _context6.p = 23;
-                _context6.n = 24;
+                _context16.p = 19;
+                _context16.n = 20;
                 return this._getNextProcessDelay();
-              case 24:
-                nextDelay = _context6.v;
+              case 20:
+                nextDelay = _context16.v;
                 if (nextDelay !== null) {
                   this._scheduleProcessQueue(nextDelay);
                 }
-                _context6.n = 26;
+                _context16.n = 22;
                 break;
-              case 25:
-                _context6.p = 25;
-                _t4 = _context6.v;
-                console.error("[Offline] Failed to schedule next queue processing:", _t4);
-              case 26:
-                return _context6.f(22);
-              case 27:
-                return _context6.a(2);
+              case 21:
+                _context16.p = 21;
+                _t9 = _context16.v;
+                console.error("[Offline] Failed to schedule next queue processing:", _t9);
+              case 22:
+                return _context16.f(18);
+              case 23:
+                return _context16.a(2);
             }
-          }, _callee6, this, [[23, 25], [10, 13], [6, 18, 19, 20], [3, 21, 22, 27]]);
+          }, _callee15, this, [[19, 21], [9, 14, 15, 16], [8, 17, 18, 23], [2, 4]]);
         }));
         function processQueue() {
           return _processQueue.apply(this, arguments);
@@ -14214,19 +17403,40 @@
     }, {
       key: "setupNetworkListeners",
       value: function setupNetworkListeners() {
-        var _this6 = this;
+        var _this16 = this;
         if (networkListenerInstalled) {
           return;
         }
         networkListenerInstalled = true;
         window.addEventListener("online", function () {
-          _this6._scheduleProcessQueue(0);
+          _this16._scheduleProcessQueue(0);
         });
+        this._setupBatteryListeners();
 
         // Flush pending items on startup when already online.
         if (navigator.onLine) {
           this._scheduleProcessQueue(0);
         }
+      }
+      /** @private */
+    }, {
+      key: "_setupBatteryListeners",
+      value: function _setupBatteryListeners() {
+        var _this17 = this;
+        if (batteryListenerInstalled || typeof navigator === "undefined" || typeof navigator.getBattery !== "function") {
+          return;
+        }
+        batteryListenerInstalled = true;
+        navigator.getBattery().then(function (battery) {
+          var handleBatteryChange = function handleBatteryChange() {
+            var _sparxstarIntegration2;
+            if (!((_sparxstarIntegration2 = sparxstarIntegration.isBatteryCritical) !== null && _sparxstarIntegration2 !== void 0 && _sparxstarIntegration2.call(sparxstarIntegration))) {
+              _this17._scheduleProcessQueue(0);
+            }
+          };
+          battery.addEventListener("levelchange", handleBatteryChange);
+          battery.addEventListener("chargingchange", handleBatteryChange);
+        });
       }
       /** @private */
     }, {
@@ -14242,7 +17452,7 @@
     }, {
       key: "_scheduleProcessQueue",
       value: function _scheduleProcessQueue(delayMs) {
-        var _this7 = this;
+        var _this18 = this;
         if (!navigator.onLine) {
           return;
         }
@@ -14254,75 +17464,417 @@
         this._clearScheduledProcessQueue();
         this.processQueueDueAt = dueAt;
         this.processQueueTimeoutId = window.setTimeout(function () {
-          _this7.processQueueTimeoutId = null;
-          _this7.processQueueDueAt = null;
-          void _this7.processQueue();
+          _this18.processQueueTimeoutId = null;
+          _this18.processQueueDueAt = null;
+          void _this18.processQueue();
         }, safeDelay);
       }
-      /** @private */
+      /**
+       * The ids the drain should consider, and the two flags it triages on.
+       *
+       * One row at a time, and nothing kept but three scalars.
+       *
+       * Stated precisely, because an earlier version of this comment claimed more
+       * than a cursor delivers: IndexedDB has no field projection, so
+       * `cursor.value` still yields the whole stored object, audio and all. What
+       * changes is lifetime and accumulation. `getAll()` built an array of every
+       * row and held it for the length of the drain; a cursor materialises one
+       * row, and the array that outlives it holds only `id`, `held` and
+       * `transferred`. One record live at a time against the queue's entire
+       * retained size is the difference, and on the devices this package exists
+       * for it is the difference that matters — but it is not the same as never
+       * touching a recording, and the comment should not say it is.
+       *
+       * Nothing is lost by not carrying the rows: `_claim()` returns the row as
+       * its own transaction read it, and the attempt has been proceeding from
+       * that copy rather than from the snapshot since the claim was introduced.
+       * The snapshot's remaining job is to say which ids exist and which are not
+       * worth claiming.
+       *
+       * @private
+       * @returns {Promise<Array<{id: string, held: boolean, transferred: boolean}>>}
+       */
+    }, {
+      key: "_pendingSummaries",
+      value: (function () {
+        var _pendingSummaries2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee16() {
+          var _this19 = this;
+          return _regenerator().w(function (_context17) {
+            while (1) switch (_context17.n) {
+              case 0:
+                if (this.db) {
+                  _context17.n = 1;
+                  break;
+                }
+                return _context17.a(2, []);
+              case 1:
+                return _context17.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this19.db.transaction([CONFIG.storeName], "readonly");
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value) {
+                      rows.push({
+                        id: value.id,
+                        held: value.held === true,
+                        transferred: value.transferred === true
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  // Rejects rather than resolving empty. `processQueue()` awaits this
+                  // before it installs the retry schedule and catches a rejection to
+                  // reschedule; a promise that never settles skips both, so the drain
+                  // stops with queued recordings still in the store and nothing armed
+                  // to come back for them. An empty resolve would be worse still —
+                  // indistinguishable from a queue that really is empty.
+                  tx.onabort = function () {
+                    return reject(tx.error || new Error("QueueListingAborted"));
+                  };
+                }));
+            }
+          }, _callee16, this);
+        }));
+        function _pendingSummaries() {
+          return _pendingSummaries2.apply(this, arguments);
+        }
+        return _pendingSummaries;
+      }()
+      /**
+       * How many recordings the queue is holding.
+       *
+       * Counted by the store rather than by reading it. `getAll()` deserialises
+       * every row, and the caller only wants a number — core asks for it right
+       * after queueing, which is precisely when the queue is at its fullest, so
+       * the count cost the memory of everything in it.
+       *
+       * @private
+       * @returns {Promise<number>}
+       */
+      )
+    }, {
+      key: "_countPending",
+      value: (function () {
+        var _countPending2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee17() {
+          var _this20 = this;
+          return _regenerator().w(function (_context18) {
+            while (1) switch (_context18.n) {
+              case 0:
+                if (this.db) {
+                  _context18.n = 1;
+                  break;
+                }
+                return _context18.a(2, 0);
+              case 1:
+                return _context18.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this20.db.transaction([CONFIG.storeName], "readonly");
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
+                  var total = 0;
+                  req.onsuccess = function () {
+                    var _cursor$value5;
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    // A row the server already has is not something the platform is
+                    // still waiting for. `transferred: true` rows are retained when
+                    // the completion handling or the local delete failed *after*
+                    // acceptance, so a bare `count()` reported an asset the platform
+                    // holds as a recording it had not received — and the host's
+                    // queue badge said so to the contributor.
+                    if (((_cursor$value5 = cursor.value) === null || _cursor$value5 === void 0 ? void 0 : _cursor$value5.transferred) !== true) {
+                      total += 1;
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(total);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee17, this);
+        }));
+        function _countPending() {
+          return _countPending2.apply(this, arguments);
+        }
+        return _countPending;
+      }()
+      /**
+       * The scheduling fields of every row that is still retryable.
+       *
+       * A cursor, and four scalars per row, because deciding *when* to wake needs
+       * no audio. `getAll()` deserialises whole rows — every queued recording —
+       * to read a retry count and a timestamp, and this runs on every scheduled
+       * wake rather than once per drain. On the devices this package is built
+       * for, spending the queue's entire retained size to compute a delay is the
+       * wrong trade at the worst moment: a phone low enough on memory to care is
+       * exactly the one with recordings still waiting to go.
+       *
+       * Held rows are dropped here, where the cursor already has them. `_hold()`
+       * leaves `retryCount` at the limit and the caller returns 0 for anything at
+       * the limit, so a single held recording rescheduled the queue immediately,
+       * forever, waking the device to look at something it will never retry.
+       *
+       * @private
+       * @returns {Promise<Array<{leaseUntil: number|null, retryCount: number,
+       *   lastAttempt: number|null}>>}
+       */
+      )
+    }, {
+      key: "_scheduleSnapshot",
+      value: (function () {
+        var _scheduleSnapshot2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee18() {
+          var _this21 = this;
+          return _regenerator().w(function (_context19) {
+            while (1) switch (_context19.n) {
+              case 0:
+                if (this.db) {
+                  _context19.n = 1;
+                  break;
+                }
+                return _context19.a(2, []);
+              case 1:
+                return _context19.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this21.db.transaction([CONFIG.storeName], "readonly");
+                  var store = tx.objectStore(CONFIG.storeName);
+                  var req = store.openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value && value.held !== true) {
+                      rows.push({
+                        leaseUntil: typeof value.leaseUntil === "number" ? value.leaseUntil : null,
+                        retryCount: typeof value.retryCount === "number" ? value.retryCount : 0,
+                        lastAttempt: typeof value.lastAttempt === "number" ? value.lastAttempt : null
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee18, this);
+        }));
+        function _scheduleSnapshot() {
+          return _scheduleSnapshot2.apply(this, arguments);
+        }
+        return _scheduleSnapshot;
+      }() /** @private */)
     }, {
       key: "_getNextProcessDelay",
       value: (function () {
-        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee7() {
-          var pending, nextDelay, now, _iterator2, _step2, item, retryDelay, remainingDelay, _t5;
-          return _regenerator().w(function (_context7) {
-            while (1) switch (_context7.p = _context7.n) {
+        var _getNextProcessDelay2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee19() {
+          var now, live, earliestLease, pending, _iterator2, _step2, _item, untilExpiry, nextDelay, _i, _pending, item, retryDelay, remainingDelay, _t0;
+          return _regenerator().w(function (_context20) {
+            while (1) switch (_context20.p = _context20.n) {
               case 0:
-                _context7.n = 1;
-                return this.getAll();
-              case 1:
-                pending = _context7.v;
-                if (!(pending.length === 0)) {
-                  _context7.n = 2;
-                  break;
-                }
-                return _context7.a(2, null);
-              case 2:
-                nextDelay = null;
+                // Held entries are excluded. `_hold()` leaves `retryCount` at the
+                // limit, and the branch below returns 0 for anything at the limit — so
+                // a single held recording made the queue reschedule itself immediately,
+                // forever, waking the device to look at an item it will never retry.
+                // On a phone with a failing upload and a low battery that is the worst
+                // possible loop to leave running.
                 now = Date.now();
-                _iterator2 = _createForOfIteratorHelper$1(pending);
-                _context7.p = 3;
+                _context20.n = 1;
+                return this._scheduleSnapshot();
+              case 1:
+                live = _context20.v;
+                // Leased rows are excluded from the immediate work, but their expiry
+                // still has to wake somebody.
+                //
+                // Including them meant a tab that had just failed to claim read the
+                // untouched retryCount, computed zero, and rescheduled at once — a
+                // tight drain loop for as long as the other tab held the lease.
+                // Excluding them entirely was the opposite failure: when every
+                // remaining row was leased this returned null, no wake-up was
+                // scheduled, and if the owning tab then crashed its lease expired with
+                // nothing left to notice. The recording sat there until a reload.
+                /** @type {number|null} */
+                earliestLease = null;
+                /** @type {Array<Object>} */
+                pending = [];
+                _iterator2 = _createForOfIteratorHelper$1(live);
+                _context20.p = 2;
                 _iterator2.s();
-              case 4:
+              case 3:
                 if ((_step2 = _iterator2.n()).done) {
-                  _context7.n = 7;
+                  _context20.n = 6;
                   break;
                 }
-                item = _step2.value;
-                if (!(item.retryCount >= CONFIG.maxRetries)) {
-                  _context7.n = 5;
+                _item = _step2.value;
+                if (!(typeof _item.leaseUntil === "number" && _item.leaseUntil > now)) {
+                  _context20.n = 4;
                   break;
                 }
-                return _context7.a(2, 0);
+                untilExpiry = _item.leaseUntil - now;
+                if (earliestLease === null || untilExpiry < earliestLease) {
+                  earliestLease = untilExpiry;
+                }
+                return _context20.a(3, 5);
+              case 4:
+                pending.push(_item);
               case 5:
+                _context20.n = 3;
+                break;
+              case 6:
+                _context20.n = 8;
+                break;
+              case 7:
+                _context20.p = 7;
+                _t0 = _context20.v;
+                _iterator2.e(_t0);
+              case 8:
+                _context20.p = 8;
+                _iterator2.f();
+                return _context20.f(8);
+              case 9:
+                if (!(pending.length === 0)) {
+                  _context20.n = 10;
+                  break;
+                }
+                return _context20.a(2, earliestLease);
+              case 10:
+                nextDelay = null;
+                _i = 0, _pending = pending;
+              case 11:
+                if (!(_i < _pending.length)) {
+                  _context20.n = 14;
+                  break;
+                }
+                item = _pending[_i];
+                if (!(item.retryCount >= CONFIG.maxRetries)) {
+                  _context20.n = 12;
+                  break;
+                }
+                return _context20.a(2, 0);
+              case 12:
                 retryDelay = CONFIG.retryDelays[Math.min(item.retryCount, CONFIG.retryDelays.length - 1)];
                 remainingDelay = item.lastAttempt === null ? 0 : Math.max(0, retryDelay - (now - item.lastAttempt));
                 if (nextDelay === null || remainingDelay < nextDelay) {
                   nextDelay = remainingDelay;
                 }
-              case 6:
-                _context7.n = 4;
+              case 13:
+                _i++;
+                _context20.n = 11;
                 break;
-              case 7:
-                _context7.n = 9;
-                break;
-              case 8:
-                _context7.p = 8;
-                _t5 = _context7.v;
-                _iterator2.e(_t5);
-              case 9:
-                _context7.p = 9;
-                _iterator2.f();
-                return _context7.f(9);
-              case 10:
-                return _context7.a(2, nextDelay);
+              case 14:
+                return _context20.a(2, nextDelay);
             }
-          }, _callee7, this, [[3, 8, 9, 10]]);
+          }, _callee19, this, [[2, 7, 8, 9]]);
         }));
         function _getNextProcessDelay() {
           return _getNextProcessDelay2.apply(this, arguments);
         }
         return _getNextProcessDelay;
+      }()
+      /**
+       * Id, retry count and last error for every queued row — and no recordings.
+       *
+       * The shape `starmus/offline/queue_updated` has always carried; what
+       * changed is that producing it holds one row at a time rather than all of
+       * them at once. As in `_pendingSummaries()`, a cursor still yields whole
+       * records — there is no field projection — so what this avoids is the
+       * accumulation, not every touch of a recording.
+       *
+       * @private
+       * @returns {Promise<Array<{id: string, retryCount: number, error: string|null}>>}
+       */
+      )
+    }, {
+      key: "_queueSummary",
+      value: (function () {
+        var _queueSummary2 = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee20() {
+          var _this22 = this;
+          return _regenerator().w(function (_context21) {
+            while (1) switch (_context21.n) {
+              case 0:
+                if (this.db) {
+                  _context21.n = 1;
+                  break;
+                }
+                return _context21.a(2, []);
+              case 1:
+                return _context21.a(2, new Promise(function (resolve, reject) {
+                  var tx = _this22.db.transaction([CONFIG.storeName], "readonly");
+                  var req = tx.objectStore(CONFIG.storeName).openCursor();
+                  /** @type {Array<Object>} */
+                  var rows = [];
+                  req.onsuccess = function () {
+                    var cursor = req.result;
+                    if (!cursor) {
+                      return;
+                    }
+                    var value = cursor.value;
+                    if (value) {
+                      var _value$error;
+                      rows.push({
+                        id: value.id,
+                        retryCount: value.retryCount,
+                        error: (_value$error = value.error) !== null && _value$error !== void 0 ? _value$error : null
+                      });
+                    }
+                    cursor.continue();
+                  };
+                  req.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.oncomplete = function () {
+                    return resolve(rows);
+                  };
+                  tx.onerror = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                  tx.onabort = function (ev) {
+                    return reject(ev.target.error);
+                  };
+                }));
+            }
+          }, _callee20, this);
+        }));
+        function _queueSummary() {
+          return _queueSummary2.apply(this, arguments);
+        }
+        return _queueSummary;
       }() /** @private */)
     }, {
       key: "_notifyQueueUpdate",
@@ -14331,17 +17883,18 @@
         if (!BUS || typeof BUS.dispatch !== "function") {
           return;
         }
-        this.getAll().then(function (queue) {
+        // A cursor, not `getAll()`. This fires on every add, every removal and
+        // every hold — the hottest path in the module — and it needs three
+        // scalars per row, but `getAll()` deserialised each recording to get
+        // them. On a full queue that is 20 MB against the 5 MB in-memory Blob
+        // budget AGENTS.md states as a FAIL condition, several times a
+        // submission.
+        this._queueSummary().then(function (queue) {
           BUS.dispatch("starmus/offline/queue_updated", {
             count: queue.length,
-            queue: queue.map(function (item) {
-              return {
-                id: item.id,
-                retryCount: item.retryCount,
-                error: item.error
-              };
-            })
+            queue: queue
           });
+        }).catch(function (err) {
         });
       }
 
@@ -14415,47 +17968,50 @@
    * @returns {Promise<string>} Unique submission ID
    */
   function _getOfflineQueue() {
-    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee8() {
-      return _regenerator().w(function (_context8) {
-        while (1) switch (_context8.n) {
+    _getOfflineQueue = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee21() {
+      return _regenerator().w(function (_context22) {
+        while (1) switch (_context22.n) {
           case 0:
             if (offlineQueue.db) {
-              _context8.n = 2;
+              _context22.n = 2;
               break;
             }
-            _context8.n = 1;
+            _context22.n = 1;
             return offlineQueue.init();
           case 1:
             offlineQueue.setupNetworkListeners();
           case 2:
-            return _context8.a(2, offlineQueue);
+            return _context22.a(2, offlineQueue);
         }
-      }, _callee8);
+      }, _callee21);
     }));
     return _getOfflineQueue.apply(this, arguments);
   }
-  function queueSubmission(_x8, _x9, _x0, _x1, _x10) {
+  function queueSubmission(_x22, _x23, _x24, _x25, _x26) {
     return _queueSubmission.apply(this, arguments);
   }
 
   /**
    * Returns the count of pending offline submissions.
    *
+   * Counts held submissions too: they are still recordings this device is
+   * holding that the platform has not received.
+   *
    * @returns {Promise<number>}
    */
   function _queueSubmission() {
-    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee9(instanceId, audioBlob, fileName, formFields, metadata) {
+    _queueSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee22(instanceId, audioBlob, fileName, formFields, metadata) {
       var q;
-      return _regenerator().w(function (_context9) {
-        while (1) switch (_context9.n) {
+      return _regenerator().w(function (_context23) {
+        while (1) switch (_context23.n) {
           case 0:
-            _context9.n = 1;
+            _context23.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context9.v;
-            return _context9.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
+            q = _context23.v;
+            return _context23.a(2, q.add(instanceId, audioBlob, fileName, formFields, metadata));
         }
-      }, _callee9);
+      }, _callee22);
     }));
     return _queueSubmission.apply(this, arguments);
   }
@@ -14464,29 +18020,141 @@
   }
 
   /**
+   * Returns the submissions that are kept but will not be retried on their own.
+   *
+   * A host shows these so someone can act. They are never deleted by the queue.
+   *
+   * Each entry is a summary — id, file name, timestamp, held reason, retry count,
+   * size, mime type, capture profile, and whether the bytes already reached the
+   * server — and carries no audio Blob. Listing held recordings is a thing hosts
+   * do to draw a panel, and it must not cost the memory of the whole queue.
+   *
+   * @returns {Promise<Array<Object>>}
+   */
+  function _getPendingCount() {
+    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee23() {
+      var q;
+      return _regenerator().w(function (_context24) {
+        while (1) switch (_context24.n) {
+          case 0:
+            _context24.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context24.v;
+            return _context24.a(2, q._countPending());
+        }
+      }, _callee23);
+    }));
+    return _getPendingCount.apply(this, arguments);
+  }
+  function getHeldSubmissions() {
+    return _getHeldSubmissions.apply(this, arguments);
+  }
+
+  /**
+   * How full the offline queue is.
+   *
+   * A host shows this so a contributor learns the device is nearly full before a
+   * recording is refused, rather than at the moment they finish speaking.
+   *
+   * @returns {Promise<{totalBytes: number, count: number, heldBytes: number, heldCount: number, maxTotalBytes: number}>}
+   */
+  function _getHeldSubmissions() {
+    _getHeldSubmissions = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee24() {
+      var q;
+      return _regenerator().w(function (_context25) {
+        while (1) switch (_context25.n) {
+          case 0:
+            _context25.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context25.v;
+            return _context25.a(2, q.getHeld());
+        }
+      }, _callee24);
+    }));
+    return _getHeldSubmissions.apply(this, arguments);
+  }
+  function getQueueUsage() {
+    return _getQueueUsage.apply(this, arguments);
+  }
+
+  /**
+   * Put a held submission back in the queue and try it again.
+   *
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  function _getQueueUsage() {
+    _getQueueUsage = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee25() {
+      var q;
+      return _regenerator().w(function (_context26) {
+        while (1) switch (_context26.n) {
+          case 0:
+            _context26.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context26.v;
+            return _context26.a(2, q.usage());
+        }
+      }, _callee25);
+    }));
+    return _getQueueUsage.apply(this, arguments);
+  }
+  function releaseHeldSubmission(_x27) {
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+
+  /**
+   * Delete a held submission, on a person's explicit instruction.
+   *
+   * The only deletion here that is not a successful upload. Nothing automatic
+   * reaches it.
+   *
+   * @param {string} id
+   * @param {string} reason
+   * @returns {Promise<void>}
+   */
+  function _releaseHeldSubmission() {
+    _releaseHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee26(id) {
+      var q;
+      return _regenerator().w(function (_context27) {
+        while (1) switch (_context27.n) {
+          case 0:
+            _context27.n = 1;
+            return getOfflineQueue();
+          case 1:
+            q = _context27.v;
+            return _context27.a(2, q.releaseHold(id));
+        }
+      }, _callee26);
+    }));
+    return _releaseHeldSubmission.apply(this, arguments);
+  }
+  function discardHeldSubmission(_x28, _x29) {
+    return _discardHeldSubmission.apply(this, arguments);
+  }
+
+  /**
    * Initialises the offline queue. Alias of getOfflineQueue.
    *
    * @returns {Promise<OfflineQueue>}
    */
-  function _getPendingCount() {
-    _getPendingCount = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee0() {
-      var q, list;
-      return _regenerator().w(function (_context0) {
-        while (1) switch (_context0.n) {
+  function _discardHeldSubmission() {
+    _discardHeldSubmission = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee27(id, reason) {
+      var q;
+      return _regenerator().w(function (_context28) {
+        while (1) switch (_context28.n) {
           case 0:
-            _context0.n = 1;
+            _context28.n = 1;
             return getOfflineQueue();
           case 1:
-            q = _context0.v;
-            _context0.n = 2;
-            return q.getAll();
-          case 2:
-            list = _context0.v;
-            return _context0.a(2, list.length);
+            q = _context28.v;
+            return _context28.a(2, q.discardHeld(id, reason));
         }
-      }, _callee0);
+      }, _callee27);
     }));
-    return _getPendingCount.apply(this, arguments);
+    return _discardHeldSubmission.apply(this, arguments);
   }
   function initOffline() {
     return getOfflineQueue();
@@ -14494,6 +18162,10 @@
   if (typeof window !== "undefined") {
     window.initOffline = initOffline;
     window.StarmusOfflineQueue = getOfflineQueue;
+    window.StarmusHeldSubmissions = getHeldSubmissions;
+    window.StarmusQueueUsage = getQueueUsage;
+    window.StarmusReleaseHeldSubmission = releaseHeldSubmission;
+    window.StarmusDiscardHeldSubmission = discardHeldSubmission;
   }
 
   /**
@@ -14537,7 +18209,7 @@
       return null;
     }
     try {
-      var redirect = new URL(candidate, window.location.origin);
+      var redirect = new URL(candidate, window.location.href);
       var isHttp = redirect.protocol === "https:" || redirect.protocol === "http:";
       return isHttp && redirect.origin === window.location.origin ? redirect.href : null;
     } catch (_unused) {
@@ -14577,6 +18249,23 @@
    * @param {Object} env - Environment data (may be partial on first call)
    * @returns {{ handleSubmit: function }}
    */
+  /** Monotonic within a page load; see `localAttemptId()`. */
+  var attemptCounter = 0;
+
+  /**
+   * An identity for a submit attempt that could not be given an upload id.
+   *
+   * Deliberately not a UUID, so `isUploadId()` rejects it and it can never be
+   * mistaken for — or written into — `metadata.uploadId`. It exists only so the
+   * store can match this attempt's `submit-start` against its `submit-queued`;
+   * it is never sent, never stored with the recording, and never reaches tus.
+   *
+   * @returns {string}
+   */
+  function localAttemptId() {
+    attemptCounter += 1;
+    return "local-attempt-".concat(Date.now(), "-").concat(attemptCounter);
+  }
   function initCore(store, instanceId, env) {
     sparxstarIntegration.init().then(function (environmentData) {
       var _enhancedEnv$network;
@@ -14651,7 +18340,7 @@
     function _handleSubmit() {
       _handleSubmit = _asyncToGenerator$2(/*#__PURE__*/_regenerator().m(function _callee(formFields) {
         var _source$transcript, _source$metadata, _source$metadata2;
-        var state, source, calibration, currentEnvData, stateEnv, audioBlob, fileName, captureAttainment, metadata, result, _completedSource$meta, _completedSource$meta2, _completedState$env, _result$data, _result$data2, completedState, completedSource, completedCalibration, detail, redirect, message, retryableUploadError, submissionId, pending, _t, _t2;
+        var state, source, calibration, currentEnvData, stateEnv, audioBlob, submittedLanguage, fileName, captureAttainment, metadata, transferred, attemptId, result, _metadata$durationMs, _stateEnv$identifiers, _store$getState$submi, _store$getState$submi2, _result$data, _result$data2, detail, wasCurrent, settled, redirect, redirectFor, message, retryableUploadError, submissionId, pending, queueMessage, _t, _t2;
         return _regenerator().w(function (_context) {
           while (1) switch (_context.p = _context.n) {
             case 0:
@@ -14662,7 +18351,10 @@
               stateEnv = _objectSpread2(_objectSpread2(_objectSpread2(_objectSpread2({}, state.env), env), currentEnvData), {}, {
                 submission_timestamp: Date.now()
               });
-              audioBlob = source.blob || source.file;
+              audioBlob = source.blob || source.file; // Snapshotted with the bytes. Everything that describes this submission
+              // is read once, here, so a source change mid-upload cannot re-describe
+              // audio that has already been sent.
+              submittedLanguage = source.language;
               fileName = source.fileName || (source.file ? source.file.name : "rec-".concat(Date.now(), ".webm"));
               if (audioBlob) {
                 _context.n = 1;
@@ -14672,19 +18364,60 @@
               return _context.a(2);
             case 1:
               // ADR-035 / capture-to-ingestion contract: the capture profile travels
-              // with the asset. This object is what the direct and TUS serializers
-              // send and what the offline queue persists for later retry, so the
-              // profile has to be in it here or it reaches ingestion on no path at
-              // all. `null` means the recorder never reported one (a file upload via
-              // the Tier C fallback), which is itself information the consumer needs.
-              captureAttainment = source.captureAttainment || null;
+              // with the asset. This object is what the upload serializes and what
+              // the offline queue persists for later retry, so the profile has to be
+              // in it here or it reaches ingestion on no path at all. A recorded
+              // session carries the profile the recorder attained; an attached file
+              // carries `import`. `null` is left for a source that reported no
+              // profile at all, which is itself information the consumer needs — the
+              // Node stores such an asset and marks it inadmissible for measurement
+              // rather than refusing it.
+              captureAttainment = source.captureAttainment || null; // Minted once per submission and carried into both the immediate
+              // attempt and the queued retry, so a recording that is resumed hours
+              // later still reports the identifier the server knows it by.
+              //
+              // Through the upload module's helper rather than `crypto.randomUUID`
+              // directly: that API is missing on browsers this package supports, and
+              // reaching for it alone left the id unset on exactly those devices —
+              // where a retry over a bad link is likeliest and a stable identity
+              // matters most.
               metadata = {
+                // Minted inside the try below, not here. `createUploadId()` throws
+                // on a runtime with no secure randomness — an insecure origin on an
+                // old Android is exactly such a runtime, and exactly the device
+                // this package exists for — and a throw out here landed outside
+                // every handler, rejecting the submit with the captured blob never
+                // queued and no error dispatched. ADR-011 keeps the material
+                // whatever else breaks, so the record the queue needs is built
+                // first and the part that can fail happens where it is caught.
+                uploadId: null,
+                // Persisted, because the queue describes the asset hours later from
+                // metadata alone. The immediate path snapshots `source.language`;
+                // the drained path was reading `formFields.language`, so a host that
+                // supplies the language through source state produced a completion
+                // event with an empty language after an offline drain and a correct
+                // one when the upload happened to succeed first.
+                language: submittedLanguage || "",
                 transcript: ((_source$transcript = source.transcript) === null || _source$transcript === void 0 ? void 0 : _source$transcript.trim()) || null,
-                calibration: calibration.complete ? {
+                // Calibration describes a microphone session, so it is reported
+                // only for audio this device actually captured. An attached file's
+                // bytes never passed through the calibrated path — reporting them
+                // as calibrated tells a consumer the gain and speech level were
+                // applied to material they were not, which is a measurement claim
+                // about somebody else's recording. The calibration itself is left
+                // in state rather than reset: the contributor may record next, and
+                // it is still theirs.
+                calibration: source.kind !== "file" && calibration.complete ? {
                   gain: calibration.gain,
                   speechLevel: calibration.speechLevel
                 } : null,
-                captureProfile: source.captureProfile || null,
+                // Normalised once, here, so the upload metadata and the completion
+                // event cannot disagree. The upload path treats a whitespace-only
+                // profile as absent; leaving the raw value in the snapshot meant
+                // TUS omitted the profile while `buildCompletionDetail()` reported
+                // `captureProfile: "   "` — a record contradicting what was sent,
+                // and neither absent nor named.
+                captureProfile: typeof source.captureProfile === "string" && source.captureProfile.trim() !== "" ? source.captureProfile.trim() : null,
                 captureAttainment: captureAttainment,
                 // Persisted so a queued upload that drains hours later can still
                 // describe the asset it sent. The store state it came from is long
@@ -14693,18 +18426,61 @@
                 mimeType: ((_source$metadata2 = source.metadata) === null || _source$metadata2 === void 0 ? void 0 : _source$metadata2.mimeType) || audioBlob.type || "",
                 env: stateEnv,
                 tier: stateEnv.tier || (currentEnvData === null || currentEnvData === void 0 ? void 0 : currentEnvData.tier) || "C"
-              };
-              store.dispatch({
-                type: "starmus/submit-start"
-              });
+              }; // Whether the bytes reached the server. Everything after that point —
+              // naming the format, building the completion detail, notifying the
+              // host — can still fail, and none of those failures mean the recording
+              // needs sending again.
+              transferred = false; // The identity this attempt is known by inside the store.
+              //
+              // `createUploadId()` throws where there is no secure randomness — an
+              // insecure origin, or a browser with neither crypto API, which on the
+              // devices this package targets is not hypothetical. It used to throw
+              // *inside* the try below, and then `submit-start` never ran: the catch
+              // still queued the recording, but `submit-queued` has to attach to a
+              // submission in flight and the reducer dropped it. The contributor
+              // watched a submit button that never moved, pressed it again, and put
+              // a second copy of the same take into a 20 MB queue — every time, on
+              // the one class of device where it happens at all.
+              //
+              // So the attempt gets an identity either way. Where no upload id can
+              // be minted it is a page-local string that is not a UUID: it is never
+              // sent, never written to `metadata.uploadId`, and never reaches tus.
+              // The queue backfills a real upload id on its first drain, which may
+              // be a later page load where secure randomness is available again.
+              try {
+                metadata.uploadId = createUploadId();
+                attemptId = metadata.uploadId;
+              } catch (idError) {
+                console.warn("[Core] No secure upload id could be minted; the recording is queued rather than sent:", idError.message);
+                attemptId = localAttemptId();
+              }
               _context.p = 2;
-              if (navigator.onLine) {
+              // Dispatched here, after the identity exists, and not before it.
+              //
+              // The id names which submission is in flight, so a completion can
+              // be matched against it; announced while it was still null, the
+              // match was between null and an id and never rejected anything.
+              store.dispatch({
+                type: "starmus/submit-start",
+                submissionId: attemptId
+              });
+
+              // No upload id means no transfer: `uploadTus()` mints its own when
+              // none is supplied, by the same call that just failed. Queueing is
+              // the whole of what can be done, and the catch below does it.
+              if (metadata.uploadId) {
                 _context.n = 3;
                 break;
               }
-              throw new Error("OFFLINE_FAST_PATH");
+              throw new Error("NO_SECURE_UPLOAD_ID: this browser offers no secure randomness, so the recording is queued instead of sent.");
             case 3:
-              _context.n = 4;
+              if (navigator.onLine) {
+                _context.n = 4;
+                break;
+              }
+              throw new Error("OFFLINE_FAST_PATH");
+            case 4:
+              _context.n = 5;
               return uploadWithPriority({
                 blob: audioBlob,
                 fileName: fileName,
@@ -14714,72 +18490,126 @@
                 onProgress: function onProgress(uploaded, total) {
                   return store.dispatch({
                     type: "starmus/submit-progress",
-                    progress: uploaded / total
+                    progress: uploaded / total,
+                    // Named, like the completion and queue actions. An
+                    // upload that continues after its source was replaced
+                    // was otherwise driving the *new* submission's progress
+                    // bar from the old one's bytes.
+                    uploadId: metadata.uploadId
                   });
                 }
               });
-            case 4:
-              result = _context.v;
-              store.dispatch({
-                type: "starmus/submit-complete",
-                payload: result
-              });
-
-              // Emit starmus:complete — boundary between recording and server-side processing.
-              // Nothing downstream triggers until this event fires.
-              if (!(result && result.success)) {
-                _context.n = 6;
-                break;
-              }
-              completedState = store.getState();
-              completedSource = completedState.source || {};
-              completedCalibration = completedState.calibration || {};
-              detail = buildCompletionDetail({
-                instanceId: instanceId,
-                result: result,
-                metadata: metadata,
-                formFields: formFields,
-                fileName: fileName,
-                mimeType: ((_completedSource$meta = completedSource.metadata) === null || _completedSource$meta === void 0 ? void 0 : _completedSource$meta.mimeType) || audioBlob.type || "",
-                durationMs: Math.round((((_completedSource$meta2 = completedSource.metadata) === null || _completedSource$meta2 === void 0 ? void 0 : _completedSource$meta2.duration) || 0) * 1000),
-                language: completedSource.language,
-                contributorId: ((_completedState$env = completedState.env) === null || _completedState$env === void 0 || (_completedState$env = _completedState$env.identifiers) === null || _completedState$env === void 0 ? void 0 : _completedState$env.visitorId) || "",
-                calibrationApplied: !!completedCalibration.complete
-              });
-              if (detail) {
-                _context.n = 5;
-                break;
-              }
-              throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
             case 5:
-              emitCompletionEvent(detail);
-              redirect = getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url);
-              if (redirect) {
-                setTimeout(function () {
-                  window.location.href = redirect;
-                }, 1500);
+              result = _context.v;
+              if (result && result.success) {
+                transferred = true;
               }
+              if (result && result.success) {
+                // Described from the submit-time snapshot, not from the store as
+                // it stands now.
+                //
+                // The bytes and `metadata` were captured before the transfer
+                // began, but these fields were being read back out of the live
+                // state afterwards — and the file input stays active while
+                // `status === "submitting"`. A contributor who attached a file
+                // during a slow upload therefore had `starmus:complete` report
+                // the *new* source's mime type, duration and language for the
+                // *old* source's bytes: an asset described as something it is
+                // not, which is the same mislabelling the source transitions
+                // were fixed to prevent, arriving by a different route.
+                detail = buildCompletionDetail({
+                  instanceId: instanceId,
+                  result: result,
+                  metadata: metadata,
+                  formFields: formFields,
+                  fileName: fileName,
+                  mimeType: metadata.mimeType || audioBlob.type || "",
+                  durationMs: (_metadata$durationMs = metadata.durationMs) !== null && _metadata$durationMs !== void 0 ? _metadata$durationMs : 0,
+                  language: submittedLanguage,
+                  contributorId: ((_stateEnv$identifiers = stateEnv.identifiers) === null || _stateEnv$identifiers === void 0 ? void 0 : _stateEnv$identifiers.visitorId) || "",
+                  calibrationApplied: !!metadata.calibration
+                });
+                emitCompletionEvent(detail);
 
-              // Notify parent frame (modal context) safely
-              if ((_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
-                try {
-                  if (window.parent && window.parent !== window) {
-                    void window.parent.location.href; // Throws if cross-origin
-                    if (window.parent.jQuery) {
-                      window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
-                        audioPostId: result.data.post_id
-                      }]);
+                // Dispatched *after* the boundary event, not before.
+                //
+                // Store listeners run without isolation, so one of them throwing
+                // aborted this function before `starmus:complete` was emitted —
+                // and by then `transferred` is true, so the catch deliberately
+                // does not queue. An accepted upload lost its boundary event and
+                // its local record together, over a UI listener's bug. The event
+                // is built entirely from the submit-time snapshot, so nothing in
+                // it depends on this dispatch having happened first.
+                // Whether *this* attempt is the one in flight, read **before** the
+                // dispatch. The reducer clears `activeId` when it applies a
+                // completion, so asking afterwards answers `false` for every
+                // successful upload — which suppressed the redirect and the
+                // host notification on the ordinary path. An earlier version of
+                // this captured it after the dispatch and a test asserted only
+                // that the line existed, not where.
+                wasCurrent = ((_store$getState$submi = (_store$getState$submi2 = store.getState().submission) === null || _store$getState$submi2 === void 0 ? void 0 : _store$getState$submi2.activeId) !== null && _store$getState$submi !== void 0 ? _store$getState$submi : null) === attemptId;
+                store.dispatch({
+                  type: "starmus/submit-complete",
+                  payload: result,
+                  submissionId: attemptId
+                });
+
+                // Only if the completion was actually applied.
+                //
+                // The reducer refuses a completion whose source has since been
+                // replaced — that is the whole point of the superseded state —
+                // but these two ran regardless, so a slow upload navigated the
+                // contributor away from a recording they had just attached, and
+                // told the host page a submission had completed that this state
+                // does not consider complete. The side effects follow the
+                // reducer's decision rather than the transfer's.
+                settled = wasCurrent && store.getState().status === "complete";
+                redirect = settled ? getSafeRedirect(((_result$data = result.data) === null || _result$data === void 0 ? void 0 : _result$data.redirect_url) || result.redirect_url) : null;
+                if (redirect) {
+                  // The submission this redirect belongs to, captured now.
+                  //
+                  // Re-checking `status === "complete"` alone was not enough:
+                  // a contributor can replace the source, submit the new one
+                  // and have it finish inside the 1.5 seconds, at which point
+                  // the old timer sees `complete` — set by the *second*
+                  // upload — and navigates to the first upload's URL. The
+                  // state is right and the destination is wrong.
+                  redirectFor = attemptId;
+                  setTimeout(function () {
+                    var _now$submission;
+                    // Compared against the id the reducer records when a
+                    // completion is applied, which survives settlement.
+                    // `activeId` is cleared by that same transition, so a
+                    // null there meant "any completed state" and an older
+                    // timer could navigate after a newer upload finished,
+                    // using the older upload's URL.
+                    var now = store.getState();
+                    if (now.status === "complete" && ((_now$submission = now.submission) === null || _now$submission === void 0 ? void 0 : _now$submission.completedId) === redirectFor) {
+                      window.location.href = redirect;
                     }
+                  }, 1500);
+                }
+
+                // Notify parent frame (modal context) safely
+                if (settled && (_result$data2 = result.data) !== null && _result$data2 !== void 0 && _result$data2.post_id) {
+                  try {
+                    if (window.parent && window.parent !== window) {
+                      void window.parent.location.href; // Throws if cross-origin
+                      if (window.parent.jQuery) {
+                        window.parent.jQuery(window.parent.document).trigger("starmusRecordingComplete", [{
+                          audioPostId: result.data.post_id
+                        }]);
+                      }
+                    }
+                  } catch (_unused2) {
+                    // Cross-origin — silently skip
                   }
-                } catch (_unused2) {
-                  // Cross-origin — silently skip
                 }
               }
-            case 6:
-              _context.n = 14;
+              _context.n = 11;
               break;
-            case 7:
-              _context.p = 7;
+            case 6:
+              _context.p = 6;
               _t = _context.v;
               console.error("[Core] Upload failed:", _t.message);
               sparxstarIntegration.reportError("upload_failed", {
@@ -14789,58 +18619,128 @@
                 network: stateEnv.network,
                 fileSize: audioBlob.size
               });
-              message = _t && _t.message ? _t.message : String(_t);
-              retryableUploadError = !navigator.onLine || /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(message);
-              if (!retryableUploadError) {
-                _context.n = 13;
+              message = _t && _t.message ? _t.message : String(_t); // Asked of the queue, not decided again here.
+              //
+              // This used to keep its own list of retryable forms beside the
+              // queue's, and the two drifted every time either moved: first on
+              // `response code: 503`, then on the transient 4xx, and most
+              // recently on `TUS_UPLOAD_START_FAILED`, which the queue retries
+              // and this called final. Each time the contributor was told their
+              // recording had failed for good while the queue was still retrying
+              // it, and a press of the button queued the same take again.
+              //
+              // One classifier, exported from the queue that acts on it, so the
+              // two answers cannot disagree by construction. Being offline is
+              // still asked separately: that is a fact about this device now, not
+              // a property of the error text.
+              retryableUploadError = !navigator.onLine || !isNonRetryableUploadFailure(message);
+              if (!transferred) {
+                _context.n = 7;
                 break;
               }
-              _context.p = 8;
-              _context.n = 9;
+              // The upload succeeded and something after it did not — the
+              // redirect resolution or the parent-frame notification below.
+              // Queueing now would send the same recording a second time,
+              // which costs the contributor bandwidth they have already
+              // spent and leaves the platform holding two copies of one
+              // take. The asset is on the server; what failed is this
+              // client's handling afterwards, and that is reported rather
+              // than retried.
+              //
+              // The upload identifier goes with the report. Without it the
+              // only record of which asset this was died with the page: the
+              // bytes are on the server under an id nothing local still
+              // names, and nobody can reconcile the two.
+              console.error("[Core] Uploaded, but could not complete:", message, {
+                uploadId: metadata.uploadId
+              });
+              sparxstarIntegration.reportError("post_upload_failure", {
+                error: message,
+                instanceId: instanceId,
+                uploadId: metadata.uploadId,
+                tier: stateEnv.tier
+              });
+              store.dispatch({
+                type: "starmus/error",
+                error: {
+                  message: message,
+                  retryable: false,
+                  // The bytes landed: this id is how the two sides
+                  // reconcile, and it is what marks the submission
+                  // delivered.
+                  uploadId: metadata.uploadId,
+                  // Which attempt this is about, carried separately
+                  // because "delivered" and "whose failure is this" are
+                  // different questions and only one of them is answered
+                  // by the presence of an upload id.
+                  attemptId: attemptId
+                }
+              });
+              return _context.a(2);
+            case 7:
+              _context.p = 7;
+              _context.n = 8;
               return queueSubmission(instanceId, audioBlob, fileName, formFields, metadata);
-            case 9:
+            case 8:
               submissionId = _context.v;
+              // Two identifiers, because they are two different things. The
+              // queue row id is what queue operations address; the attempt
+              // identity is what says *which submission* this result belongs
+              // to. The store matches on the second — matching on the first
+              // would compare a queue row id against what `submit-start`
+              // recorded as `activeId` and reject every ordinary queue
+              // transition. It is the attempt identity and not
+              // `metadata.uploadId` because those differ in exactly the case
+              // this has to survive: no upload id could be minted.
               store.dispatch({
                 type: "starmus/submit-queued",
-                submissionId: submissionId
+                submissionId: submissionId,
+                uploadId: attemptId
               });
-              _context.n = 10;
+              _context.n = 9;
               return getPendingCount();
-            case 10:
+            case 9:
               pending = _context.v;
               if (window.CommandBus) {
                 window.CommandBus.dispatch("starmus/offline/queue_updated", {
                   count: pending
                 });
               }
-              _context.n = 12;
+              if (!retryableUploadError) {
+                // Held, but not something the queue will clear on its own.
+                store.dispatch({
+                  type: "starmus/error",
+                  error: {
+                    message: message,
+                    retryable: false,
+                    attemptId: attemptId
+                  }
+                });
+              }
+              _context.n = 11;
               break;
-            case 11:
-              _context.p = 11;
+            case 10:
+              _context.p = 10;
               _t2 = _context.v;
               console.error("[Core] Offline queue failed:", _t2);
+              // The queue's own message is kept. `QueueFull` names how much
+              // space is taken and how many held recordings are taking it —
+              // the only information the contributor can act on — and
+              // replacing it with "Upload failed completely" threw that away
+              // at the one moment it mattered.
+              queueMessage = _t2 && _t2.message ? _t2.message : "Upload failed completely.";
               store.dispatch({
                 type: "starmus/error",
                 error: {
-                  message: "Upload failed completely.",
-                  retryable: false
+                  message: queueMessage,
+                  retryable: false,
+                  attemptId: attemptId
                 }
               });
-            case 12:
-              _context.n = 14;
-              break;
-            case 13:
-              store.dispatch({
-                type: "starmus/error",
-                error: {
-                  message: message,
-                  retryable: false
-                }
-              });
-            case 14:
+            case 11:
               return _context.a(2);
           }
-        }, _callee, null, [[8, 11], [2, 7]]);
+        }, _callee, null, [[7, 10], [2, 6]]);
       }));
       return _handleSubmit.apply(this, arguments);
     }
@@ -15337,526 +19237,6 @@
 
   var es_map_constructor = {};
 
-  var internalMetadata = {exports: {}};
-
-  var objectGetOwnPropertyNamesExternal = {};
-
-  var hasRequiredObjectGetOwnPropertyNamesExternal;
-
-  function requireObjectGetOwnPropertyNamesExternal () {
-  	if (hasRequiredObjectGetOwnPropertyNamesExternal) return objectGetOwnPropertyNamesExternal;
-  	hasRequiredObjectGetOwnPropertyNamesExternal = 1;
-  	/* eslint-disable es/no-object-getownpropertynames -- safe */
-  	var classof = requireClassofRaw();
-  	var toIndexedObject = requireToIndexedObject();
-  	var $getOwnPropertyNames = requireObjectGetOwnPropertyNames().f;
-  	var arraySlice = requireArraySlice();
-
-  	var windowNames = typeof window == 'object' && window && Object.getOwnPropertyNames
-  	  ? Object.getOwnPropertyNames(window) : [];
-
-  	var getWindowNames = function (it) {
-  	  try {
-  	    return $getOwnPropertyNames(it);
-  	  } catch (error) {
-  	    return arraySlice(windowNames);
-  	  }
-  	};
-
-  	// fallback for IE11 buggy Object.getOwnPropertyNames with iframe and window
-  	objectGetOwnPropertyNamesExternal.f = function getOwnPropertyNames(it) {
-  	  return windowNames && classof(it) === 'Window'
-  	    ? getWindowNames(it)
-  	    : $getOwnPropertyNames(toIndexedObject(it));
-  	};
-  	return objectGetOwnPropertyNamesExternal;
-  }
-
-  var arrayBufferNonExtensible;
-  var hasRequiredArrayBufferNonExtensible;
-
-  function requireArrayBufferNonExtensible () {
-  	if (hasRequiredArrayBufferNonExtensible) return arrayBufferNonExtensible;
-  	hasRequiredArrayBufferNonExtensible = 1;
-  	// FF26- bug: ArrayBuffers are non-extensible, but Object.isExtensible does not report it
-  	var fails = requireFails();
-
-  	arrayBufferNonExtensible = fails(function () {
-  	  if (typeof ArrayBuffer == 'function') {
-  	    var buffer = new ArrayBuffer(8);
-  	    // eslint-disable-next-line es/no-object-isextensible, es/no-object-defineproperty -- safe
-  	    if (Object.isExtensible(buffer)) Object.defineProperty(buffer, 'a', { value: 8 });
-  	  }
-  	});
-  	return arrayBufferNonExtensible;
-  }
-
-  var objectIsExtensible;
-  var hasRequiredObjectIsExtensible;
-
-  function requireObjectIsExtensible () {
-  	if (hasRequiredObjectIsExtensible) return objectIsExtensible;
-  	hasRequiredObjectIsExtensible = 1;
-  	var fails = requireFails();
-  	var isObject = requireIsObject();
-  	var classof = requireClassofRaw();
-  	var ARRAY_BUFFER_NON_EXTENSIBLE = requireArrayBufferNonExtensible();
-
-  	// eslint-disable-next-line es/no-object-isextensible -- safe
-  	var $isExtensible = Object.isExtensible;
-  	var FAILS_ON_PRIMITIVES = fails(function () { });
-
-  	// `Object.isExtensible` method
-  	// https://tc39.es/ecma262/#sec-object.isextensible
-  	objectIsExtensible = (FAILS_ON_PRIMITIVES || ARRAY_BUFFER_NON_EXTENSIBLE) ? function isExtensible(it) {
-  	  if (!isObject(it)) return false;
-  	  if (ARRAY_BUFFER_NON_EXTENSIBLE && classof(it) === 'ArrayBuffer') return false;
-  	  return $isExtensible ? $isExtensible(it) : true;
-  	} : $isExtensible;
-  	return objectIsExtensible;
-  }
-
-  var freezing;
-  var hasRequiredFreezing;
-
-  function requireFreezing () {
-  	if (hasRequiredFreezing) return freezing;
-  	hasRequiredFreezing = 1;
-  	var fails = requireFails();
-
-  	freezing = !fails(function () {
-  	  // eslint-disable-next-line es/no-object-isextensible, es/no-object-preventextensions -- required for testing
-  	  return Object.isExtensible(Object.preventExtensions({}));
-  	});
-  	return freezing;
-  }
-
-  var hasRequiredInternalMetadata;
-
-  function requireInternalMetadata () {
-  	if (hasRequiredInternalMetadata) return internalMetadata.exports;
-  	hasRequiredInternalMetadata = 1;
-  	var $ = require_export();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var hiddenKeys = requireHiddenKeys();
-  	var isObject = requireIsObject();
-  	var hasOwn = requireHasOwnProperty();
-  	var defineProperty = requireObjectDefineProperty().f;
-  	var getOwnPropertyNamesModule = requireObjectGetOwnPropertyNames();
-  	var getOwnPropertyNamesExternalModule = requireObjectGetOwnPropertyNamesExternal();
-  	var isExtensible = requireObjectIsExtensible();
-  	var uid = requireUid();
-  	var FREEZING = requireFreezing();
-
-  	var REQUIRED = false;
-  	var METADATA = uid('meta');
-  	var id = 0;
-
-  	var setMetadata = function (it) {
-  	  defineProperty(it, METADATA, { value: {
-  	    objectID: 'O' + id++, // object ID
-  	    weakData: {}          // weak collections IDs
-  	  } });
-  	};
-
-  	var fastKey = function (it, create) {
-  	  // return a primitive with prefix
-  	  if (!isObject(it)) return typeof it == 'symbol' ? it : (typeof it == 'string' ? 'S' : 'P') + it;
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return 'F';
-  	    // not necessary to add metadata
-  	    if (!create) return 'E';
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return object ID
-  	  } return it[METADATA].objectID;
-  	};
-
-  	var getWeakData = function (it, create) {
-  	  if (!hasOwn(it, METADATA)) {
-  	    // can't set metadata to uncaught frozen object
-  	    if (!isExtensible(it)) return true;
-  	    // not necessary to add metadata
-  	    if (!create) return false;
-  	    // add missing metadata
-  	    setMetadata(it);
-  	  // return the store of weak collections IDs
-  	  } return it[METADATA].weakData;
-  	};
-
-  	// add metadata on freeze-family methods calling
-  	var onFreeze = function (it) {
-  	  if (FREEZING && REQUIRED && isExtensible(it) && !hasOwn(it, METADATA)) setMetadata(it);
-  	  return it;
-  	};
-
-  	var enable = function () {
-  	  meta.enable = function () { /* empty */ };
-  	  REQUIRED = true;
-  	  var getOwnPropertyNames = getOwnPropertyNamesModule.f;
-  	  var splice = uncurryThis([].splice);
-  	  var test = {};
-  	  // eslint-disable-next-line unicorn/no-immediate-mutation -- ES3 syntax limitation
-  	  test[METADATA] = 1;
-
-  	  // prevent exposing of metadata key
-  	  if (getOwnPropertyNames(test).length) {
-  	    getOwnPropertyNamesModule.f = function (it) {
-  	      var result = getOwnPropertyNames(it);
-  	      for (var i = 0, length = result.length; i < length; i++) {
-  	        if (result[i] === METADATA) {
-  	          splice(result, i, 1);
-  	          break;
-  	        }
-  	      } return result;
-  	    };
-
-  	    $({ target: 'Object', stat: true, forced: true }, {
-  	      getOwnPropertyNames: getOwnPropertyNamesExternalModule.f
-  	    });
-  	  }
-  	};
-
-  	var meta = internalMetadata.exports = {
-  	  enable: enable,
-  	  fastKey: fastKey,
-  	  getWeakData: getWeakData,
-  	  onFreeze: onFreeze
-  	};
-
-  	hiddenKeys[METADATA] = true;
-  	return internalMetadata.exports;
-  }
-
-  var collection;
-  var hasRequiredCollection;
-
-  function requireCollection () {
-  	if (hasRequiredCollection) return collection;
-  	hasRequiredCollection = 1;
-  	var $ = require_export();
-  	var globalThis = requireGlobalThis();
-  	var uncurryThis = requireFunctionUncurryThis();
-  	var isForced = requireIsForced();
-  	var defineBuiltIn = requireDefineBuiltIn();
-  	var InternalMetadataModule = requireInternalMetadata();
-  	var iterate = requireIterate();
-  	var anInstance = requireAnInstance();
-  	var isCallable = requireIsCallable();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var isObject = requireIsObject();
-  	var fails = requireFails();
-  	var checkCorrectnessOfIteration = requireCheckCorrectnessOfIteration();
-  	var setToStringTag = requireSetToStringTag();
-  	var inheritIfRequired = requireInheritIfRequired();
-
-  	collection = function (CONSTRUCTOR_NAME, wrapper, common) {
-  	  var IS_MAP = CONSTRUCTOR_NAME.indexOf('Map') !== -1;
-  	  var IS_WEAK = CONSTRUCTOR_NAME.indexOf('Weak') !== -1;
-  	  var ADDER = IS_MAP ? 'set' : 'add';
-  	  var NativeConstructor = globalThis[CONSTRUCTOR_NAME];
-  	  var NativePrototype = NativeConstructor && NativeConstructor.prototype;
-  	  var Constructor = NativeConstructor;
-  	  var exported = {};
-
-  	  var fixMethod = function (KEY) {
-  	    var uncurriedNativeMethod = uncurryThis(NativePrototype[KEY]);
-  	    defineBuiltIn(NativePrototype, KEY,
-  	      KEY === 'add' ? function add(value) {
-  	        uncurriedNativeMethod(this, value === 0 ? 0 : value);
-  	        return this;
-  	      } : KEY === 'delete' ? function (key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'get' ? function get(key) {
-  	        return IS_WEAK && !isObject(key) ? undefined : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : KEY === 'has' ? function has(key) {
-  	        return IS_WEAK && !isObject(key) ? false : uncurriedNativeMethod(this, key === 0 ? 0 : key);
-  	      } : function set(key, value) {
-  	        uncurriedNativeMethod(this, key === 0 ? 0 : key, value);
-  	        return this;
-  	      }
-  	    );
-  	  };
-
-  	  var REPLACE = isForced(
-  	    CONSTRUCTOR_NAME,
-  	    !isCallable(NativeConstructor) || !(IS_WEAK || NativePrototype.forEach && !fails(function () {
-  	      new NativeConstructor().entries().next();
-  	    }))
-  	  );
-
-  	  if (REPLACE) {
-  	    // create collection constructor
-  	    Constructor = common.getConstructor(wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER);
-  	    InternalMetadataModule.enable();
-  	  } else if (isForced(CONSTRUCTOR_NAME, true)) {
-  	    var instance = new Constructor();
-  	    // early implementations not supports chaining
-  	    var HASNT_CHAINING = instance[ADDER](IS_WEAK ? {} : -0, 1) !== instance;
-  	    // V8 ~ Chromium 40- weak-collections throws on primitives, but should return false
-  	    var THROWS_ON_PRIMITIVES = fails(function () { instance.has(1); });
-  	    // most early implementations doesn't supports iterables, most modern - not close it correctly
-  	    // eslint-disable-next-line no-new -- required for testing
-  	    var ACCEPT_ITERABLES = checkCorrectnessOfIteration(function (iterable) { new NativeConstructor(iterable); });
-  	    // for early implementations -0 and +0 not the same
-  	    var BUGGY_ZERO = !IS_WEAK && fails(function () {
-  	      // V8 ~ Chromium 42- fails only with 5+ elements
-  	      var $instance = new NativeConstructor();
-  	      var index = 5;
-  	      while (index--) $instance[ADDER](index, index);
-  	      return !$instance.has(-0);
-  	    });
-
-  	    if (!ACCEPT_ITERABLES) {
-  	      Constructor = wrapper(function (dummy, iterable) {
-  	        anInstance(dummy, NativePrototype);
-  	        var that = inheritIfRequired(new NativeConstructor(), dummy, Constructor);
-  	        if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	        return that;
-  	      });
-  	      Constructor.prototype = NativePrototype;
-  	      NativePrototype.constructor = Constructor;
-  	    }
-
-  	    if (THROWS_ON_PRIMITIVES || BUGGY_ZERO) {
-  	      fixMethod('delete');
-  	      fixMethod('has');
-  	      IS_MAP && fixMethod('get');
-  	    }
-
-  	    if (BUGGY_ZERO || HASNT_CHAINING) fixMethod(ADDER);
-
-  	    // weak collections should not contains .clear method
-  	    if (IS_WEAK && NativePrototype.clear) delete NativePrototype.clear;
-  	  }
-
-  	  exported[CONSTRUCTOR_NAME] = Constructor;
-  	  $({ global: true, constructor: true, forced: Constructor !== NativeConstructor }, exported);
-
-  	  setToStringTag(Constructor, CONSTRUCTOR_NAME);
-
-  	  if (!IS_WEAK) common.setStrong(Constructor, CONSTRUCTOR_NAME, IS_MAP);
-
-  	  return Constructor;
-  	};
-  	return collection;
-  }
-
-  var collectionStrong;
-  var hasRequiredCollectionStrong;
-
-  function requireCollectionStrong () {
-  	if (hasRequiredCollectionStrong) return collectionStrong;
-  	hasRequiredCollectionStrong = 1;
-  	var create = requireObjectCreate();
-  	var defineBuiltInAccessor = requireDefineBuiltInAccessor();
-  	var defineBuiltIns = requireDefineBuiltIns();
-  	var bind = requireFunctionBindContext();
-  	var anInstance = requireAnInstance();
-  	var isNullOrUndefined = requireIsNullOrUndefined();
-  	var iterate = requireIterate();
-  	var defineIterator = requireIteratorDefine();
-  	var createIterResultObject = requireCreateIterResultObject();
-  	var setSpecies = requireSetSpecies();
-  	var DESCRIPTORS = requireDescriptors();
-  	var fastKey = requireInternalMetadata().fastKey;
-  	var InternalStateModule = requireInternalState();
-
-  	var setInternalState = InternalStateModule.set;
-  	var internalStateGetterFor = InternalStateModule.getterFor;
-
-  	collectionStrong = {
-  	  getConstructor: function (wrapper, CONSTRUCTOR_NAME, IS_MAP, ADDER) {
-  	    var Constructor = wrapper(function (that, iterable) {
-  	      anInstance(that, Prototype);
-  	      setInternalState(that, {
-  	        type: CONSTRUCTOR_NAME,
-  	        index: create(null),
-  	        first: null,
-  	        last: null,
-  	        size: 0
-  	      });
-  	      if (!DESCRIPTORS) that.size = 0;
-  	      if (!isNullOrUndefined(iterable)) iterate(iterable, that[ADDER], { that: that, AS_ENTRIES: IS_MAP });
-  	    });
-
-  	    var Prototype = Constructor.prototype;
-
-  	    var getInternalState = internalStateGetterFor(CONSTRUCTOR_NAME);
-
-  	    var define = function (that, key, value) {
-  	      var state = getInternalState(that);
-  	      var entry = getEntry(that, key);
-  	      var previous, index;
-  	      // change existing entry
-  	      if (entry) {
-  	        entry.value = value;
-  	      // create new entry
-  	      } else {
-  	        state.last = entry = {
-  	          index: index = fastKey(key, true),
-  	          key: key,
-  	          value: value,
-  	          previous: previous = state.last,
-  	          next: null,
-  	          removed: false
-  	        };
-  	        if (!state.first) state.first = entry;
-  	        if (previous) previous.next = entry;
-  	        if (DESCRIPTORS) state.size++;
-  	        else that.size++;
-  	        // add to index
-  	        if (index !== 'F') state.index[index] = entry;
-  	      } return that;
-  	    };
-
-  	    var getEntry = function (that, key) {
-  	      var state = getInternalState(that);
-  	      // fast case
-  	      var index = fastKey(key);
-  	      var entry;
-  	      if (index !== 'F') return state.index[index];
-  	      // frozen object case
-  	      for (entry = state.first; entry; entry = entry.next) {
-  	        if (entry.key === key) return entry;
-  	      }
-  	    };
-
-  	    defineBuiltIns(Prototype, {
-  	      // `{ Map, Set }.prototype.clear()` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.clear
-  	      // https://tc39.es/ecma262/#sec-set.prototype.clear
-  	      clear: function clear() {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = state.first;
-  	        while (entry) {
-  	          entry.removed = true;
-  	          if (entry.previous) entry.previous = entry.previous.next = null;
-  	          entry = entry.next;
-  	        }
-  	        state.first = state.last = null;
-  	        state.index = create(null);
-  	        if (DESCRIPTORS) state.size = 0;
-  	        else that.size = 0;
-  	      },
-  	      // `{ Map, Set }.prototype.delete(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.delete
-  	      // https://tc39.es/ecma262/#sec-set.prototype.delete
-  	      'delete': function (key) {
-  	        var that = this;
-  	        var state = getInternalState(that);
-  	        var entry = getEntry(that, key);
-  	        if (entry) {
-  	          var next = entry.next;
-  	          var prev = entry.previous;
-  	          delete state.index[entry.index];
-  	          entry.removed = true;
-  	          if (prev) prev.next = next;
-  	          if (next) next.previous = prev;
-  	          if (state.first === entry) state.first = next;
-  	          if (state.last === entry) state.last = prev;
-  	          if (DESCRIPTORS) state.size--;
-  	          else that.size--;
-  	        } return !!entry;
-  	      },
-  	      // `{ Map, Set }.prototype.forEach(callbackfn, thisArg = undefined)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.foreach
-  	      // https://tc39.es/ecma262/#sec-set.prototype.foreach
-  	      forEach: function forEach(callbackfn /* , that = undefined */) {
-  	        var state = getInternalState(this);
-  	        var boundFunction = bind(callbackfn, arguments.length > 1 ? arguments[1] : undefined);
-  	        var entry;
-  	        while (entry = entry ? entry.next : state.first) {
-  	          boundFunction(entry.value, entry.key, this);
-  	          // revert to the last existing entry
-  	          while (entry && entry.removed) entry = entry.previous;
-  	        }
-  	      },
-  	      // `{ Map, Set}.prototype.has(key)` methods
-  	      // https://tc39.es/ecma262/#sec-map.prototype.has
-  	      // https://tc39.es/ecma262/#sec-set.prototype.has
-  	      has: function has(key) {
-  	        return !!getEntry(this, key);
-  	      }
-  	    });
-
-  	    defineBuiltIns(Prototype, IS_MAP ? {
-  	      // `Map.prototype.get(key)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.get
-  	      get: function get(key) {
-  	        var entry = getEntry(this, key);
-  	        return entry && entry.value;
-  	      },
-  	      // `Map.prototype.set(key, value)` method
-  	      // https://tc39.es/ecma262/#sec-map.prototype.set
-  	      set: function set(key, value) {
-  	        return define(this, key === 0 ? 0 : key, value);
-  	      }
-  	    } : {
-  	      // `Set.prototype.add(value)` method
-  	      // https://tc39.es/ecma262/#sec-set.prototype.add
-  	      add: function add(value) {
-  	        return define(this, value = value === 0 ? 0 : value, value);
-  	      }
-  	    });
-  	    if (DESCRIPTORS) defineBuiltInAccessor(Prototype, 'size', {
-  	      configurable: true,
-  	      get: function () {
-  	        return getInternalState(this).size;
-  	      }
-  	    });
-  	    return Constructor;
-  	  },
-  	  setStrong: function (Constructor, CONSTRUCTOR_NAME, IS_MAP) {
-  	    var ITERATOR_NAME = CONSTRUCTOR_NAME + ' Iterator';
-  	    var getInternalCollectionState = internalStateGetterFor(CONSTRUCTOR_NAME);
-  	    var getInternalIteratorState = internalStateGetterFor(ITERATOR_NAME);
-  	    // `{ Map, Set }.prototype.{ keys, values, entries, @@iterator }()` methods
-  	    // https://tc39.es/ecma262/#sec-map.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-map.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-map.prototype.values
-  	    // https://tc39.es/ecma262/#sec-map.prototype-@@iterator
-  	    // https://tc39.es/ecma262/#sec-set.prototype.entries
-  	    // https://tc39.es/ecma262/#sec-set.prototype.keys
-  	    // https://tc39.es/ecma262/#sec-set.prototype.values
-  	    // https://tc39.es/ecma262/#sec-set.prototype-@@iterator
-  	    defineIterator(Constructor, CONSTRUCTOR_NAME, function (iterated, kind) {
-  	      setInternalState(this, {
-  	        type: ITERATOR_NAME,
-  	        target: iterated,
-  	        state: getInternalCollectionState(iterated),
-  	        kind: kind,
-  	        last: null
-  	      });
-  	    }, function () {
-  	      var state = getInternalIteratorState(this);
-  	      var kind = state.kind;
-  	      var entry = state.last;
-  	      // revert to the last existing entry
-  	      while (entry && entry.removed) entry = entry.previous;
-  	      // get next entry
-  	      if (!state.target || !(state.last = entry = entry ? entry.next : state.state.first)) {
-  	        // or finish the iteration
-  	        state.target = null;
-  	        return createIterResultObject(undefined, true);
-  	      }
-  	      // return step by kind
-  	      if (kind === 'keys') return createIterResultObject(entry.key, false);
-  	      if (kind === 'values') return createIterResultObject(entry.value, false);
-  	      return createIterResultObject([entry.key, entry.value], false);
-  	    }, IS_MAP ? 'entries' : 'values', !IS_MAP, true);
-
-  	    // `{ Map, Set }.prototype[@@species]` accessors
-  	    // https://tc39.es/ecma262/#sec-get-map-@@species
-  	    // https://tc39.es/ecma262/#sec-get-set-@@species
-  	    setSpecies(CONSTRUCTOR_NAME);
-  	  }
-  	};
-  	return collectionStrong;
-  }
-
   var hasRequiredEs_map_constructor;
 
   function requireEs_map_constructor () {
@@ -16170,9 +19550,17 @@
   /**
    * @typedef {Object} CaptureAttainment
    * @property {CaptureProfileName} profile
-   * @property {{sampleRate: number|null, channelCount: number|null}} requested
+   * @property {{sampleRate: number|null, channelCount: number|null,
+   *   audioBitsPerSecond: number|null}} requested What the profile asked for.
+   *   `audioBitsPerSecond` is always present and may be null: the profile
+   *   constrains it and `getRecorderOptions()` applies it, so a consumer reading
+   *   this record to see what was asked of the device has to be able to see it.
    * @property {{sampleRate?: number, channelCount?: number}} actual
-   * @property {boolean} attained    True only when every constrained value was verified within its limit.
+   * @property {boolean|null} attained True only when every constrained value was
+   *   verified within its limit; `false` when one was missed; `null` when the
+   *   question does not apply, which is the `import` profile's case — nothing was
+   *   captured, so nothing was measured, and `false` would claim a constraint was
+   *   missed rather than never posed.
    * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
    * @property {string[]} unverified Constrained values the device did not report at all.
    */
@@ -16193,34 +19581,83 @@
    */
   function describeAttainment(name, track) {
     var profile = resolveCaptureProfile(name);
-    var actual = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    // Projected to the fields the contract needs, never the whole settings
+    // object. `MediaTrackSettings` carries `deviceId` and `groupId` — stable
+    // identifiers for the contributor's microphone — and this record is
+    // serialized into TUS metadata, so keeping it wholesale attached a device
+    // fingerprint to every asset a contributor ever uploaded. Nothing
+    // downstream needs it, and a platform built on data sovereignty is the last
+    // place it should travel by accident.
+    var settings = typeof (track === null || track === void 0 ? void 0 : track.getSettings) === "function" ? track.getSettings() : {};
+    /** @type {{sampleRate?: number, channelCount?: number}} */
+    var actual = {};
+    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
+      var key = _arr[_i];
+      if (typeof settings[key] === "number") {
+        actual[key] = settings[key];
+      }
+    }
     var requested = {
       sampleRate: profile.sampleRate,
-      channelCount: profile.channelCount
+      channelCount: profile.channelCount,
+      // Declared here too, because the profile constrains it and
+      // `getRecorderOptions()` applies it. Leaving it out of the record made
+      // an applied constraint invisible to every consumer of the attainment.
+      audioBitsPerSecond: profile.audioBitsPerSecond
     };
 
     /** @type {string[]} */
     var exceeded = [];
     /** @type {string[]} */
     var unverified = [];
-    for (var _i = 0, _arr = /** @type {const} */["sampleRate", "channelCount"]; _i < _arr.length; _i++) {
-      var key = _arr[_i];
-      var limit = profile[key];
+    var constrained = 0;
+    for (var _i2 = 0, _arr2 = /** @type {const} */["sampleRate", "channelCount"]; _i2 < _arr2.length; _i2++) {
+      var _key = _arr2[_i2];
+      var limit = profile[_key];
       if (limit === null) {
         continue;
       }
-      var reported = actual[key];
+      constrained += 1;
+      var reported = actual[_key];
       if (typeof reported !== "number") {
-        unverified.push(key);
+        unverified.push(_key);
       } else if (reported > limit) {
-        exceeded.push(key);
+        exceeded.push(_key);
       }
+    }
+
+    // A bitrate the profile asks for cannot be confirmed from here: it is a
+    // MediaRecorder option, not a MediaStreamTrack setting, so `getSettings()`
+    // never reports it and the browser is free to ignore or change it. Recorded
+    // as unverified rather than omitted — an applied constraint nobody checks
+    // and nobody mentions is the kind of thing `attained: true` quietly
+    // overstates.
+    if (profile.audioBitsPerSecond !== null) {
+      constrained += 1;
+      unverified.push("audioBitsPerSecond");
     }
     return {
       profile: profile.name,
       requested: requested,
       actual: actual,
-      attained: exceeded.length === 0 && unverified.length === 0,
+      // Tri-state, and `null` is not a failure.
+      //
+      // `false` means a constraint was missed. `null` means the question does
+      // not apply — the profile constrains nothing (`import`), or nothing it
+      // constrains could be verified at all — and returning `true` there was
+      // wrong: an unconstrained profile has nothing to attain, so the loop
+      // finding no violations said "attained" when it should have said "not
+      // applicable". `true` means every constraint that *can* be checked from
+      // a track was, and none was exceeded; `unverified` names the rest.
+      // `true` requires every constraint to have been checked, which is what
+      // the contract above says and what an earlier version of this did not
+      // do: it returned `true` when *some* constraint verified, so
+      // `conversation` — whose bitrate can never be read back — reported
+      // attainment while one of its constraints was unexamined. That is the
+      // overclaim ADR-035 exists to prevent. Any unverified constraint now
+      // yields `null`: not a failure, a question this device cannot answer,
+      // with `unverified` naming which part.
+      attained: exceeded.length > 0 ? false : constrained === 0 || unverified.length > 0 ? null : true,
       exceeded: exceeded,
       unverified: unverified
     };
@@ -17007,8 +20444,17 @@
                 type: "starmus/capture-profile",
                 attainment: attainment
               });
-              if (!attainment.attained) {
+              // Strictly `false`, because `attained` is a tri-state and `null` is not
+              // a failure. `null` means the question does not apply — the profile
+              // constrains nothing, or nothing it constrains could be read back. The
+              // `conversation` profile declares a bitrate that a MediaStreamTrack
+              // never reports, so it is always unverified and every ordinary capture
+              // came through here logging that the device had not met the profile.
+              // A warning that fires on the normal case teaches people to ignore it.
+              if (attainment.attained === false) {
                 console.warn("[Recorder] Capture profile \"".concat(attainment.profile, "\" not attained by this device."), attainment);
+              } else if (attainment.attained === null && attainment.unverified.length > 0) {
+                debugLog("[Recorder] Capture profile \"".concat(attainment.profile, "\" could not be fully verified:"), attainment.unverified);
               }
               store.dispatch({
                 type: "starmus/mic-start"
@@ -17083,7 +20529,21 @@
                   payload: {
                     blob: blob,
                     fileName: fileName
-                  }
+                  },
+                  // The profile this take was actually captured under, carried
+                  // with the take rather than left standing in the store from
+                  // `capture-profile` at the start of the recording.
+                  //
+                  // The file input stays live while recording, so a contributor
+                  // who attaches a file mid-take sets the source profile to
+                  // `import` — and this dispatch, landing afterwards, replaced
+                  // the bytes without replacing the label. The microphone
+                  // recording then travelled to ingestion described as
+                  // prerecorded imported material, which for an archive is the
+                  // mislabelling ADR-035 exists to prevent. Re-sending the
+                  // attainment here means the take carries its own truth no
+                  // matter what happened to the store while it was running.
+                  attainment: attainment
                 });
               });
               mediaRecorder.start(1000); // 1-second chunks

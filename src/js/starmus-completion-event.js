@@ -26,27 +26,68 @@ export function resolveUploadFormat(mimeType, fileName) {
     const name = String(fileName || "").trim().toLowerCase();
     const ext = name.includes(".") ? name.split(".").pop() : "";
 
+    // A codec, only when the codec is actually stated. `audio/aac`, an `.aac`
+    // file and an explicit `mp4a.40.2` codec parameter each name AAC; a bare
+    // `audio/mp4` or `.m4a` names a *container*, which may hold HE-AAC, ALAC or
+    // something else. Reporting `aac-lc` for those was a codec claim this
+    // client cannot establish — the same misdescription the `webm` case was
+    // changed to avoid, and the thing ADR-035 holds OQ-021 open about.
+    // `mp4a` alone is not AAC-LC. The object-type indicates the profile:
+    // `mp4a.40.2` is AAC-LC, `mp4a.40.5` is HE-AAC, `mp4a.40.29` HE-AACv2.
+    // Reporting every `mp4a…` as `aac-lc` named a codec profile this client
+    // cannot establish — the same overclaim as calling a container its codec,
+    // one level down.
+    // Matched at a token boundary, not by substring. `includes("mp4a.40.2")`
+    // is also true of `mp4a.40.29` — HE-AAC v2 — so the fix that stopped
+    // reporting every `mp4a…` as AAC-LC still reported one of the profiles it
+    // was written to exclude.
+    // The media type is matched as a whole token too. `includes("audio/aac")`
+    // is also true of `audio/aacp` — HE-AAC, the profile this branch exists to
+    // exclude — so the substring test reported the very codec the token-boundary
+    // fix above was written to keep out, by the other half of the condition.
+    // A codecs parameter naming a non-LC profile settles it before the base
+    // media type is consulted. `audio/aac; codecs=mp4a.40.5` matched the
+    // `audio/aac` branch and returned `aac-lc`, so the parameter that says
+    // HE-AAC was read as confirmation of the thing it rules out.
+    // `audio/aacp` counts here too, not only an `mp4a.40.x` parameter. The
+    // media type names HE-AAC on its own, and an asset carrying it with a
+    // `.aac` filename reached the extension alternative below and was reported
+    // AAC-LC — the profile guard bypassed by the very branch it sits beside.
+    const statesNonLcProfile =
+        /\bmp4a\.40\.(?!2\b)\d+\b/.test(type) || /\baudio\/aacp\b/.test(type);
+
     if (
-        type.includes("audio/mp4") ||
-        type.includes("audio/x-m4a") ||
-        type.includes("audio/aac") ||
-        type.includes("aac") ||
-        type.includes("mp4a") ||
-        ext === "m4a" ||
-        ext === "mp4" ||
-        ext === "aac"
+        !statesNonLcProfile &&
+        (/\baudio\/aac(?![\w+.-])/.test(type) || /\bmp4a\.40\.2\b/.test(type) || ext === "aac")
     ) {
         return "aac-lc";
     }
 
+    // The container, named as itself, for the Node to identify the codec from
+    // the bytes — exactly as WAV, MP3 and WebM are handled below.
+    if (type.includes("audio/mp4") || type.includes("audio/x-m4a") || ext === "m4a" || ext === "mp4") {
+        return "mp4";
+    }
+
+    // Opus only when Opus is stated. `audio/opus`, a `codecs=opus` parameter and
+    // an `.opus` file each name the codec; a bare `audio/ogg` or `.ogg` names a
+    // *container*, which may hold Vorbis, FLAC or Speex. This is the same
+    // container-for-codec substitution the mp4 branch above was corrected for,
+    // and imported material is exactly where it would misdescribe an asset.
+    // Token-matched, like the AAC branch above. `includes("opus")` is also true
+    // of `audio/ogg; codecs=notopus` and of any future parameter containing the
+    // word, so the substring test could name a codec the value explicitly is
+    // not.
     if (
-        type.includes("audio/ogg") ||
-        type.includes("audio/opus") ||
-        type.includes("opus") ||
-        ext === "opus" ||
-        ext === "ogg"
+        /\baudio\/opus(?![\w+.-])/.test(type) ||
+        /\bopus\b/.test(type) ||
+        ext === "opus"
     ) {
         return "opus";
+    }
+
+    if (type.includes("audio/ogg") || ext === "ogg") {
+        return "ogg";
     }
 
     // WAV and MP3 are reported as themselves. ADR-035 holds the container and
@@ -65,6 +106,21 @@ export function resolveUploadFormat(mimeType, fileName) {
 
     if (type.includes("audio/mpeg") || type.includes("audio/mp3") || ext === "mp3") {
         return "mp3";
+    }
+
+    // WebM with no codec stated. The recorder's own fallback is literally
+    // `mimeType || "audio/webm"`, so this arrives in practice rather than in
+    // theory — and returning null for it meant a real recording produced no
+    // `starmus:complete` at all, which is the one event nothing downstream
+    // starts without.
+    //
+    // Reported as `webm`, not silently resolved to `opus`. Browser WebM audio
+    // is usually Opus and sometimes not, and ADR-035 holds the codec question
+    // (OQ-021) for someone else to answer. Naming the container this package
+    // actually has, and letting the Node identify the codec from the bytes, is
+    // the same rule WAV and MP3 already follow above.
+    if (type.includes("audio/webm") || ext === "webm") {
+        return "webm";
     }
 
     return null;
@@ -92,12 +148,12 @@ function readContributorConsent() {
  * arrived, or an empty string when the result carries none.
  *
  * This cannot tell a server-issued identifier from a client-generated one:
- * `uploadDirect` already writes the client's UUID into `uploadId` when the
- * server returns no identifier of its own, so by the time a result reaches
- * here the two are indistinguishable. That fallback is deliberate — the same
- * UUID travels as TUS `upload_uuid` metadata, so it is a real correlation
- * handle rather than a guess — but this function does not verify the origin,
- * and callers must not assume it did.
+ * the upload path resolves `uploadId` to the client's UUID when the server
+ * returns no identifier of its own, so by the time a result reaches here the
+ * two are indistinguishable. That fallback is deliberate — the same UUID
+ * travels as TUS `upload_uuid` metadata, so it is a real correlation handle
+ * rather than a guess — but this function does not verify the origin, and
+ * callers must not assume it did.
  *
  * @param {Object} result
  * @returns {string}
@@ -132,29 +188,70 @@ export function resolveUploadId(result) {
  * @param {string} [input.contributorId]
  * @param {boolean} [input.calibrationApplied]
  * @param {number} [input.durationMs]
- * @returns {Object|null} null when the format cannot be named.
+ * @returns {Object} Always a detail object. An accepted upload always gets its
+ *          boundary event; see the `format` note below.
  */
 export function buildCompletionDetail(input) {
-    const format = resolveUploadFormat(input.mimeType, input.fileName);
-    if (!format) {
-        return null;
-    }
+    // An unnameable format reports `unknown` rather than withholding the
+    // event. `starmus:complete` is the boundary between recording and
+    // processing and nothing server-side begins without it, so returning null
+    // here left an asset sitting on the server with no consumer told it
+    // exists — the client's inability to name a container silently costing the
+    // recording its entire downstream life.
+    //
+    // Naming it `unknown` is also the only honest option available: ADR-035
+    // holds the container/codec question (OQ-021), so this package does not get
+    // to rule an arriving format inadmissible, and it must not guess one
+    // either. The Spoken Audio Node identifies the codec from the bytes, which
+    // is what the named formats already rely on.
+    const format = resolveUploadFormat(input.mimeType, input.fileName) || "unknown";
 
     const attainment = input.metadata?.captureAttainment || null;
     const consent = readContributorConsent();
 
     return {
         sessionId: input.instanceId,
+        // What this event actually witnesses.
+        //
+        // `transferred` means the media ingest service acknowledged the last
+        // chunk. It does **not** mean the Spoken Audio Node accepted the asset:
+        // ADR-038 splits transport from acceptance, and no acknowledgement
+        // contract exists on that seam yet, so nothing reaching this client can
+        // observe acceptance. Consumers that need acceptance must wait for the
+        // Node's own signal once that contract is defined; reading this event
+        // as acceptance would treat "the bytes arrived" as "the platform has
+        // it", which is exactly the confusion the three-party split exists to
+        // prevent.
+        //
+        // The field is present from the start, with one value, so that adding
+        // `accepted` later is an extension rather than a breaking change to a
+        // shape consumers had to infer.
+        stage: "transferred",
         uploadId: resolveUploadId(input.result),
         durationMs: input.durationMs ?? 0,
         sampleRate: attainment?.actual?.sampleRate ?? null,
         channels: attainment?.actual?.channelCount ?? null,
-        captureProfile: input.metadata?.captureProfile || null,
+        // Normalised at the boundary, to the same rule `uploadTus()` applies
+        // before putting it on the wire: a non-empty string after trimming, or
+        // absent. A legacy queue row carrying `"  "` — or a number — is truthy
+        // here and omitted there, so the completion event described a capture
+        // profile that the metadata accompanying the asset did not carry. Two
+        // records of one upload disagreeing is worse than neither having it.
+        captureProfile:
+            typeof input.metadata?.captureProfile === "string" &&
+            input.metadata.captureProfile.trim() !== ""
+                ? input.metadata.captureProfile.trim()
+                : null,
         captureProfileAttained: attainment?.attained ?? null,
         format,
         language: input.language || input.formFields?.language || "",
         contributorId: input.contributorId || "",
-        consentGranted: !!(consent && consent.granted),
+        // Strictly `true`, not merely truthy. A stored record of
+        // `{ granted: "false" }` or `{ granted: 1 }` — a malformed write, an
+        // older schema, a host that stringified it — coerced to
+        // `consentGranted: true` under `!!`. Consent is the one field where a
+        // permissive read is indefensible: it asserts that a contributor agreed.
+        consentGranted: consent?.granted === true,
         calibrationApplied: !!input.calibrationApplied,
     };
 }

@@ -76,9 +76,16 @@
             isPlaying: false,
             isPaused: false,
         },
+        // Same key set the terminal transitions write (see
+        // `settledSubmission()`), so a fresh store and a settled one answer
+        // `activeId` and `superseded` the same way instead of one returning
+        // `undefined` and the other `null`.
         submission: {
             progress: 0,
             isQueued: false,
+            activeId: null,
+            superseded: false,
+            completedId: null,
         },
     };
 
@@ -110,6 +117,35 @@
             }
         }
         return out;
+    }
+
+    /**
+     * The `submission` shape every transition that ends an attempt writes.
+     *
+     * `submission` is replaced wholesale rather than merged, so any key a
+     * branch leaves out becomes `undefined` instead of keeping its previous
+     * value. That has been benign only because each consumer happened to use
+     * `?? null` or a truthiness test: `activeId` was `null` after a completion
+     * and `undefined` after a queue, and `superseded` was cleared on the
+     * superseded branches by being omitted rather than by being set false.
+     * Behaviour that survives on the reader's defensiveness is a bug waiting
+     * for the next reader, so the full set is stated in one place here and
+     * every terminal branch goes through it.
+     *
+     * @param {Object} [overrides] Fields this particular ending sets.
+     * @returns {Object}
+     */
+    function settledSubmission(overrides) {
+        return merge(
+            {
+                progress: 0,
+                isQueued: false,
+                activeId: null,
+                superseded: false,
+                completedId: null,
+            },
+            overrides || {},
+        );
     }
 
     function reducer(state, action) {
@@ -145,9 +181,124 @@
                 });
                 const shouldResetStatus =
                     (state.status === "calibrating" || state.status === "recording") &&
-                    (errObj.code === "MIC_DENIED" || errObj.code === "MEDIARECORDER_FAILED");
+                    (errObj.code === "MIC_DENIED" ||
+                        errObj.code === "MEDIARECORDER_FAILED" ||
+                        // `startCalibration()` raises this one itself, while
+                        // the state is `calibrating`. Left out of the reset
+                        // list, it stranded the UI mid-calibration with the
+                        // setup control disabled — no way for the contributor
+                        // to retry and no way for the host to correct the
+                        // profile that caused it.
+                        errObj.code === "INVALID_CAPTURE_PROFILE");
+
+                // A submission that failed terminally has to give the UI back.
+                //
+                // `starmus/error` left `status` alone, so a queue failure while
+                // submitting — the queue full, IndexedDB unavailable — left the
+                // contributor on "Uploading…" with the submit control disabled,
+                // their recording still in state, and no way to retry it. The
+                // upload is over; pretending it is still running helps nobody.
+                //
+                // Not when the bytes already landed. A post-transfer failure
+                // carries `uploadId`, and returning that to a submittable state
+                // would invite a second upload of an asset the server has.
+                // Whose failure this is.
+                //
+                // An error with no attempt named is a general one — a denied
+                // microphone, a recorder that would not start — and applies to
+                // whatever is happening. One that names an attempt applies only
+                // to that attempt: a held transfer reporting terminally after
+                // its source was replaced and a new submit began would
+                // otherwise have reset the *new* submission to submittable,
+                // because nothing tied the error to the attempt that raised it.
+                const attempt = errObj.attemptId ?? null;
+                const inFlight = state.submission?.activeId ?? null;
+                // An error that names no attempt is general and applies to
+                // whatever is happening. One that names an attempt applies only
+                // to that attempt — and if nothing in flight is named either,
+                // the two cannot be shown to be the same submission. Treating
+                // that pair as a match is the same hole `submit-complete`
+                // refuses by requiring both ids: it let a stale error for one
+                // attempt reset an unidentified submission that was still
+                // running.
+                const errorIsCurrent = attempt === null || attempt === inFlight;
+
+                const submissionFailed =
+                    state.status === "submitting" &&
+                    errorIsCurrent &&
+                    errObj.retryable === false &&
+                    !errObj.uploadId;
+
+                // The transfer succeeded and the handling after it did not.
+                //
+                // Left as `submitting`, this was the same trap by another door:
+                // "Uploading…" forever over an upload that finished minutes
+                // ago, with no request running and no control enabled. The
+                // asset is on the server, so the honest terminal state is the
+                // delivered one — and it is the one that does not invite a
+                // second upload. The error travels with it, carrying the upload
+                // id the two sides are reconciled by.
+                //
+                // Not when the source has been replaced. A post-transfer
+                // failure still carries the *old* upload id, so this branch
+                // read it as a valid delivery and marked the replacement
+                // `complete` — disabling submission for bytes that were never
+                // uploaded, which is the same defect the superseded state was
+                // added to prevent, arriving through the error path instead of
+                // the completion path.
+                // Matched against the submission in flight, not merely
+                // "carries some id". An older upload reporting a
+                // completion-handling failure after a new `submit-start` would
+                // otherwise mark the new source complete — the same stale-event
+                // hole `submit-complete` is guarded against, through the error
+                // path.
+                // The same rule as `errorIsCurrent` above, and it had the same
+                // hole one line further down: `inFlight === null` counted as a
+                // match, so any error carrying an upload id could be read as
+                // *this* submission's delivery. With an unidentified
+                // submission in flight that marked the current source
+                // `complete` — disabling submit for bytes nothing had
+                // uploaded, which is precisely the harm the superseded
+                // handling exists to prevent, arriving through the error path.
+                const failedUploadIsCurrent =
+                    Boolean(errObj.uploadId) && errorIsCurrent && errObj.uploadId === inFlight;
+
+                const deliveredThenFailed =
+                    state.status === "submitting" &&
+                    failedUploadIsCurrent &&
+                    state.submission?.superseded !== true;
+
+                // The replaced source goes back to submittable, exactly as it
+                // does when a superseded upload completes normally.
+                const supersededThenFailed =
+                    state.status === "submitting" &&
+                    failedUploadIsCurrent &&
+                    state.submission?.superseded === true;
+                // A submission that has ended leaves no record of itself.
+                //
+                // These branches moved `status` out of `submitting` while
+                // `submission` kept the finished attempt's `activeId`, progress
+                // and `superseded` flag. A late completion naming that id then
+                // matched and drove the UI back to `complete` over a submission
+                // that had already failed, and everything reading `submission`
+                // in between was reading a description of something that was
+                // no longer happening.
+                const submissionEnded =
+                    submissionFailed || deliveredThenFailed || supersededThenFailed;
+
                 return merge(state, {
-                    status: shouldResetStatus ? "ready" : state.status,
+                    status: shouldResetStatus
+                        ? "ready"
+                        : submissionFailed
+                          ? "ready_to_submit"
+                          : deliveredThenFailed
+                            ? "complete"
+                            : supersededThenFailed
+                              ? "ready_to_submit"
+                              : state.status,
+                    submission: submissionEnded
+                        ? settledSubmission({ progress: deliveredThenFailed ? 1 : 0 })
+                        : state.submission,
                     error: errObj,
                     env: merge(state.env, { errors: currentErrors }),
                 });
@@ -192,6 +343,18 @@
                     status: "recording",
                     error: null,
                     recorder: merge(state.recorder, { duration: 0, isPaused: false }),
+                    source: merge(state.source, {
+                        // The previous take's draft goes when the microphone
+                        // opens, not when the new recording lands.
+                        // `handleSubmit()` copies `source.transcript` into the
+                        // upload metadata, so a retake used to carry the
+                        // *previous* take's words; clearing at stop instead
+                        // erased the draft of the take that had just finished.
+                        // Here is the one moment when the old words are stale
+                        // and no new ones exist yet.
+                        transcript: "",
+                        interimTranscript: "",
+                    }),
                 });
 
             case "starmus/mic-pause":
@@ -219,10 +382,68 @@
 
             case "starmus/recording-available":
                 return merge(state, {
-                    status: "ready_to_submit",
+                    // An upload in flight keeps the UI it owns, exactly as in
+                    // `file-attached`. Flipping to `ready_to_submit` here
+                    // re-enabled submit during a running transfer and allowed a
+                    // second one alongside it; the superseded handling returns
+                    // this take to submittable once the first upload settles.
+                    status: state.status === "submitting" ? state.status : "ready_to_submit",
+                    // As in `file-attached`: a recording that arrives while an
+                    // upload is still running replaces the source under it, so
+                    // that upload's result no longer describes what is here.
+                    submission:
+                        state.status === "submitting"
+                            ? merge(state.submission, { superseded: true })
+                            : state.submission,
                     source: merge(state.source, {
                         kind: "blob",
                         blob: action.payload.blob,
+                        // A previously attached file is cleared, so `kind` and
+                        // the payload cannot disagree. See `file-attached`
+                        // below for what leaving the other one set costs.
+                        file: null,
+                        // The capture profile goes with the bytes.
+                        //
+                        // This branch replaces an attached file, and
+                        // `file-attached` had set the profile to `import` and
+                        // overwritten the attainment record — so a recording
+                        // finishing after a mid-take attachment inherited that
+                        // label and reached ingestion described as prerecorded
+                        // imported material. The recorder now sends this take's
+                        // own attainment with it (`starmus-recorder.js`), which
+                        // is the only place the truth still exists once
+                        // `file-attached` has run.
+                        //
+                        // Absent, never wrong, when no attainment came with the
+                        // action: an asset with no profile is warned about and
+                        // probed by the Node, while one carrying someone else's
+                        // profile is believed.
+                        captureProfile: action.attainment?.profile ?? null,
+                        captureAttainment: action.attainment ?? null,
+                        // The transcript is deliberately NOT cleared here, and
+                        // an earlier version of this did clear it — which
+                        // erased every recording's own draft.
+                        //
+                        // `recording-available` is dispatched from
+                        // MediaRecorder's `stop` handler, *after* a whole
+                        // recording's worth of `transcript-update` actions have
+                        // accumulated. Clearing at stop therefore wiped the
+                        // draft belonging to the take that had just finished,
+                        // before `handleSubmit()` could snapshot it. The retake
+                        // leak it was meant to fix is handled at `mic-start`
+                        // instead: a new recording clears the previous draft
+                        // when the microphone opens, which is before any of the
+                        // new one's words exist.
+                        //
+                        // The capture profile is deliberately NOT cleared here.
+                        // `starmus/capture-profile` is dispatched when the
+                        // microphone opens and `starmus/recording-available`
+                        // when it stops, so clearing at stop would destroy the
+                        // profile belonging to the recording that just ended —
+                        // and an asset with no profile is the exact failure
+                        // ADR-035 and the build check exist to prevent. A stale
+                        // `import` profile cannot survive into a recording,
+                        // because opening the microphone overwrites it first.
                         fileName: action.payload.fileName,
                         metadata: {
                             duration: state.recorder.duration || 0,
@@ -243,12 +464,85 @@
                 });
 
             case "starmus/file-attached":
+                // A submission already in flight is not interrupted. The file
+                // input stays active while `status === "submitting"`, so
+                // attaching a file mid-upload used to flip the status back to
+                // `ready_to_submit`, re-enabling submit and permitting a second
+                // submission to run alongside the first. The attachment is
+                // still recorded; only the status is left alone, so the
+                // in-flight upload keeps the UI it owns until it settles.
                 return merge(state, {
-                    status: "ready_to_submit",
+                    status: state.status === "submitting" ? state.status : "ready_to_submit",
+                    // The in-flight upload no longer describes what is on
+                    // screen. It carries the bytes of a source that has just
+                    // been replaced, so whatever it reports back cannot be
+                    // said about this attachment.
+                    submission:
+                        state.status === "submitting"
+                            ? merge(state.submission, { superseded: true })
+                            : state.submission,
                     source: merge(state.source, {
                         kind: "file",
                         file: action.file,
+                        // The recorded blob is cleared, not left beside the
+                        // file. `handleSubmit()` reads `source.blob || source.file`,
+                        // so a contributor who recorded and then attached a
+                        // file uploaded the *recording* under the *file's*
+                        // name, carrying the file's mime type, size and the
+                        // `import` profile. That is a mislabelled contribution
+                        // — the wrong audio described as something it is not —
+                        // which for an archive is worse than an upload that
+                        // fails outright.
+                        blob: null,
+                        // The live-transcript draft goes with it. It belongs to
+                        // the recording that was just replaced, and
+                        // `handleSubmit()` copies `source.transcript` into the
+                        // upload metadata — so an imported file arrived at
+                        // ingestion carrying another take's words, which is the
+                        // same mislabelling by a different field.
+                        transcript: "",
+                        interimTranscript: "",
+
                         fileName: action.file.name,
+                        // An attached file is prerecorded material, which is
+                        // exactly what ADR-035 calls the `import` profile:
+                        // preserved unchanged, no transcode, resample or
+                        // fold-down. Leaving the profile unset here sent a
+                        // blank one to ingestion on the Tier C path — the very
+                        // condition `AGENTS.md` lists as a build failure.
+                        captureProfile: "import",
+                        // Nothing was captured, so nothing was measured. The
+                        // attainment says so rather than claiming the profile
+                        // was met: `attained: null` is "not applicable", which
+                        // is different from the `false` a missed constraint
+                        // would give. The Spoken Audio Node probes the file
+                        // itself and records what it actually is.
+                        captureAttainment: {
+                            // Kept identical to `describeAttainment("import",
+                            // …)`, field for field. This module is an IIFE
+                            // rather than an ES module, so it cannot call that
+                            // helper; a test compares the two records instead,
+                            // and fails if either moves.
+                            //
+                            // They had disagreed: this listed sampleRate and
+                            // channelCount as unverified, while the helper
+                            // reports neither — the import profile constrains
+                            // neither, so there is nothing about it that went
+                            // unchecked. A consumer read an unconstrained
+                            // import as one whose constraints could not be
+                            // verified, which is a different claim.
+                            profile: "import",
+                            requested: {
+                                sampleRate: null,
+                                channelCount: null,
+                                audioBitsPerSecond: null,
+                            },
+                            actual: {},
+                            attained: null,
+                            exceeded: [],
+                            unverified: [],
+                            source: "file-attachment",
+                        },
                         metadata: {
                             duration: 0,
                             mimeType: action.file.type,
@@ -258,24 +552,147 @@
                 });
 
             case "starmus/submit-start":
-                return merge(state, { status: "submitting", error: null });
+                return merge(state, {
+                    status: "submitting",
+                    error: null,
+                    // Which submission is in flight. The file input stays usable
+                    // during an upload, so without this a completion could land
+                    // on a source it never uploaded.
+                    //
+                    // Replaced outright rather than merged. A `superseded` flag
+                    // left over from a previous submission made the *next* one
+                    // settle down the superseded path: a contributor whose first
+                    // upload could not be queued, who then attached another file
+                    // and submitted it successfully, was told it was still
+                    // waiting to be sent. The progress and queued markers belong
+                    // to the finished attempt for the same reason.
+                    submission: settledSubmission({
+                        activeId: action.submissionId || null,
+                    }),
+                });
 
-            case "starmus/submit-progress":
+            case "starmus/submit-progress": {
+                // Progress from an upload that is no longer the one in flight
+                // is not this submission's progress. An upload continuing after
+                // its source was replaced drove the new submission's bar from
+                // the old one's bytes, which reads to a contributor as a
+                // transfer jumping backwards.
+                // Both named, equal, and something in flight. A one-sided
+                // null slipped through: progress arriving after the submission
+                // completed or failed, or from a callback that omits the id,
+                // still overwrote the bar.
+                const runningId = state.submission?.activeId ?? null;
+                const reportingId = action.uploadId ?? null;
+                if (state.status !== "submitting" || runningId === null || reportingId === null) {
+                    return state;
+                }
+                if (runningId !== reportingId) {
+                    return state;
+                }
                 return merge(state, {
                     submission: merge(state.submission, { progress: action.progress }),
                 });
+            }
 
-            case "starmus/submit-complete":
+            case "starmus/submit-complete": {
+                // Ignored when it does not belong to the submission in flight.
+                //
+                // A contributor who attaches a file while an upload is running
+                // replaces `source`; the earlier upload then finished and set
+                // *that* source to `complete`, disabling submit for a file
+                // which was never uploaded. The upload that started is the only
+                // one allowed to complete.
+                // Once a submission has announced itself, only that submission
+                // completes. An unidentified completion is not waved through
+                // either: it is indistinguishable from the stale one this
+                // guard exists to reject. A completion is only unconditional
+                // when nothing named itself as being in flight.
+                // Only while something is actually being submitted. After a
+                // terminal error the reducer clears `activeId` and returns to
+                // `ready_to_submit` — at which point an id check alone let a
+                // late completion through, because `null` matches anything,
+                // and marked the failed or replacement source complete.
+                if (state.status !== "submitting") {
+                    return state;
+                }
+
+                // Both must be named, and must agree. Treating `(null, null)`
+                // as a match let an unidentified completion settle an
+                // unidentified submission — which is every legacy caller and
+                // every stale one, exactly the pair least likely to be about
+                // the same upload.
+                const active = state.submission?.activeId ?? null;
+                const finished = action.submissionId ?? null;
+                if (active === null || finished === null || active !== finished) {
+                    return state;
+                }
+
+                // A submission whose source was replaced under it settles, but
+                // it does not settle *this* source. The upload that finished
+                // sent the earlier recording; marking the attachment that
+                // replaced it `complete` disabled submit for a file nothing
+                // had ever uploaded — the contributor was shown a delivery
+                // that never happened and given no way to send the real one.
+                // The UI goes back to submittable so the attachment can go.
+                if (state.submission?.superseded === true) {
+                    return merge(state, {
+                        status: "ready_to_submit",
+                        submission: settledSubmission(),
+                    });
+                }
                 return merge(state, {
                     status: "complete",
-                    submission: { progress: 1, isQueued: false },
+                    // `completedId` records which submission this completion
+                    // settled. `activeId` is cleared by this same transition, so
+                    // anything asking afterwards which upload finished had
+                    // nothing to read — and a delayed redirect from an older
+                    // upload could not be told from the current one.
+                    submission: settledSubmission({ progress: 1, completedId: finished }),
                 });
+            }
 
-            case "starmus/submit-queued":
+            case "starmus/submit-queued": {
+                // Ignored when it does not belong to the submission in flight.
+                // `queueSubmission()` is asynchronous, so a slow result from an
+                // earlier attempt could otherwise mark whatever is on screen as
+                // queued. Matched on `uploadId` — the same identifier
+                // `submit-start` records — and not on `submissionId`, which is
+                // the queue's own row id and would never match it.
+                const inFlight = state.submission?.activeId ?? null;
+                const queuedUpload = action.uploadId ?? null;
+                // An unnamed result is refused too, when something else is in
+                // flight. Requiring the id to be non-null before comparing let
+                // an older queue result with no id mark the current submission
+                // queued — the same hole the id check was added to close, left
+                // open for exactly the callers least likely to be current.
+                // And only while something is in flight. With `activeId`
+                // cleared — after a reset, or after a terminal failure — this
+                // accepted any delayed result, including one naming an upload
+                // from a submission that had already ended, and marked whatever
+                // was on screen queued.
+                if (state.status !== "submitting" || inFlight === null) {
+                    return state;
+                }
+                if (inFlight !== queuedUpload) {
+                    return state;
+                }
+                // The recording that was queued is the one that was in flight,
+                // which is not what is on screen when the source has been
+                // replaced. Reporting "Queued" over the new attachment claimed
+                // the platform was holding a file it had never been given, and
+                // disabled the control that would have sent it. The queue entry
+                // for the earlier recording stands either way.
+                if (state.submission?.superseded === true) {
+                    return merge(state, {
+                        status: "ready_to_submit",
+                        submission: settledSubmission(),
+                    });
+                }
                 return merge(state, {
                     status: "complete",
-                    submission: { progress: 0, isQueued: true },
+                    submission: settledSubmission({ isQueued: true }),
                 });
+            }
 
             case "starmus/reset":
                 return merge(shallowClone(DEFAULT_INITIAL_STATE), {

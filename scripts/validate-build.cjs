@@ -2,6 +2,9 @@
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
+
+const ROOT_DIR = path.resolve(__dirname, "..");
 
 console.log("🔍 Validating build configuration...\n");
 
@@ -20,13 +23,39 @@ const requiredFiles = [
     "src/js/starmus-ui.js",
     "src/js/starmus-core.js",
     "src/js/starmus-main.js",
+    "src/js/starmus-capture-profiles.js",
+    "src/js/starmus-completion-event.js",
+    "src/js/starmus-transcript-provider.js",
     "src/js/appmode/starmus-audio.js",
 ];
+
+// Source files scanned by the cross-cutting checks below.
+function allSourceJs(dir = path.join(ROOT_DIR, "src/js")) {
+    // Resolved from ROOT_DIR, not from the working directory. Walking `src/js`
+    // relatively meant this scanned whatever tree the caller happened to be
+    // standing in: run from a subdirectory it throws, and run from a parent it
+    // could quietly scan a different checkout — a build guard whose answer
+    // depends on where you invoked it is not a guard.
+    const out = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            out.push(...allSourceJs(full));
+        } else if (entry.name.endsWith(".js")) {
+            out.push(full);
+        }
+    }
+    return out;
+}
 
 let ok = true;
 
 // ---- CHECK CSS SIZE (<20KB unminified) ----
-const cssFile = "src/starmus-audio.css";
+// Every path in this script resolves from ROOT_DIR. Relative ones made the
+// whole validator depend on the working directory: run from `scripts/` it
+// reported eight required files missing and would have failed a build for
+// the location of the caller rather than the state of the code.
+const cssFile = path.join(ROOT_DIR, "src/starmus-audio.css");
 if (fs.existsSync(cssFile)) {
     const cssSize = fs.statSync(cssFile).size;
     const cssSizeKB = (cssSize / 1024).toFixed(2);
@@ -71,7 +100,7 @@ if (fs.existsSync(cssFile)) {
 // ---- CHECK FILE PRESENCE ----
 console.log("\n📦 Checking required files:");
 for (const file of requiredFiles) {
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(path.join(ROOT_DIR, file))) {
         console.log(`❌ Missing: ${file}`);
         ok = false;
     } else {
@@ -80,7 +109,7 @@ for (const file of requiredFiles) {
 }
 
 // ---- CHECK MAIN ENTRY DOES NOT IMPORT EXCLUDED MODULES ----
-const mainFile = "src/js/starmus-main.js";
+const mainFile = path.join(ROOT_DIR, "src/js/starmus-main.js");
 if (fs.existsSync(mainFile)) {
     const mainContent = fs.readFileSync(mainFile, "utf8");
     const excluded = [
@@ -100,14 +129,27 @@ if (fs.existsSync(mainFile)) {
 }
 
 // ---- CHECK TUS CONSTRAINTS ----
-const tusFile = "src/js/starmus-tus.js";
+const tusFile = path.join(ROOT_DIR, "src/js/starmus-tus.js");
 if (fs.existsSync(tusFile)) {
-    const tusContent = fs.readFileSync(tusFile, "utf8");
+    const tusSource = fs.readFileSync(tusFile, "utf8");
+    // Comments stripped once, here, before anything reads the module, because
+    // every check in this function asks what the code *does*. Both directions
+    // need it and both were wrong: a positive check passes on its own
+    // documentation — the chunk cap, the checksum algorithm and the three
+    // capture-profile assertions all had their implementation-shaped text
+    // sitting in the comments right above them — and a negative one like the
+    // full-file scan fails on it, so writing down why this module must not use
+    // `fetch` would break the build and teach the next author to delete the
+    // explanation rather than keep it. A guard its own prose satisfies, or its
+    // own prose breaks, is not a guard.
+    const tusCode = tusSource
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
 
     // Verify the runtime chunk size cap enforces ≤ 512 KB via Math.min.
     // Use lazy [\s\S]*? so the match crosses newlines and function call parens.
     const chunkCapPattern = /Math\.min\([\s\S]*?512\s*\*\s*1024/;
-    if (!chunkCapPattern.test(tusContent)) {
+    if (!chunkCapPattern.test(tusCode)) {
         console.log(
             "❌ starmus-tus.js: Runtime chunk size cap not found. Expected Math.min(…, 512 * 1024).",
         );
@@ -118,7 +160,7 @@ if (fs.existsSync(tusFile)) {
 
     // Verify uploadTus is exported as a function (not just mentioned in a comment/import).
     const exportTusPattern = /export\s+(?:async\s+)?function\s+uploadTus\b/;
-    if (!exportTusPattern.test(tusContent)) {
+    if (!exportTusPattern.test(tusCode)) {
         console.log(
             "❌ starmus-tus.js: Missing exported uploadTus function (primary chunked upload path).",
         );
@@ -131,7 +173,7 @@ if (fs.existsSync(tusFile)) {
     const checksumSha256Pattern = /checksumAlgorithm\s*[:=]\s*["']sha256["']/;
     const checksumSha1Pattern = /checksumAlgorithm\s*[:=]\s*["']sha1["']/;
 
-    if (checksumSha1Pattern.test(tusContent) || !checksumSha256Pattern.test(tusContent)) {
+    if (checksumSha1Pattern.test(tusCode) || !checksumSha256Pattern.test(tusCode)) {
         console.log(
             '❌ starmus-tus.js: checksumAlgorithm must be explicitly set to "sha256" and must not use "sha1".',
         );
@@ -140,17 +182,348 @@ if (fs.existsSync(tusFile)) {
         console.log('✅ TUS checksumAlgorithm is "sha256"');
     }
 
-    // Verify uploadDirect is NOT exported (full-file uploads violate chunked-only constraint).
-    // The function may remain as a module-private internal fallback, but it must never
-    // be part of the public API surface that external callers can invoke directly.
-    const exportDirectPattern = /export\s+(?:async\s+)?function\s+uploadDirect\b/;
-    if (exportDirectPattern.test(tusContent)) {
+    // Verify no full-file upload path exists at all — not merely that it is
+    // unexported. The capture-to-ingestion contract forbids a full-file
+    // endpoint on both sides, and ADR-038 forbids "any re-upload-from-scratch
+    // of a partially transferred original". A module-private fallback still
+    // re-sends the whole recording over the link that just failed, so hiding
+    // it from the public API is not compliance.
+    // Checking for the old identifiers alone would pass a renamed FormData
+    // POST, so the check is on the *capability*: this module transfers through
+    // tus and nothing else. A whole-blob send needs one of these three, and
+    // none of them has a legitimate use here.
+    const fullFileMechanisms = [
+        [/\bfunction\s+uploadDirect\b|\buploadDirect\s*=|directUpload/, "the former direct-upload path"],
+        [/\bnew\s+FormData\b/, "a FormData body"],
+        [/\bnew\s+XMLHttpRequest\b/, "an XMLHttpRequest"],
+        [/\bfetch\s*\(/, "a raw fetch"],
+    ];
+    let chunkedOnly = true;
+    for (const [pattern, label] of fullFileMechanisms) {
+        if (pattern.test(tusCode)) {
+            console.log(
+                `❌ starmus-tus.js: ${label} can send a whole recording in one request. Chunked, resumable transfer is the only path — capture-to-ingestion contract and ADR-038.`,
+            );
+            chunkedOnly = false;
+            ok = false;
+        }
+    }
+    if (chunkedOnly) {
+        console.log("✅ No full-file upload path (chunked-only constraint satisfied)");
+    }
+
+    // Resumability is not the fingerprint; it is the lookup that reads it.
+    // tus-js-client's `start()` does not consult URL storage on its own, so
+    // without this the stall abort orphans a partial resource and the retry
+    // re-sends from byte zero — the re-upload ADR-038 forbids.
+    // Tested against the code with comments stripped. Both method names appear
+    // in this module's own explanatory comments, so the check passed on prose:
+    // deleting the actual calls and leaving the paragraph that describes them
+    // would have kept the build green while every retry restarted from byte
+    // zero. A guard that its own documentation satisfies is not a guard.
+    // Positions, not mere presence. Testing that the names occur somewhere let
+    // a regression that called `start()` first — or that left the resume calls
+    // stranded after it — keep the build green while every retry restarted from
+    // byte zero, which is the exact failure this check exists to catch. The
+    // comment below used to say a guard its own documentation satisfies is not
+    // a guard; a guard that cannot see the ordering it names is the same thing.
+    const lookupAt = tusCode.search(/findPreviousUploads\s*\(/);
+    const resumeAt = tusCode.search(/resumeFromPreviousUpload\s*\(/);
+    const startAt = tusCode.search(/\bupload\.start\s*\(/);
+    if (lookupAt === -1 || resumeAt === -1 || startAt === -1) {
         console.log(
-            "❌ starmus-tus.js: uploadDirect must not be exported. Full-file upload violates the chunked-only constraint (AGENTS.md: 'Full-file upload endpoint present' is a FAIL).",
+            "❌ starmus-tus.js: a retry must look up and resume the previous upload (findPreviousUploads + resumeFromPreviousUpload) before start(). ADR-038 forbids re-sending a partially transferred original.",
+        );
+        ok = false;
+    } else if (!(lookupAt < resumeAt && resumeAt < startAt)) {
+        console.log(
+            `❌ starmus-tus.js: the resume must happen before start(), and does not — findPreviousUploads at ${lookupAt}, resumeFromPreviousUpload at ${resumeAt}, upload.start() at ${startAt}. A retry that starts first re-sends a partially transferred original, which ADR-038 forbids.`,
         );
         ok = false;
     } else {
-        console.log("✅ No exported full-file upload endpoint (chunked-only constraint satisfied)");
+        console.log("✅ A retry resumes the previous upload before starting it");
+    }
+
+    // ADR-035 and the capture-to-ingestion contract: the capture profile
+    // travels with the asset. It was being assembled in starmus-core.js and
+    // then dropped before transmission, so it reached ingestion on no path.
+    // Checking that the property name appears would pass
+    // `captureProfile: metadata.captureProfile || ""`, which transmits an empty
+    // profile — indistinguishable downstream from a profile the Node could not
+    // read, when it actually means none was set. So: the key must be assigned
+    // conditionally, and the empty-string default must not return.
+    //
+    // The test is on the *sanitised and trimmed* value, because a profile of
+    // only spaces is truthy: an earlier version of this check required the
+    // literal `if (metadata.captureProfile)` and so certified a blank profile
+    // as conforming. A check that pins a spelling instead of the guarantee is
+    // worse than no check, because it is believed.
+    // Non-strings are absent, not stringified. `sanitizeMetadata()` sends any
+    // `object` through `JSON.stringify`, and `typeof null === "object"` — so the
+    // documented "no profile" value came back as the *string* `"null"`, truthy,
+    // and went out on the wire. The check now requires the type test as well as
+    // the trim, because the trim alone let that through.
+    const profileTrimmedBeforeTest =
+        /typeof\s+rawProfile\s*===\s*"string"\s*\?\s*sanitizeMetadata\(\s*rawProfile\s*\)\s*\.trim\(\)\s*:\s*""/.test(
+            tusCode,
+        );
+    const profileSentConditionally = /if\s*\(\s*captureProfile\s*\)\s*\{\s*\n\s*tusMetadata\.captureProfile\s*=\s*captureProfile;/.test(
+        tusCode,
+    );
+    const profileDefaultsToEmpty = /captureProfile\s*:\s*sanitizeMetadata\(\s*metadata\.captureProfile\s*\|\|/.test(
+        tusCode,
+    );
+    if (!profileTrimmedBeforeTest || !profileSentConditionally || profileDefaultsToEmpty) {
+        console.log(
+            "❌ starmus-tus.js: the capture profile must travel with the asset as a present value or be absent — never present and empty (ADR-035; AGENTS.md: 'An asset uploaded without its capture profile recorded' is a FAIL).",
+        );
+        ok = false;
+    } else {
+        console.log("✅ Capture profile travels with the asset, or is absent — never empty");
+    }
+
+    // A total-duration abort on a resumable upload ends every real upload on a
+    // 2G link before it finishes. Only a no-progress watchdog is admissible.
+    // Two halves, because the presence of a stall bound does not rule out a
+    // deadline sitting beside it: the watchdog must exist, must be re-armed on
+    // progress, and the total-duration timeout it replaced must not return.
+    // Read from the comment-stripped source, like the resume check above it.
+    // Scanning `tusCode` meant the explanation counted as the thing: lose
+    // `stallTimeoutMs` from the code while the paragraph describing it remains,
+    // and this reported a watchdog that no longer exists. Every one of these
+    // guards has now been caught certifying its own documentation at least
+    // once, which is an argument for stripping first by default rather than
+    // remembering to.
+    const hasStallBound = /stallTimeoutMs/.test(tusCode);
+    const rearmsOnProgress = /onProgress\s*\([^)]*\)\s*\{[\s\S]{0,200}?armStallWatchdog\s*\(/.test(
+        tusCode,
+    );
+    const hasDeadline = /requestTimeoutMs/.test(tusCode);
+    if (!hasStallBound || !rearmsOnProgress || hasDeadline) {
+        console.log(
+            "❌ starmus-tus.js: the upload watchdog must be a no-progress bound that is re-armed on every progress event, with no total-duration deadline beside it. " +
+                `(stall bound: ${hasStallBound}; re-armed on progress: ${rearmsOnProgress}; deadline present: ${hasDeadline})`,
+        );
+        ok = false;
+    } else {
+        console.log("✅ Upload watchdog is a no-progress bound, re-armed on progress");
+    }
+}
+
+// ---- CHECK NO CMS REACH (ADR-034) ----
+// The capture package makes no CMS REST call, sends no CMS nonce, and reads no
+// CMS page global. The host injects the endpoint and any auth headers.
+{
+    const cmsPatterns = [
+        [/X-WP-Nonce/i, "CMS nonce header"],
+        [/wp-json/i, "CMS REST route"],
+        [/wpApiSettings|ajaxurl|wp\.apiFetch/i, "CMS page global"],
+    ];
+    let cmsClean = true;
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        for (const [pattern, label] of cmsPatterns) {
+            if (pattern.test(content)) {
+                console.log(`❌ ${file}: ${label} present. ADR-034 forbids CMS reach in this package.`);
+                cmsClean = false;
+                ok = false;
+            }
+        }
+    }
+    if (cmsClean) {
+        console.log("✅ No CMS reach (no CMS route, nonce, or page global)");
+    }
+}
+
+// ---- CHECK ONE HOME FOR CAPTURE CONSTRAINTS (ADR-035) ----
+// src/js/starmus-capture-profiles.js is the only module that may hold an audio
+// limit. A literal anywhere else is a second home for the same fact, which is
+// how the platform-wide ceiling ADR-035 removed got there in the first place.
+{
+    const limitPattern = /\b(sampleRate|channelCount|audioBitsPerSecond|bitsPerSecond)\s*:\s*\d/;
+    let oneHome = true;
+    for (const file of allSourceJs()) {
+        if (file.endsWith("starmus-capture-profiles.js")) {
+            continue;
+        }
+        if (limitPattern.test(fs.readFileSync(file, "utf8"))) {
+            console.log(
+                `❌ ${file}: audio limit literal outside src/js/starmus-capture-profiles.js. ADR-035: constraints belong to a named profile, and the profiles module is their one home.`,
+            );
+            oneHome = false;
+            ok = false;
+        }
+    }
+    if (oneHome) {
+        console.log("✅ Capture constraints have one home (starmus-capture-profiles.js)");
+    }
+}
+
+// ---- CHECK ai_manifest.json IS COMPLETE ----
+// AGENTS.md: check the manifest before creating any symbol, and update it when
+// one is added, removed or renamed. A manifest that silently drifts is worse
+// than none, because the rule says to trust it.
+{
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, "ai_manifest.json"), "utf8"));
+    const listed = new Set(manifest.symbols.map((entry) => entry.symbol));
+    // Both export forms, because only the first was covered before and the
+    // check therefore reported success while six exported symbols were
+    // missing: `export { subscribe, dispatch, debugLog, ... }` in
+    // starmus-hooks.js and `export { EnhancedCalibration }` in the calibration
+    // module were invisible to it. A manifest check that sees one syntax is a
+    // check that certifies drift.
+    //
+    // Both directions too. A symbol removed or renamed leaves an entry
+    // pointing at nothing, which AGENTS.md's "update it when one is removed or
+    // renamed" is exactly about, and which the missing-only test could never
+    // catch.
+    //
+    // And every symbol in each direction, not only the exported ones — see the
+    // module-scope collection below for why that asymmetry was a hole rather
+    // than a scope.
+    const exported = new Set();
+    const sourceByPath = new Map();
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        const rel = path.relative(ROOT_DIR, file).split(path.sep).join("/");
+        sourceByPath.set(rel, content);
+        const here = new Set();
+
+        // Comments removed before anything is counted. A symbol named only in
+        // an `@example` or a `@param` is prose, and a manifest check that
+        // counts prose demands entries for things that do not exist.
+        const moduleCode = content
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/^\s*\/\/.*$/gm, "");
+
+        // Internal symbols too, not only exported ones.
+        //
+        // AGENTS.md says to update the manifest "when any symbol is added,
+        // removed, or renamed", and its final rule says to take the stricter
+        // reading where one is ambiguous. This collected exports alone, so 47
+        // module-scope symbols — `OfflineQueue`, `UploadCircuitBreaker`, the
+        // reducer, the queue's `CONFIG` — were absent while the check reported
+        // success, and the *stale* half below was already testing internal
+        // entries the *missing* half could never have required. A check that
+        // enforces one direction of a two-directional rule certifies drift in
+        // the other.
+        //
+        // Module scope is column 0, except in the IIFE-wrapped store where it
+        // is one indent in. Anything deeper is a local and not a symbol the
+        // manifest is about.
+        const base = /^\(function\s*\(/m.test(moduleCode) ? "(?: {4})?" : "";
+        const topLevel = new RegExp(
+            `^${base}(?:export\\s+)?(?:async\\s+)?(?:function|const|let|var|class)\\s+(\\w+)`,
+            "gm",
+        );
+        let top;
+        while ((top = topLevel.exec(moduleCode)) !== null) {
+            here.add(top[1]);
+        }
+
+        // `export function foo`, `export const foo`, `export class Foo`,
+        // `export let/var foo`, with or without `async`.
+        const declared = /export\s+(?:async\s+)?(?:function|const|class|let|var)\s+(\w+)/g;
+        let match;
+        while ((match = declared.exec(content)) !== null) {
+            here.add(match[1]);
+        }
+
+        // `export { a, b as c }` — the exported name is the one after `as`.
+        const lists = /export\s*\{([^}]*)\}\s*(?!\s*from)/g;
+        while ((match = lists.exec(content)) !== null) {
+            for (const part of match[1].split(",")) {
+                const name = part.trim().split(/\s+as\s+/).pop().trim();
+                if (name && /^\w+$/.test(name) && name !== "default") {
+                    here.add(name);
+                }
+            }
+        }
+
+        for (const name of here) {
+            exported.add(name);
+        }
+    }
+
+    const missing = [...exported].filter((symbol) => !listed.has(symbol)).sort();
+    const stale = manifest.symbols
+        .filter((entry) => {
+            const content = sourceByPath.get(entry.path);
+            // A manifest entry whose file is not there at all is stale — that
+            // is the deletion case this check exists to catch, and suppressing
+            // it meant the "both directions" claim held only for renames within
+            // a surviving file. A path outside the scanned set (not under
+            // `src/js/`) is still left alone: not seeing a file is only
+            // evidence when the file was supposed to be in the set.
+            if (content === undefined) {
+                const abs = path.join(ROOT_DIR, entry.path);
+                const scanned = entry.path.startsWith("src/js/");
+                return scanned && !fs.existsSync(abs);
+            }
+            // Declared, not exported. AGENTS.md says the manifest tracks *any*
+            // symbol added, removed or renamed, and it deliberately inventories
+            // internal ones — `getSafeRedirect` and the queue's `_`-prefixed
+            // methods among them. Testing for an export here would have called
+            // four correct entries stale.
+            const name = entry.symbol.replace(/[^\w$]/g, "");
+            // Matched against the source with comments removed. A symbol whose
+            // implementation was deleted but whose JSDoc still says
+            // `@param {string} name` — or whose removal left an `@example`
+            // calling it — stayed "present" to this check, so the manifest
+            // could certify an entry pointing at nothing but prose.
+            const code = content
+                .replace(/\/\*[\s\S]*?\*\//g, "")
+                .replace(/^\s*\/\/.*$/gm, "");
+            return !new RegExp(
+                `(?:function|const|let|var|class)\\s+${name}\\b` +
+                    `|^\\s*(?:async\\s+)?${name}\\s*\\(` +
+                    `|\\b${name}\\s*[:=]`,
+                "m",
+            ).test(code);
+        })
+        .map((entry) => `${entry.symbol} (${entry.path})`)
+        .sort();
+
+    if (missing.length > 0) {
+        console.log(
+            `❌ ai_manifest.json is missing ${missing.length} module-scope symbol(s): ${missing.join(", ")}. AGENTS.md requires the manifest to track every symbol added, removed or renamed.`,
+        );
+        ok = false;
+    }
+    if (stale.length > 0) {
+        console.log(
+            `❌ ai_manifest.json lists ${stale.length} symbol(s) that are no longer present in the source file it names: ${stale.join(", ")}. A manifest entry pointing at nothing is the drift AGENTS.md's rename/remove rule exists to prevent.`,
+        );
+        ok = false;
+    }
+    if (missing.length === 0 && stale.length === 0) {
+        console.log("✅ ai_manifest.json matches every module-scope symbol, in both directions");
+    }
+}
+
+// ---- CHECK NO POST-SUBMISSION AUDIO MUTATION (ADR-039) ----
+// The preservation path never edits audio. Retake and discard are
+// pre-submission and belong to the recorder; trimming, splicing and any
+// "effective audio"/EDL mechanism exist nowhere in this package.
+{
+    const editPatterns = [
+        [/\bEditDecisionList\b|\bedit_decision_list\b|\bEDL\b/, "edit decision list"],
+        [/\bOfflineAudioContext\b/, "offline render of captured audio"],
+        [/\btrimAudio\b|\bspliceAudio\b|\bcutAudio\b/, "audio edit helper"],
+    ];
+    let noEdit = true;
+    for (const file of allSourceJs()) {
+        const content = fs.readFileSync(file, "utf8");
+        for (const [pattern, label] of editPatterns) {
+            if (pattern.test(content)) {
+                console.log(`❌ ${file}: ${label} present. ADR-039: no edit capability in the capture path.`);
+                noEdit = false;
+                ok = false;
+            }
+        }
+    }
+    if (noEdit) {
+        console.log("✅ No audio-edit capability (ADR-039)");
     }
 }
 

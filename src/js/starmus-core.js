@@ -22,9 +22,13 @@
 "use strict";
 
 import { CommandBus } from "./starmus-hooks.js";
-import { uploadWithPriority } from "./starmus-tus.js";
+import { createUploadId, uploadWithPriority } from "./starmus-tus.js";
 import { buildCompletionDetail, emitCompletionEvent } from "./starmus-completion-event.js";
-import { queueSubmission, getPendingCount } from "./starmus-offline.js";
+import {
+    queueSubmission,
+    getPendingCount,
+    isNonRetryableUploadFailure,
+} from "./starmus-offline.js";
 import { sparxstarIntegration } from "./starmus-sparxstar-integration.js";
 
 /**
@@ -95,6 +99,24 @@ function detectTier(environmentData = null) {
  * @param {Object} env - Environment data (may be partial on first call)
  * @returns {{ handleSubmit: function }}
  */
+/** Monotonic within a page load; see `localAttemptId()`. */
+let attemptCounter = 0;
+
+/**
+ * An identity for a submit attempt that could not be given an upload id.
+ *
+ * Deliberately not a UUID, so `isUploadId()` rejects it and it can never be
+ * mistaken for — or written into — `metadata.uploadId`. It exists only so the
+ * store can match this attempt's `submit-start` against its `submit-queued`;
+ * it is never sent, never stored with the recording, and never reaches tus.
+ *
+ * @returns {string}
+ */
+function localAttemptId() {
+    attemptCounter += 1;
+    return `local-attempt-${Date.now()}-${attemptCounter}`;
+}
+
 export function initCore(store, instanceId, env) {
     sparxstarIntegration
         .init()
@@ -174,6 +196,10 @@ export function initCore(store, instanceId, env) {
         };
 
         const audioBlob = source.blob || source.file;
+        // Snapshotted with the bytes. Everything that describes this submission
+        // is read once, here, so a source change mid-upload cannot re-describe
+        // audio that has already been sent.
+        const submittedLanguage = source.language;
         const fileName =
             source.fileName || (source.file ? source.file.name : `rec-${Date.now()}.webm`);
 
@@ -183,18 +209,64 @@ export function initCore(store, instanceId, env) {
         }
 
         // ADR-035 / capture-to-ingestion contract: the capture profile travels
-        // with the asset. This object is what the direct and TUS serializers
-        // send and what the offline queue persists for later retry, so the
-        // profile has to be in it here or it reaches ingestion on no path at
-        // all. `null` means the recorder never reported one (a file upload via
-        // the Tier C fallback), which is itself information the consumer needs.
+        // with the asset. This object is what the upload serializes and what
+        // the offline queue persists for later retry, so the profile has to be
+        // in it here or it reaches ingestion on no path at all. A recorded
+        // session carries the profile the recorder attained; an attached file
+        // carries `import`. `null` is left for a source that reported no
+        // profile at all, which is itself information the consumer needs — the
+        // Node stores such an asset and marks it inadmissible for measurement
+        // rather than refusing it.
         const captureAttainment = source.captureAttainment || null;
+        // Minted once per submission and carried into both the immediate
+        // attempt and the queued retry, so a recording that is resumed hours
+        // later still reports the identifier the server knows it by.
+        //
+        // Through the upload module's helper rather than `crypto.randomUUID`
+        // directly: that API is missing on browsers this package supports, and
+        // reaching for it alone left the id unset on exactly those devices —
+        // where a retry over a bad link is likeliest and a stable identity
+        // matters most.
         const metadata = {
+            // Minted inside the try below, not here. `createUploadId()` throws
+            // on a runtime with no secure randomness — an insecure origin on an
+            // old Android is exactly such a runtime, and exactly the device
+            // this package exists for — and a throw out here landed outside
+            // every handler, rejecting the submit with the captured blob never
+            // queued and no error dispatched. ADR-011 keeps the material
+            // whatever else breaks, so the record the queue needs is built
+            // first and the part that can fail happens where it is caught.
+            uploadId: null,
+            // Persisted, because the queue describes the asset hours later from
+            // metadata alone. The immediate path snapshots `source.language`;
+            // the drained path was reading `formFields.language`, so a host that
+            // supplies the language through source state produced a completion
+            // event with an empty language after an offline drain and a correct
+            // one when the upload happened to succeed first.
+            language: submittedLanguage || "",
             transcript: source.transcript?.trim() || null,
-            calibration: calibration.complete
-                ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
-                : null,
-            captureProfile: source.captureProfile || null,
+            // Calibration describes a microphone session, so it is reported
+            // only for audio this device actually captured. An attached file's
+            // bytes never passed through the calibrated path — reporting them
+            // as calibrated tells a consumer the gain and speech level were
+            // applied to material they were not, which is a measurement claim
+            // about somebody else's recording. The calibration itself is left
+            // in state rather than reset: the contributor may record next, and
+            // it is still theirs.
+            calibration:
+                source.kind !== "file" && calibration.complete
+                    ? { gain: calibration.gain, speechLevel: calibration.speechLevel }
+                    : null,
+            // Normalised once, here, so the upload metadata and the completion
+            // event cannot disagree. The upload path treats a whitespace-only
+            // profile as absent; leaving the raw value in the snapshot meant
+            // TUS omitted the profile while `buildCompletionDetail()` reported
+            // `captureProfile: "   "` — a record contradicting what was sent,
+            // and neither absent nor named.
+            captureProfile:
+                typeof source.captureProfile === "string" && source.captureProfile.trim() !== ""
+                    ? source.captureProfile.trim()
+                    : null,
             captureAttainment,
             // Persisted so a queued upload that drains hours later can still
             // describe the asset it sent. The store state it came from is long
@@ -205,9 +277,58 @@ export function initCore(store, instanceId, env) {
             tier: stateEnv.tier || currentEnvData?.tier || "C",
         };
 
-        store.dispatch({ type: "starmus/submit-start" });
+        // Whether the bytes reached the server. Everything after that point —
+        // naming the format, building the completion detail, notifying the
+        // host — can still fail, and none of those failures mean the recording
+        // needs sending again.
+        let transferred = false;
+
+        // The identity this attempt is known by inside the store.
+        //
+        // `createUploadId()` throws where there is no secure randomness — an
+        // insecure origin, or a browser with neither crypto API, which on the
+        // devices this package targets is not hypothetical. It used to throw
+        // *inside* the try below, and then `submit-start` never ran: the catch
+        // still queued the recording, but `submit-queued` has to attach to a
+        // submission in flight and the reducer dropped it. The contributor
+        // watched a submit button that never moved, pressed it again, and put
+        // a second copy of the same take into a 20 MB queue — every time, on
+        // the one class of device where it happens at all.
+        //
+        // So the attempt gets an identity either way. Where no upload id can
+        // be minted it is a page-local string that is not a UUID: it is never
+        // sent, never written to `metadata.uploadId`, and never reaches tus.
+        // The queue backfills a real upload id on its first drain, which may
+        // be a later page load where secure randomness is available again.
+        let attemptId;
+        try {
+            metadata.uploadId = createUploadId();
+            attemptId = metadata.uploadId;
+        } catch (idError) {
+            console.warn(
+                "[Core] No secure upload id could be minted; the recording is queued rather than sent:",
+                idError.message,
+            );
+            attemptId = localAttemptId();
+        }
 
         try {
+            // Dispatched here, after the identity exists, and not before it.
+            //
+            // The id names which submission is in flight, so a completion can
+            // be matched against it; announced while it was still null, the
+            // match was between null and an id and never rejected anything.
+            store.dispatch({ type: "starmus/submit-start", submissionId: attemptId });
+
+            // No upload id means no transfer: `uploadTus()` mints its own when
+            // none is supplied, by the same call that just failed. Queueing is
+            // the whole of what can be done, and the catch below does it.
+            if (!metadata.uploadId) {
+                throw new Error(
+                    "NO_SECURE_UPLOAD_ID: this browser offers no secure randomness, so the recording is queued instead of sent.",
+                );
+            }
+
             if (!navigator.onLine) {
                 throw new Error("OFFLINE_FAST_PATH");
             }
@@ -222,45 +343,114 @@ export function initCore(store, instanceId, env) {
                     store.dispatch({
                         type: "starmus/submit-progress",
                         progress: uploaded / total,
+                        // Named, like the completion and queue actions. An
+                        // upload that continues after its source was replaced
+                        // was otherwise driving the *new* submission's progress
+                        // bar from the old one's bytes.
+                        uploadId: metadata.uploadId,
                     }),
             });
 
-            store.dispatch({ type: "starmus/submit-complete", payload: result });
-
-            // Emit starmus:complete — boundary between recording and server-side processing.
-            // Nothing downstream triggers until this event fires.
             if (result && result.success) {
-                const completedState = store.getState();
-                const completedSource = completedState.source || {};
-                const completedCalibration = completedState.calibration || {};
+                transferred = true;
+            }
 
+            if (result && result.success) {
+                // Described from the submit-time snapshot, not from the store as
+                // it stands now.
+                //
+                // The bytes and `metadata` were captured before the transfer
+                // began, but these fields were being read back out of the live
+                // state afterwards — and the file input stays active while
+                // `status === "submitting"`. A contributor who attached a file
+                // during a slow upload therefore had `starmus:complete` report
+                // the *new* source's mime type, duration and language for the
+                // *old* source's bytes: an asset described as something it is
+                // not, which is the same mislabelling the source transitions
+                // were fixed to prevent, arriving by a different route.
                 const detail = buildCompletionDetail({
                     instanceId,
                     result,
                     metadata,
                     formFields,
                     fileName,
-                    mimeType: completedSource.metadata?.mimeType || audioBlob.type || "",
-                    durationMs: Math.round((completedSource.metadata?.duration || 0) * 1000),
-                    language: completedSource.language,
-                    contributorId: completedState.env?.identifiers?.visitorId || "",
-                    calibrationApplied: !!completedCalibration.complete,
+                    mimeType: metadata.mimeType || audioBlob.type || "",
+                    durationMs: metadata.durationMs ?? 0,
+                    language: submittedLanguage,
+                    contributorId: stateEnv.identifiers?.visitorId || "",
+                    calibrationApplied: !!metadata.calibration,
                 });
 
-                if (!detail) {
-                    throw new Error("UNSUPPORTED_UPLOAD_FORMAT");
-                }
                 emitCompletionEvent(detail);
 
-                const redirect = getSafeRedirect(result.data?.redirect_url || result.redirect_url);
+            // Dispatched *after* the boundary event, not before.
+            //
+            // Store listeners run without isolation, so one of them throwing
+            // aborted this function before `starmus:complete` was emitted —
+            // and by then `transferred` is true, so the catch deliberately
+            // does not queue. An accepted upload lost its boundary event and
+            // its local record together, over a UI listener's bug. The event
+            // is built entirely from the submit-time snapshot, so nothing in
+            // it depends on this dispatch having happened first.
+            // Whether *this* attempt is the one in flight, read **before** the
+            // dispatch. The reducer clears `activeId` when it applies a
+            // completion, so asking afterwards answers `false` for every
+            // successful upload — which suppressed the redirect and the
+            // host notification on the ordinary path. An earlier version of
+            // this captured it after the dispatch and a test asserted only
+            // that the line existed, not where.
+            const wasCurrent =
+                (store.getState().submission?.activeId ?? null) === attemptId;
+
+            store.dispatch({
+                type: "starmus/submit-complete",
+                payload: result,
+                submissionId: attemptId,
+            });
+
+                // Only if the completion was actually applied.
+                //
+                // The reducer refuses a completion whose source has since been
+                // replaced — that is the whole point of the superseded state —
+                // but these two ran regardless, so a slow upload navigated the
+                // contributor away from a recording they had just attached, and
+                // told the host page a submission had completed that this state
+                // does not consider complete. The side effects follow the
+                // reducer's decision rather than the transfer's.
+                const settled = wasCurrent && store.getState().status === "complete";
+
+                const redirect = settled
+                    ? getSafeRedirect(result.data?.redirect_url || result.redirect_url)
+                    : null;
                 if (redirect) {
+                    // The submission this redirect belongs to, captured now.
+                    //
+                    // Re-checking `status === "complete"` alone was not enough:
+                    // a contributor can replace the source, submit the new one
+                    // and have it finish inside the 1.5 seconds, at which point
+                    // the old timer sees `complete` — set by the *second*
+                    // upload — and navigates to the first upload's URL. The
+                    // state is right and the destination is wrong.
+                    const redirectFor = attemptId;
                     setTimeout(() => {
-                        window.location.href = redirect;
+                        // Compared against the id the reducer records when a
+                        // completion is applied, which survives settlement.
+                        // `activeId` is cleared by that same transition, so a
+                        // null there meant "any completed state" and an older
+                        // timer could navigate after a newer upload finished,
+                        // using the older upload's URL.
+                        const now = store.getState();
+                        if (
+                            now.status === "complete" &&
+                            now.submission?.completedId === redirectFor
+                        ) {
+                            window.location.href = redirect;
+                        }
                     }, 1500);
                 }
 
                 // Notify parent frame (modal context) safely
-                if (result.data?.post_id) {
+                if (settled && result.data?.post_id) {
                     try {
                         if (window.parent && window.parent !== window) {
                             void window.parent.location.href; // Throws if cross-origin
@@ -289,39 +479,123 @@ export function initCore(store, instanceId, env) {
             });
 
             const message = error && error.message ? error.message : String(error);
+            // Asked of the queue, not decided again here.
+            //
+            // This used to keep its own list of retryable forms beside the
+            // queue's, and the two drifted every time either moved: first on
+            // `response code: 503`, then on the transient 4xx, and most
+            // recently on `TUS_UPLOAD_START_FAILED`, which the queue retries
+            // and this called final. Each time the contributor was told their
+            // recording had failed for good while the queue was still retrying
+            // it, and a press of the button queued the same take again.
+            //
+            // One classifier, exported from the queue that acts on it, so the
+            // two answers cannot disagree by construction. Being offline is
+            // still asked separately: that is a fact about this device now, not
+            // a property of the error text.
             const retryableUploadError =
-                !navigator.onLine ||
-                /OFFLINE_FAST_PATH|network error|timed out|circuit breaker open|HTTP 5\d\d|aborted/i.test(
-                    message,
-                );
+                !navigator.onLine || !isNonRetryableUploadFailure(message);
 
-            if (retryableUploadError) {
-                try {
-                    const submissionId = await queueSubmission(
-                        instanceId,
-                        audioBlob,
-                        fileName,
-                        formFields,
-                        metadata,
-                    );
-                    store.dispatch({ type: "starmus/submit-queued", submissionId });
-                    const pending = await getPendingCount();
-                    if (window.CommandBus) {
-                        window.CommandBus.dispatch("starmus/offline/queue_updated", {
-                            count: pending,
-                        });
-                    }
-                } catch (queueError) {
-                    console.error("[Core] Offline queue failed:", queueError);
-                    store.dispatch({
-                        type: "starmus/error",
-                        error: { message: "Upload failed completely.", retryable: false },
-                    });
-                }
-            } else {
+            if (transferred) {
+                // The upload succeeded and something after it did not — the
+                // redirect resolution or the parent-frame notification below.
+                // Queueing now would send the same recording a second time,
+                // which costs the contributor bandwidth they have already
+                // spent and leaves the platform holding two copies of one
+                // take. The asset is on the server; what failed is this
+                // client's handling afterwards, and that is reported rather
+                // than retried.
+                //
+                // The upload identifier goes with the report. Without it the
+                // only record of which asset this was died with the page: the
+                // bytes are on the server under an id nothing local still
+                // names, and nobody can reconcile the two.
+                console.error("[Core] Uploaded, but could not complete:", message, {
+                    uploadId: metadata.uploadId,
+                });
+                sparxstarIntegration.reportError("post_upload_failure", {
+                    error: message,
+                    instanceId,
+                    uploadId: metadata.uploadId,
+                    tier: stateEnv.tier,
+                });
                 store.dispatch({
                     type: "starmus/error",
-                    error: { message, retryable: false },
+                    error: {
+                        message,
+                        retryable: false,
+                        // The bytes landed: this id is how the two sides
+                        // reconcile, and it is what marks the submission
+                        // delivered.
+                        uploadId: metadata.uploadId,
+                        // Which attempt this is about, carried separately
+                        // because "delivered" and "whose failure is this" are
+                        // different questions and only one of them is answered
+                        // by the presence of an upload id.
+                        attemptId,
+                    },
+                });
+                return;
+            }
+
+            // The recording is queued on every *transfer* failure, retryable or
+            // not. Whether an error is worth retrying soon decides what the
+            // queue does next and what the contributor is told — it does not
+            // decide whether their recording survives. It used to: a
+            // misconfigured endpoint (`NO_UPLOAD_ENDPOINT`) classified as
+            // non-retryable dropped the blob on the floor with an error
+            // message. ADR-011 keeps the material unconditionally, and ADR-038
+            // forbids re-sending an original from scratch — both need the bytes
+            // still to be here.
+            try {
+                const submissionId = await queueSubmission(
+                    instanceId,
+                    audioBlob,
+                    fileName,
+                    formFields,
+                    metadata,
+                );
+                // Two identifiers, because they are two different things. The
+                // queue row id is what queue operations address; the attempt
+                // identity is what says *which submission* this result belongs
+                // to. The store matches on the second — matching on the first
+                // would compare a queue row id against what `submit-start`
+                // recorded as `activeId` and reject every ordinary queue
+                // transition. It is the attempt identity and not
+                // `metadata.uploadId` because those differ in exactly the case
+                // this has to survive: no upload id could be minted.
+                store.dispatch({
+                    type: "starmus/submit-queued",
+                    submissionId,
+                    uploadId: attemptId,
+                });
+                const pending = await getPendingCount();
+                if (window.CommandBus) {
+                    window.CommandBus.dispatch("starmus/offline/queue_updated", {
+                        count: pending,
+                    });
+                }
+                if (!retryableUploadError) {
+                    // Held, but not something the queue will clear on its own.
+                    store.dispatch({
+                        type: "starmus/error",
+                        error: { message, retryable: false, attemptId },
+                    });
+                }
+            } catch (queueError) {
+                console.error("[Core] Offline queue failed:", queueError);
+                // The queue's own message is kept. `QueueFull` names how much
+                // space is taken and how many held recordings are taking it —
+                // the only information the contributor can act on — and
+                // replacing it with "Upload failed completely" threw that away
+                // at the one moment it mattered.
+                const queueMessage =
+                    queueError && queueError.message
+                        ? queueError.message
+                        : "Upload failed completely.";
+                store.dispatch({
+                    type: "starmus/error",
+                    error: { message: queueMessage, retryable: false, attemptId },
                 });
             }
         }

@@ -188,9 +188,17 @@ export function getRecorderOptions(name, mimeType) {
 /**
  * @typedef {Object} CaptureAttainment
  * @property {CaptureProfileName} profile
- * @property {{sampleRate: number|null, channelCount: number|null}} requested
+ * @property {{sampleRate: number|null, channelCount: number|null,
+ *   audioBitsPerSecond: number|null}} requested What the profile asked for.
+ *   `audioBitsPerSecond` is always present and may be null: the profile
+ *   constrains it and `getRecorderOptions()` applies it, so a consumer reading
+ *   this record to see what was asked of the device has to be able to see it.
  * @property {{sampleRate?: number, channelCount?: number}} actual
- * @property {boolean} attained    True only when every constrained value was verified within its limit.
+ * @property {boolean|null} attained True only when every constrained value was
+ *   verified within its limit; `false` when one was missed; `null` when the
+ *   question does not apply, which is the `import` profile's case — nothing was
+ *   captured, so nothing was measured, and `false` would claim a constraint was
+ *   missed rather than never posed.
  * @property {string[]} exceeded   Constrained values the device delivered above the profile's limit.
  * @property {string[]} unverified Constrained values the device did not report at all.
  */
@@ -211,22 +219,42 @@ export function getRecorderOptions(name, mimeType) {
  */
 export function describeAttainment(name, track) {
     const profile = resolveCaptureProfile(name);
-    const actual = typeof track?.getSettings === "function" ? track.getSettings() : {};
+    // Projected to the fields the contract needs, never the whole settings
+    // object. `MediaTrackSettings` carries `deviceId` and `groupId` — stable
+    // identifiers for the contributor's microphone — and this record is
+    // serialized into TUS metadata, so keeping it wholesale attached a device
+    // fingerprint to every asset a contributor ever uploaded. Nothing
+    // downstream needs it, and a platform built on data sovereignty is the last
+    // place it should travel by accident.
+    const settings = typeof track?.getSettings === "function" ? track.getSettings() : {};
+    /** @type {{sampleRate?: number, channelCount?: number}} */
+    const actual = {};
+    for (const key of /** @type {const} */ (["sampleRate", "channelCount"])) {
+        if (typeof settings[key] === "number") {
+            actual[key] = settings[key];
+        }
+    }
     const requested = {
         sampleRate: profile.sampleRate,
         channelCount: profile.channelCount,
+        // Declared here too, because the profile constrains it and
+        // `getRecorderOptions()` applies it. Leaving it out of the record made
+        // an applied constraint invisible to every consumer of the attainment.
+        audioBitsPerSecond: profile.audioBitsPerSecond,
     };
 
     /** @type {string[]} */
     const exceeded = [];
     /** @type {string[]} */
     const unverified = [];
+    let constrained = 0;
 
     for (const key of /** @type {const} */ (["sampleRate", "channelCount"])) {
         const limit = profile[key];
         if (limit === null) {
             continue;
         }
+        constrained += 1;
         const reported = actual[key];
         if (typeof reported !== "number") {
             unverified.push(key);
@@ -235,11 +263,44 @@ export function describeAttainment(name, track) {
         }
     }
 
+    // A bitrate the profile asks for cannot be confirmed from here: it is a
+    // MediaRecorder option, not a MediaStreamTrack setting, so `getSettings()`
+    // never reports it and the browser is free to ignore or change it. Recorded
+    // as unverified rather than omitted — an applied constraint nobody checks
+    // and nobody mentions is the kind of thing `attained: true` quietly
+    // overstates.
+    if (profile.audioBitsPerSecond !== null) {
+        constrained += 1;
+        unverified.push("audioBitsPerSecond");
+    }
+
     return {
         profile: profile.name,
         requested,
         actual,
-        attained: exceeded.length === 0 && unverified.length === 0,
+        // Tri-state, and `null` is not a failure.
+        //
+        // `false` means a constraint was missed. `null` means the question does
+        // not apply — the profile constrains nothing (`import`), or nothing it
+        // constrains could be verified at all — and returning `true` there was
+        // wrong: an unconstrained profile has nothing to attain, so the loop
+        // finding no violations said "attained" when it should have said "not
+        // applicable". `true` means every constraint that *can* be checked from
+        // a track was, and none was exceeded; `unverified` names the rest.
+        // `true` requires every constraint to have been checked, which is what
+        // the contract above says and what an earlier version of this did not
+        // do: it returned `true` when *some* constraint verified, so
+        // `conversation` — whose bitrate can never be read back — reported
+        // attainment while one of its constraints was unexamined. That is the
+        // overclaim ADR-035 exists to prevent. Any unverified constraint now
+        // yields `null`: not a failure, a question this device cannot answer,
+        // with `unverified` naming which part.
+        attained:
+            exceeded.length > 0
+                ? false
+                : constrained === 0 || unverified.length > 0
+                  ? null
+                  : true,
         exceeded,
         unverified,
     };

@@ -30,3 +30,6 @@ Thumbs.db
 # Temp
 *.tmp
 *.bak
+
+# Minified renders used only to measure the shipped payload (see roll-up.config.mjs).
+dist/.size/

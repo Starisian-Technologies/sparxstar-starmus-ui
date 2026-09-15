@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares `engines.node: ">=20"`, so the floor is tested
+        # and not merely stated. The two versions differ in ways this package
+        # has already been bitten by — `node --test` treats a glob argument
+        # differently between them, which is why `scripts/run-tests.cjs`
+        # discovers test files itself rather than passing a pattern.
+        node-version: ['20', '22']
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # Corepack must run BEFORE setup-node: `cache: pnpm` invokes
+      # `pnpm store path` during setup, so pnpm has to be on PATH first.
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint JavaScript
+        run: pnpm run lint:js
+
+      - name: Lint CSS
+        run: pnpm run lint:css
+
+      # `prebuild` runs scripts/validate-build.cjs, which is where the
+      # conformance checks live: the ADR-038 boundary rules, the ADR-039
+      # no-audio-edit rule, the single home for capture constraints, and the
+      # requirement that ai_manifest.json tracks every exported symbol. A build
+      # that bundles without those having run proves nothing.
+      - name: Validate and build
+        run: pnpm run build
+
+      - name: Unit tests
+        run: pnpm run test:unit
+
+      # The budget is a user-facing payload budget, measured on the minified
+      # artifact a device actually downloads. It was previously measured on the
+      # unminified bundle — roughly a third of which was comments — so the
+      # number it reported described nothing anybody downloads, and the response
+      # to it approaching the limit was to raise the limit.
+      - name: Bundle size budget
+        run: pnpm run size-check

@@ -178,6 +178,33 @@ function getMaxBlobSize(metadata = {}) {
     return CONFIG.defaultMaxBlobSize;
 }
 
+/**
+ * Whether `token` still holds this row, *now*.
+ *
+ * Ownership is the token and the time together. Every guard in this module
+ * checked only the token, which made the lease unbounded in practice: a tab
+ * suspended past its expiry — a backgrounded phone, a laptop lid — could resume
+ * and write as though it still owned the row, provided no other tab had happened
+ * to claim it in the meantime. The window the lease defines was therefore
+ * enforced only when someone else competed for it, which is precisely when a
+ * lease is least needed and least likely to be tested.
+ *
+ * A row whose lease has lapsed belongs to nobody. It is free for a fresh claim,
+ * and the drain that let it lapse has to take it again like anyone else.
+ *
+ * @param {Object|undefined} item
+ * @param {string|null} token
+ * @returns {boolean}
+ */
+function holdsClaim(item, token) {
+    return (
+        Boolean(item) &&
+        item.leaseOwner === token &&
+        typeof item.leaseUntil === "number" &&
+        item.leaseUntil > Date.now()
+    );
+}
+
 /** Monotonic within a page, so the fallback below cannot collide with itself. */
 let offlineIdCounter = 0;
 
@@ -496,7 +523,7 @@ class OfflineQueue {
                 const req = store.get(id);
                 req.onsuccess = () => {
                     const item = req.result;
-                    if (item && item.leaseOwner === token) {
+                    if (holdsClaim(item, token)) {
                         store.delete(id);
                     }
                 };
@@ -553,7 +580,7 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (item && item.leaseOwner === token) {
+                if (holdsClaim(item, token)) {
                     item.transferred = true;
                     store.put(item);
                     committed = true;
@@ -615,7 +642,7 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (item && item.leaseOwner === token) {
+                if (holdsClaim(item, token)) {
                     item.completionEmitted = true;
                     store.put(item);
                 }
@@ -644,7 +671,7 @@ class OfflineQueue {
                 // from a drain whose lease had lapsed could still mark the new
                 // owner's active attempt held — or mark it transferred — while
                 // that upload was running.
-                if (token !== null && item && item.leaseOwner !== token) {
+                if (token !== null && !holdsClaim(item, token)) {
                     return;
                 }
                 if (item) {
@@ -670,7 +697,7 @@ class OfflineQueue {
                     // claim goes with it — otherwise a held entry stays
                     // unclaimable until the lease lapses, for no purpose. Only
                     // this drain's own claim is cleared.
-                    if (token !== null && item.leaseOwner === token) {
+                    if (token !== null && holdsClaim(item, token)) {
                         item.leaseOwner = null;
                         item.leaseUntil = null;
                     }
@@ -1018,7 +1045,7 @@ class OfflineQueue {
                 // took, could otherwise overwrite the new owner's metadata —
                 // its upload UUID included, which is the fingerprint its
                 // in-flight transfer resumes against.
-                if (token !== null && item && item.leaseOwner !== token) {
+                if (token !== null && !holdsClaim(item, token)) {
                     return;
                 }
                 if (item) {
@@ -1150,7 +1177,7 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (!item || item.leaseOwner !== token) {
+                if (!holdsClaim(item, token)) {
                     return;
                 }
                 item.leaseUntil = Date.now() + CONFIG.leaseMs;
@@ -1190,7 +1217,7 @@ class OfflineQueue {
 
             req.onsuccess = () => {
                 const item = req.result;
-                if (item && item.leaseOwner === token) {
+                if (holdsClaim(item, token)) {
                     item.leaseOwner = null;
                     item.leaseUntil = null;
                     store.put(item);
@@ -1219,7 +1246,7 @@ class OfflineQueue {
                 // Ownership gates the whole write, as in `_hold()`: a late
                 // failure from an expired drain must not rewrite the retry
                 // state of an attempt another tab now owns.
-                if (token !== null && item && item.leaseOwner !== token) {
+                if (token !== null && !holdsClaim(item, token)) {
                     return;
                 }
                 if (item) {
@@ -1231,7 +1258,7 @@ class OfflineQueue {
                     // claimable while still carrying the *previous* attempt's
                     // retryCount and lastAttempt — so another tab could take it
                     // immediately, with no backoff, and race this update.
-                    if (token !== null && item.leaseOwner === token) {
+                    if (token !== null && holdsClaim(item, token)) {
                         item.leaseOwner = null;
                         item.leaseUntil = null;
                     }

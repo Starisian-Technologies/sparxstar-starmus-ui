@@ -523,13 +523,21 @@ test("a drain claims a row before uploading it", async () => {
     );
     assert.match(
         source,
-        /item\.leaseOwner !== token/,
+        /!holdsClaim\(item, token\)/,
         "renewal only extends a claim this drain still owns",
     );
     assert.match(
         source,
-        /if \(item && item\.leaseOwner === token\)/,
+        /if \(holdsClaim\(item, token\)\)/,
         "and release only clears a claim this drain still owns",
+    );
+    // Ownership is the token *and* the lease still being live. Comparing the
+    // token alone let a tab suspended past its expiry keep writing, so long as
+    // nobody else had claimed the row in the meantime.
+    assert.match(
+        source,
+        /function holdsClaim\(item, token\) \{[\s\S]{0,240}?item\.leaseUntil > Date\.now\(\)/,
+        "and ownership requires an unexpired lease",
     );
 });
 
@@ -616,12 +624,12 @@ test("every write to a queued row happens under a claim", async () => {
     // And the mutation itself is gated on still owning the row — not merely the
     // lease clear that follows it.
     const holdBody = source.slice(source.indexOf("async _hold(id, reason"));
-    const gate = holdBody.indexOf("item.leaseOwner !== token");
+    const gate = holdBody.indexOf("!holdsClaim(item, token)");
     const mutate = holdBody.indexOf("item.held = true;");
     assert.ok(gate > -1 && mutate > -1 && gate < mutate, "_hold checks ownership before writing");
 
     const retryBody = source.slice(source.indexOf("async _updateRetry(id, retryCount"));
-    const rGate = retryBody.indexOf("item.leaseOwner !== token");
+    const rGate = retryBody.indexOf("!holdsClaim(item, token)");
     const rMutate = retryBody.indexOf("item.retryCount = retryCount;");
     assert.ok(rGate > -1 && rMutate > -1 && rGate < rMutate, "_updateRetry does too");
 });

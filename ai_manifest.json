@@ -20,6 +20,7 @@
         { "symbol": "_countPending",        "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_pendingSummaries",    "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_queueSummary",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
+        { "symbol": "holdsClaim",          "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "_scheduleProcessQueue", "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "initOffline",           "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },
         { "symbol": "queueSubmission",       "type": "function", "owner": "Starisian", "path": "src/js/starmus-offline.js" },

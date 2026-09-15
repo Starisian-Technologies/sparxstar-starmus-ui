@@ -790,3 +790,44 @@ test("every queue transaction settles when it aborts", async () => {
         );
     }
 });
+
+test("an expired lease is not ownership, even when nobody else took the row", async () => {
+    // Every guard compared the token alone, which made the lease unbounded in
+    // practice: a tab suspended past its expiry — a backgrounded phone, a
+    // closed lid — could resume and write as though it still held the row,
+    // provided no other tab had happened to claim it meanwhile. The window the
+    // lease defines was enforced only when someone else competed for it, which
+    // is exactly when it is least likely to be tested.
+    freshEnvironment();
+    const tab = await openTab();
+    const id = await seed(tab.queue);
+
+    const mine = await tab.queue._claim(id);
+    assert.ok(mine.token);
+    assert.equal(await tab.queue._markTransferred(id, mine.token), true, "while the lease is live");
+
+    // Nothing else claims it. The lease simply lapses.
+    await atTimeOffset(LEASE_MS + 1000, async () => {
+        assert.equal(
+            await tab.queue._renewClaim(id, mine.token),
+            false,
+            "an expired claim does not renew itself",
+        );
+        assert.equal(
+            await tab.queue._markTransferred(id, mine.token),
+            false,
+            "and cannot mark the row",
+        );
+        await tab.queue._hold(id, "from a lapsed lease", false, mine.token);
+        await tab.queue._updateRetry(id, 99, new Error("from a lapsed lease"), mine.token);
+    });
+
+    const [row] = await tab.queue.getAll();
+    assert.equal(row.held, false, "the hold did not land");
+    assert.notEqual(row.retryCount, 99, "nor the retry count");
+
+    // And the row is free: a fresh claim takes it.
+    const again = await atTimeOffset(LEASE_MS + 1000, () => tab.queue._claim(id));
+    assert.ok(again && again.token, "the row belongs to nobody until claimed again");
+    assert.notEqual(again.token, mine.token);
+});

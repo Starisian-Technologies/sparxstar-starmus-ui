@@ -4,13 +4,14 @@
 /**
  * Run every unit test under `tests/`.
  *
- * This exists because `node --test` reads its arguments differently across the
- * versions this package has to work on. Node 20 — the platform's LTS floor —
- * treats an argument as a path and fails on a glob pattern; later versions
- * expand the glob but take a bare directory as a single entry and report one
- * passing "test", which looks like success. Passing explicit file paths is the
- * one form every version agrees on, so the walk happens here rather than in a
- * glob that works on whichever machine it was written on.
+ * This exists because `node --test` reads its arguments differently across
+ * versions. Older lines treat an argument as a path and fail on a glob
+ * pattern; later ones expand the glob but take a bare directory as a single
+ * entry and report one passing "test", which looks like success. Passing
+ * explicit file paths is the one form every version agrees on, so the walk
+ * happens here rather than in a glob that works on whichever machine it was
+ * written on — and it stays that way as the supported floor moves, because the
+ * failure mode on the wrong side of it is a green run that tested nothing.
  *
  * It also means a test file added anywhere under `tests/` is picked up without
  * anyone remembering to widen a pattern — `tests/starmus-metadata-schema.test.js`

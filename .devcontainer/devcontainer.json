@@ -1,6 +1,6 @@
 {
-  "name": "AiWA Starmus UI - Node 20 LTS",
-  "image": "mcr.microsoft.com/devcontainers/javascript-node:20-bookworm",
+  "name": "AiWA Starmus UI - Node 24",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24-bookworm",
   "features": {},
   "containerEnv": {},
   "customizations": {

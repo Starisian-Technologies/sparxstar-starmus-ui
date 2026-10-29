@@ -419,7 +419,7 @@ Version Policy
 | WordPress | 6.9 floor (Abilities API), current stable ceiling | Rolling: N and N-1 minors supported. Update CI when WordPress releases. |
 | OS | Ubuntu 24 LTS | CI runners use Ubuntu 24. Do not assume Ubuntu 22 or Debian. |
 | MariaDB | Current stable | Provider-agnostic. No provider-specific extensions without abstraction layer. |
-| Node.js | 20 LTS |  |
+| Node.js | 24 | Supported until 2028-04-30. Node 20 reached end-of-life 2026-04-30; check this against the Node release schedule before the window closes, not after a dependency forces it. |
 | TypeScript | 5.0+ strict | Required for all new JS. JavaScript-only files are legacy. |
 | React | 18 | Ships with `@wordpress/scripts`. Do not upgrade independently. |
 

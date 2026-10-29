@@ -16,12 +16,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # package.json declares `engines.node: ">=20"`, so the floor is tested
-        # and not merely stated. The two versions differ in ways this package
-        # has already been bitten by — `node --test` treats a glob argument
-        # differently between them, which is why `scripts/run-tests.cjs`
-        # discovers test files itself rather than passing a pattern.
-        node-version: ['20', '22']
+        # package.json declares `engines.node: ">=24"`, so the floor is tested
+        # and not merely stated. The second entry is the next LTS line, which
+        # is how a version that outruns this package gets found here rather
+        # than in a dependency bump six months later.
+        #
+        # These two differ in ways this package has already been bitten by —
+        # `node --test` treats a glob argument differently across versions,
+        # which is why `scripts/run-tests.cjs` discovers test files itself
+        # rather than passing a pattern.
+        node-version: ['24', '26']
 
     steps:
       - name: Check out repository
@@ -79,5 +83,9 @@ jobs:
       # from the matrix to satisfy a dev tool would have stopped testing the
       # stated floor, which is the opposite of what the floor is for.
       - name: Bundle size budget
-        if: matrix.node-version == '22'
+        # Pinned to the floor, not to a particular newer version. This read
+        # `== '22'` while the matrix was ['20', '22']; changing the matrix
+        # without changing this would leave the condition matching nothing and
+        # the payload budget silently unenforced on every run.
+        if: matrix.node-version == '24'
         run: pnpm run size-check

@@ -81,7 +81,7 @@
   ],
   "license": "SEE LICENSE IN LICENSE.md",
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "packageManager": "pnpm@10.29.2",
   "devDependencies": {
